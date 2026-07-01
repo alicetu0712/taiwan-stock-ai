@@ -779,6 +779,7 @@ def load_positions(status: str = "active") -> list:
             .where(PositionMonitor.status == status)
             .order_by(PositionMonitor.date_entered.desc())
         ).scalars().all()
+        import json as _json
         result = [{
             "id":            r.id,
             "stock_id":      r.stock_id,
@@ -798,6 +799,7 @@ def load_positions(status: str = "active") -> list:
             "exit_price":    r.exit_price,
             "exit_reason":   r.exit_reason,
             "pnl_pct":       r.pnl_pct,
+            "mc_result":     _json.loads(getattr(r, "mc_result", None) or "null"),
         } for r in rows]
         s.close()
         return result
@@ -805,46 +807,37 @@ def load_positions(status: str = "active") -> list:
         return []
 
 
-def _monte_carlo_chart(pos: dict, prices: list):
-    """為單一持倉繪製蒙地卡羅模擬圖。"""
-    if len(prices) < 30:
-        st.caption("歷史資料不足，無法模擬")
-        return
-
-    from src.engines.monte_carlo import simulate
-    rets = [(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
-    mc = simulate(
-        stock_id       = pos["stock_id"],
-        entry_price    = pos["entry_price"],
-        target_price   = pos["target_price"] or pos["entry_price"] * 1.1,
-        stop_loss_price= pos["stop_loss_price"] or pos["entry_price"] * 0.93,
-        daily_returns  = rets,
-        sim_days       = 20,
-        n_paths        = 1000,
-        sample_n       = 40,
-    )
+def _monte_carlo_chart(pos: dict, prices: list = None):
+    """從預存的 mc_result JSON 繪製蒙地卡羅模擬圖。"""
+    mc = pos.get("mc_result")
     if not mc:
-        st.caption("模擬失敗")
+        st.caption("蒙地卡羅資料尚未計算，待下次每日更新後顯示。")
         return
 
     import plotly.graph_objects as go
     fig = go.Figure()
 
+    days          = mc["days"]
+    sample_paths  = mc["sample_paths"]
+    target_price  = mc["target_price"]
+    stop_loss_price = mc["stop_loss_price"]
+    entry_price   = mc["entry_price"]
+
     # 採樣路徑（半透明灰線）
-    for path in mc.sample_paths:
+    for path in sample_paths:
         fig.add_trace(go.Scatter(
-            x=mc.days, y=path,
+            x=days, y=path,
             mode="lines", line=dict(color="rgba(150,150,150,0.15)", width=1),
             showlegend=False, hoverinfo="skip",
         ))
 
-    # 目標價 / 停損價水平線
-    fig.add_hline(y=mc.target_price,    line=dict(color="#2ecc71", dash="dash", width=2),
-                  annotation_text=f"目標 {mc.target_price:.1f}", annotation_position="right")
-    fig.add_hline(y=mc.stop_loss_price, line=dict(color="#e74c3c", dash="dash", width=2),
-                  annotation_text=f"停損 {mc.stop_loss_price:.1f}", annotation_position="right")
-    fig.add_hline(y=mc.entry_price,     line=dict(color="#3498db", width=1.5),
-                  annotation_text=f"進場 {mc.entry_price:.1f}", annotation_position="right")
+    # 目標價 / 停損價 / 進場價水平線
+    fig.add_hline(y=target_price,    line=dict(color="#2ecc71", dash="dash", width=2),
+                  annotation_text=f"目標 {target_price:.1f}", annotation_position="right")
+    fig.add_hline(y=stop_loss_price, line=dict(color="#e74c3c", dash="dash", width=2),
+                  annotation_text=f"停損 {stop_loss_price:.1f}", annotation_position="right")
+    fig.add_hline(y=entry_price,     line=dict(color="#3498db", width=1.5),
+                  annotation_text=f"進場 {entry_price:.1f}", annotation_position="right")
 
     fig.update_layout(
         height=300, margin=dict(l=10, r=80, t=10, b=30),
@@ -854,9 +847,9 @@ def _monte_carlo_chart(pos: dict, prices: list):
     st.plotly_chart(fig, use_container_width=True)
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("達標機率", f"{mc.prob_target:.1f}%", delta=None)
-    col2.metric("停損機率", f"{mc.prob_stop_loss:.1f}%", delta=None)
-    col3.metric("期望報酬", f"{mc.expected_pnl_pct:+.1f}%", delta=None)
+    col1.metric("達標機率",  f"{mc['prob_target']:.1f}%")
+    col2.metric("停損機率",  f"{mc['prob_stop_loss']:.1f}%")
+    col3.metric("期望報酬",  f"{mc['expected_pnl_pct']:+.1f}%")
 
 
 def page_positions():
@@ -901,19 +894,9 @@ def page_positions():
                     if pos["rationale"]:
                         st.caption(f"📌 {pos['rationale']}")
 
-                    # 蒙地卡羅模擬
+                    # 蒙地卡羅模擬（從預存 JSON 繪圖）
                     st.markdown("**蒙地卡羅模擬（未來 20 個交易日）**")
-                    try:
-                        from src.database import get_session, DailyPrice
-                        s = get_session()
-                        dp = (s.query(DailyPrice)
-                              .filter(DailyPrice.stock_id == sid)
-                              .order_by(DailyPrice.date.desc()).limit(60).all())
-                        hist_prices = [r.close for r in reversed(dp) if r.close and r.close > 0]
-                        s.close()
-                        _monte_carlo_chart(pos, hist_prices)
-                    except Exception:
-                        st.caption("模擬資料讀取失敗")
+                    _monte_carlo_chart(pos)
 
                     # 手動關倉
                     if curr:
