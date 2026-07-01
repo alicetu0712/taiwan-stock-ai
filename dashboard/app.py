@@ -887,6 +887,33 @@ def page_positions():
         if not positions:
             st.info("目前無持倉。每次推薦時系統會自動建立追蹤記錄。")
         else:
+            # ── 整體配置總覽 ──────────────────────────────────────
+            total_alloc = sum(p["position_pct"] or 0 for p in positions)
+            cash_pct    = max(0.0, 100.0 - total_alloc)
+
+            # 加權預期報酬（MC expected_pnl × position_pct / 100）
+            weighted_exp = sum(
+                (p["position_pct"] or 0) / 100 *
+                ((p["mc_result"] or {}).get("expected_pnl_pct", 0))
+                for p in positions
+            )
+            # 加權目前浮動損益
+            weighted_cur = sum(
+                (p["position_pct"] or 0) / 100 * (p["pnl_pct"] or 0)
+                for p in positions
+            )
+
+            st.markdown("#### 📊 目前配置總覽")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("持倉支數",   f"{len(positions)} 支")
+            m2.metric("已配置資金",  f"{total_alloc:.0f}%",
+                      delta=f"現金 {cash_pct:.0f}%", delta_color="off")
+            m3.metric("整體預期報酬", f"{weighted_exp:+.2f}%",
+                      help="蒙地卡羅 20 日期望報酬 × 各持倉比例之加權平均（以總資金 100% 為基礎）")
+            m4.metric("整體目前損益", f"{weighted_cur:+.2f}%",
+                      delta_color="normal" if weighted_cur >= 0 else "inverse")
+            st.divider()
+
             # 載入現價
             prices_now = load_stock_prices()
 
