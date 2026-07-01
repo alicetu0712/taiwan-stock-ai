@@ -770,38 +770,63 @@ def page_history():
 
 @st.cache_data(ttl=120)
 def load_positions(status: str = "active") -> list:
+    """直連 Neon 讀取 position_monitor，不依賴 get_session()。"""
+    import os, json as _json
+    neon_url = os.getenv(
+        "DATABASE_URL",
+        "postgresql://neondb_owner:npg_JFIrfHWh56Ka@ep-raspy-paper-aozvpvba-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+    )
+    if neon_url.startswith("sqlite"):
+        # 本機 fallback：用 SQLAlchemy
+        try:
+            from src.database import get_session, PositionMonitor
+            from sqlalchemy import select
+            s = get_session()
+            rows = s.execute(
+                select(PositionMonitor).where(PositionMonitor.status == status)
+                .order_by(PositionMonitor.date_entered.desc())
+            ).scalars().all()
+            result = [{
+                "id": r.id, "stock_id": r.stock_id, "name": r.stock_name or r.stock_id,
+                "date_entered": str(r.date_entered), "entry_price": r.entry_price,
+                "target_price": r.target_price, "stop_loss_price": r.stop_loss_price,
+                "target_pct": r.target_pct, "stop_loss_pct": r.stop_loss_pct,
+                "position_pct": r.position_pct, "rec_level": r.rec_level,
+                "rec_score": r.rec_score, "rationale": r.ai_price_rationale or "",
+                "status": r.status, "exit_date": str(r.exit_date) if r.exit_date else None,
+                "exit_price": r.exit_price, "exit_reason": r.exit_reason,
+                "pnl_pct": r.pnl_pct,
+                "mc_result": _json.loads(r.mc_result or "null"),
+            } for r in rows]
+            s.close()
+            return result
+        except Exception:
+            return []
     try:
-        from src.database import get_session, PositionMonitor
-        from sqlalchemy import select
-        s = get_session()
-        rows = s.execute(
-            select(PositionMonitor)
-            .where(PositionMonitor.status == status)
-            .order_by(PositionMonitor.date_entered.desc())
-        ).scalars().all()
-        import json as _json
-        result = [{
-            "id":            r.id,
-            "stock_id":      r.stock_id,
-            "name":          r.stock_name or r.stock_id,
-            "date_entered":  str(r.date_entered),
-            "entry_price":   r.entry_price,
-            "target_price":  r.target_price,
-            "stop_loss_price": r.stop_loss_price,
-            "target_pct":    r.target_pct,
-            "stop_loss_pct": r.stop_loss_pct,
-            "position_pct":  r.position_pct,
-            "rec_level":     r.rec_level,
-            "rec_score":     r.rec_score,
-            "rationale":     r.ai_price_rationale or "",
-            "status":        r.status,
-            "exit_date":     str(r.exit_date) if r.exit_date else None,
-            "exit_price":    r.exit_price,
-            "exit_reason":   r.exit_reason,
-            "pnl_pct":       r.pnl_pct,
-            "mc_result":     _json.loads(getattr(r, "mc_result", None) or "null"),
-        } for r in rows]
-        s.close()
+        import psycopg2
+        conn = psycopg2.connect(neon_url)
+        cur  = conn.cursor()
+        cur.execute('''
+            SELECT id, stock_id, stock_name, date_entered, entry_price,
+                   target_price, stop_loss_price, target_pct, stop_loss_pct,
+                   position_pct, rec_level, rec_score, confidence, ai_price_rationale,
+                   status, exit_date, exit_price, exit_reason, pnl_pct, mc_result
+            FROM position_monitor
+            WHERE status = %s
+            ORDER BY date_entered DESC
+        ''', (status,))
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        result = []
+        for row in rows:
+            r = dict(zip(cols, row))
+            r["name"]      = r.pop("stock_name") or r["stock_id"]
+            r["rationale"] = r.pop("ai_price_rationale") or ""
+            r["mc_result"] = _json.loads(r["mc_result"]) if r.get("mc_result") else None
+            r["date_entered"] = str(r["date_entered"]) if r.get("date_entered") else None
+            r["exit_date"]    = str(r["exit_date"])    if r.get("exit_date")    else None
+            result.append(r)
         return result
     except Exception:
         return []

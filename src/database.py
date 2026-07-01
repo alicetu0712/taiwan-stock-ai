@@ -224,6 +224,7 @@ class PositionMonitor(Base):
     exit_reason      = Column(String(50))
     # TARGET_HIT / STOP_LOSS / WEAK_TECHNICAL / INSTITUTIONAL_EXIT / MANUAL
     pnl_pct          = Column(Float)
+    mc_result        = Column(Text)        # 預算蒙地卡羅結果（JSON）
 
     created_at       = Column(DateTime, default=datetime.utcnow)
     updated_at       = Column(DateTime, default=datetime.utcnow)
