@@ -227,7 +227,16 @@ def build_financial_summary(
     """
     整合所有財務指標，回傳供基本面分析用的 dict。
     包含：eps_ttm, roe_avg, roa_avg, gross_margin_avg, debt_ratio, 趨勢判斷
+
+    資料優先順序：
+      1. 本地 DB（由 scripts/import_financials.py 從 goodinfo.tw 預先填入）
+      2. FinMind API（需要 FINMIND_TOKEN，且 FinMind Python library 在 macOS 可能 segfault）
     """
+    # ── 優先從本地 DB 讀取（goodinfo.tw 已匯入的年度資料）────
+    db_summary = _build_summary_from_db(stock_id)
+    if db_summary.get("has_data"):
+        return db_summary
+
     start = f"{date.today().year - n_years - 1}-01-01"
     summary = {
         "stock_id":        stock_id,
@@ -239,13 +248,13 @@ def build_financial_summary(
         "gross_margin_avg": None,
         "debt_ratio":      None,
         "revenue_yoy_avg": None,
-        "revenue_trend":   "unknown",   # up / stable / down
+        "revenue_trend":   "unknown",
         "eps_trend":       "unknown",
         "roe_trend":       "unknown",
     }
 
     if not FINMIND_TOKEN:
-        logger.warning(f"No FinMind token; skipping financial summary for {stock_id}.")
+        logger.debug(f"No FinMind token and no DB data; skipping financial summary for {stock_id}.")
         return summary
 
     # --- 月營收 ---
@@ -304,3 +313,28 @@ def _date_to_quarter(date_str: str) -> int:
         return (m - 1) // 3 + 1
     except Exception:
         return 1
+
+
+def _build_summary_from_db(stock_id: str) -> dict:
+    """
+    從本地 financial_quarters 表讀取 goodinfo.tw 匯入的年度資料（quarter=0），
+    組成 FundamentalAnalyzer 所需的 fin_summary dict。
+    """
+    from src.collectors.goodinfo_collector import build_financial_summary_from_db
+    from config import DB_PATH
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    _empty = {"stock_id": stock_id, "has_data": False}
+
+    try:
+        _engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+        _Session = sessionmaker(bind=_engine)
+        _session = _Session()
+        try:
+            return build_financial_summary_from_db(stock_id, _session)
+        finally:
+            _session.close()
+    except Exception as e:
+        logger.debug(f"DB summary failed for {stock_id}: {e}")
+        return _empty
