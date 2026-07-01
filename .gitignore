@@ -1,0 +1,21 @@
+# 環境設定（含 API Key，絕對不能上傳）
+.env
+
+# 本機資料（雲端用 PostgreSQL，不需要）
+data/
+logs/
+reports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# macOS
+.DS_Store
