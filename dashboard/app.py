@@ -93,13 +93,27 @@ html, body, [class*="css"] {
         background: white; border-radius: 12px; padding: 10px 8px !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
-    /* 持倉總覽 4 欄 → 手機 2×2 */
+    /* 所有 st.columns → 手機自動堆疊（推薦卡片 / 持倉詳情 / 搜尋結果皆適用）*/
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        flex: 0 0 100% !important;
+        min-width: 100% !important;
+        width: 100% !important;
+    }
+    /* 持倉總覽 metrics 字體縮放 */
     [data-testid="metric-container"] [data-testid="stMetricValue"] {
         font-size: 1.1rem !important;
     }
     [data-testid="metric-container"] [data-testid="stMetricLabel"] {
         font-size: 0.7rem !important;
     }
+    /* Watch List 文字換行 */
+    .stExpander p { word-break: break-all; font-size: 0.82rem !important; }
+    /* 表格橫向可捲動 */
+    [data-testid="stDataFrame"] { overflow-x: auto !important; }
+    .stDataFrame iframe { min-width: 100%; }
 }
 
 /* ══ 共用元件 ══ */
