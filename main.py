@@ -308,9 +308,9 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             latest = sid_data.sort_values("date").iloc[-1] if len(sid_data) > 0 else None
             close  = float(latest["close"]) if latest is not None and "close" in latest else 0
 
-            # 財務資料（若有 FinMind 或 dry-run 模擬）
+            # 財務資料（優先從本地 DB 讀取，無 DB 資料再嘗試 FinMind）
             fin_sum = _dry_run_fin_summaries.get(sid, {})
-            if FINMIND_TOKEN and not dry_run:
+            if not dry_run:
                 try:
                     fin_sum = build_financial_summary(sid, n_years=5)
                 except Exception:
