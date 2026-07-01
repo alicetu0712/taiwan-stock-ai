@@ -78,9 +78,10 @@ html, body, [class*="css"] {
         margin-bottom: 1rem; display: flex !important;
     }
     .stTabs [data-baseweb="tab"] {
-        flex: 1 !important; border-radius: 8px; font-size: 0.72rem !important;
-        font-weight: 600 !important; padding: 8px 1px !important; height: 40px !important;
-        min-width: 0 !important; overflow: hidden;
+        flex: 1 !important; border-radius: 8px; font-size: 0.62rem !important;
+        font-weight: 600 !important; padding: 6px 0px !important; height: 38px !important;
+        min-width: 0 !important; overflow: hidden; text-align: center !important;
+        white-space: nowrap !important; letter-spacing: -0.02em;
     }
     .stTabs [aria-selected="true"] {
         background: white !important; box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important;
@@ -89,8 +90,15 @@ html, body, [class*="css"] {
     .rec-grid { display: block; }
     .stButton > button { width: 100%; height: 48px; border-radius: 12px; font-weight: 600; }
     [data-testid="metric-container"] {
-        background: white; border-radius: 12px; padding: 12px !important;
+        background: white; border-radius: 12px; padding: 10px 8px !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    /* 持倉總覽 4 欄 → 手機 2×2 */
+    [data-testid="metric-container"] [data-testid="stMetricValue"] {
+        font-size: 1.1rem !important;
+    }
+    [data-testid="metric-container"] [data-testid="stMetricLabel"] {
+        font-size: 0.7rem !important;
     }
 }
 
@@ -904,14 +912,16 @@ def page_positions():
             )
 
             st.markdown("#### 📊 目前配置總覽")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("持倉支數",   f"{len(positions)} 支")
-            m2.metric("已配置資金",  f"{total_alloc:.0f}%",
-                      delta=f"現金 {cash_pct:.0f}%", delta_color="off")
-            m3.metric("整體預期報酬", f"{weighted_exp:+.2f}%",
-                      help="蒙地卡羅 20 日期望報酬 × 各持倉比例之加權平均（以總資金 100% 為基礎）")
-            m4.metric("整體目前損益", f"{weighted_cur:+.2f}%",
-                      delta_color="normal" if weighted_cur >= 0 else "inverse")
+            # 上排：支數 + 配置（手機 2 欄）
+            r1c1, r1c2 = st.columns(2)
+            r1c1.metric("持倉支數",  f"{len(positions)} 支")
+            r1c2.metric("已配置資金", f"{total_alloc:.0f}%",
+                        delta=f"現金 {cash_pct:.0f}%", delta_color="off")
+            # 下排：預期報酬 + 目前損益（手機 2 欄）
+            r2c1, r2c2 = st.columns(2)
+            r2c1.metric("整體預期報酬", f"{weighted_exp:+.2f}%",
+                        help="蒙地卡羅 20 日期望報酬 × 各持倉比例之加權平均（以總資金 100% 為基礎）")
+            r2c2.metric("整體目前損益", f"{weighted_cur:+.2f}%")
             st.divider()
 
             # 載入現價
