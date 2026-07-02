@@ -1075,6 +1075,150 @@ def page_positions():
             st.info("尚無歷史紀錄。")
 
 
+# ── 回測 ─────────────────────────────────────────────────────
+
+@st.cache_data(ttl=1800)
+def compute_backtest() -> pd.DataFrame:
+    """計算所有歷史推薦的 5/20/60 日報酬（以推薦日收盤價為基準）。"""
+    from datetime import timedelta
+    try:
+        from src.database import get_session, Recommendation, DailyPrice
+        s = get_session()
+        recs = s.query(Recommendation).order_by(Recommendation.date).all()
+        rows = []
+        for r in recs:
+            prices = (s.query(DailyPrice)
+                      .filter(DailyPrice.stock_id == r.stock_id,
+                              DailyPrice.date >= r.date,
+                              DailyPrice.date <= r.date + timedelta(days=90))
+                      .order_by(DailyPrice.date).all())
+            if not prices:
+                continue
+            dates_p = [p.date for p in prices]
+            closes  = [p.close for p in prices]
+            entry   = closes[0]
+            if not entry:
+                continue
+
+            def _ret(min_days):
+                for i, d in enumerate(dates_p):
+                    if (d - r.date).days >= min_days:
+                        return round((closes[i] - entry) / entry * 100, 2)
+                return None
+
+            rows.append({
+                "date":       r.date,
+                "stock_id":   r.stock_id,
+                "rec_level":  r.rec_level,
+                "confidence": r.confidence,
+                "entry":      entry,
+                "ret_5d":     _ret(5),
+                "ret_20d":    _ret(20),
+                "ret_60d":    _ret(60),
+            })
+        s.close()
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _backtest_stats(series: pd.Series, hold_days: int) -> dict:
+    s = series.dropna()
+    if len(s) < 3:
+        return {}
+    wins     = (s > 0).sum()
+    win_rate = wins / len(s) * 100
+    avg_ret  = s.mean()
+    std_ret  = s.std()
+    sharpe   = avg_ret / std_ret * (252 / hold_days) ** 0.5 if std_ret > 0 else 0
+    # Max drawdown on equity curve (equal-weight sequential)
+    cum = (1 + s / 100).cumprod()
+    peak = cum.cummax()
+    mdd  = ((cum - peak) / peak * 100).min()
+    return {
+        "n": len(s), "wins": int(wins), "win_rate": win_rate,
+        "avg_ret": avg_ret, "sharpe": sharpe, "mdd": mdd,
+    }
+
+
+def page_backtest():
+    st.markdown('<div class="section-title">🧪 推薦回測</div>', unsafe_allow_html=True)
+    st.caption("以推薦日收盤價為基準，計算各時間窗口的實際報酬，評估模型有效性。")
+
+    df = compute_backtest()
+    if df.empty:
+        st.info("尚無足夠歷史資料，請先執行分析並同步。")
+        return
+
+    # ── 統計摘要 ─────────────────────────────────────────────
+    st.markdown("#### 整體績效摘要")
+    horizons = [("5 日", "ret_5d", 5), ("20 日", "ret_20d", 20), ("60 日", "ret_60d", 60)]
+    cols = st.columns(3)
+    for col, (label, key, days) in zip(cols, horizons):
+        stats = _backtest_stats(df[key], days)
+        if not stats:
+            col.metric(label, "資料不足")
+            continue
+        delta_color = "normal" if stats["avg_ret"] >= 0 else "inverse"
+        col.metric(
+            f"**{label}均報酬**",
+            f"{stats['avg_ret']:+.2f}%",
+            f"勝率 {stats['win_rate']:.0f}%  ({stats['wins']}/{stats['n']})",
+            delta_color=delta_color,
+        )
+        col.markdown(
+            f"<small>Sharpe {stats['sharpe']:.2f} ｜ MDD {stats['mdd']:.1f}%</small>",
+            unsafe_allow_html=True,
+        )
+
+    # ── 各 horizon 柱狀圖 ──────────────────────────────────
+    st.markdown("#### 20 日報酬分布")
+    sub20 = df[["date", "stock_id", "ret_20d"]].dropna().copy()
+    sub20["label"] = sub20["date"].astype(str) + " " + sub20["stock_id"]
+    sub20 = sub20.sort_values("date")
+    sub20["color"] = sub20["ret_20d"].apply(lambda x: "#00c851" if x > 0 else "#ff4444")
+    import altair as alt
+    bar = (alt.Chart(sub20)
+           .mark_bar()
+           .encode(
+               x=alt.X("label:N", sort=None, axis=alt.Axis(labelAngle=-45, labelLimit=80)),
+               y=alt.Y("ret_20d:Q", title="20日報酬 (%)"),
+               color=alt.Color("color:N", scale=None),
+               tooltip=["date:T", "stock_id:N", alt.Tooltip("ret_20d:Q", format=".2f")],
+           )
+           .properties(height=300))
+    st.altair_chart(bar, use_container_width=True)
+
+    # ── 累積報酬曲線（20日）────────────────────────────────
+    st.markdown("#### 累積報酬曲線（20 日，等權）")
+    cum = (1 + sub20["ret_20d"] / 100).cumprod() * 100 - 100
+    cum_df = pd.DataFrame({"trade_no": range(1, len(cum) + 1), "cum_ret": cum.values})
+    line = (alt.Chart(cum_df)
+            .mark_line(point=True, color="#667eea")
+            .encode(
+                x=alt.X("trade_no:Q", title="推薦筆數"),
+                y=alt.Y("cum_ret:Q", title="累積報酬 (%)"),
+                tooltip=["trade_no:Q", alt.Tooltip("cum_ret:Q", format=".1f")],
+            )
+            .properties(height=240))
+    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#aaa", strokeDash=[4, 4]).encode(y="y:Q")
+    st.altair_chart(line + zero, use_container_width=True)
+
+    # ── 明細表 ──────────────────────────────────────────────
+    st.markdown("#### 推薦明細")
+    show = df[["date", "stock_id", "confidence", "entry", "ret_5d", "ret_20d", "ret_60d"]].copy()
+    show.columns = ["日期", "股票", "信心", "進場價", "5日%", "20日%", "60日%"]
+    show = show.sort_values("日期", ascending=False)
+
+    def color_ret(val):
+        if pd.isna(val):
+            return "color: #888"
+        return "color: #00c851; font-weight:600" if val > 0 else "color: #ff4444; font-weight:600"
+
+    styled = show.style.applymap(color_ret, subset=["5日%", "20日%", "60日%"])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
 # ── 設定 ─────────────────────────────────────────────────────
 
 def page_guide():
@@ -1353,7 +1497,7 @@ def main():
     """, unsafe_allow_html=True)
 
     # Tab 導航（電腦版是橫向底線樣式，手機版是圓角膠囊樣式）
-    tabs = st.tabs(["📊今日", "🔍個股", "📋歷史", "📈持倉", "📖說明", "⚙️設定"])
+    tabs = st.tabs(["📊今日", "🔍個股", "📋歷史", "📈持倉", "🧪回測", "📖說明", "⚙️設定"])
 
     with tabs[0]:
         page_today(sel_date)
@@ -1368,9 +1512,12 @@ def main():
         page_positions()
 
     with tabs[4]:
-        page_guide()
+        page_backtest()
 
     with tabs[5]:
+        page_guide()
+
+    with tabs[6]:
         page_settings(sel_date)
 
     st.markdown('<div class="disclaimer">本工具為 AI 研究輔助，所有內容不構成投資建議，投資人應自行評估風險</div>',
