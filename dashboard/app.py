@@ -1161,8 +1161,10 @@ def page_settings(selected_date: date):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**查看日期**")
-        new_date = st.date_input("", value=selected_date,
-                                 min_value=date(2025, 1, 1), max_value=date.today(),
+        _min_date = date(2025, 1, 1)
+        _clamped  = max(selected_date, _min_date)
+        new_date = st.date_input("", value=_clamped,
+                                 min_value=_min_date, max_value=date.today(),
                                  label_visibility="collapsed")
         if new_date != selected_date:
             st.session_state["selected_date"] = new_date
