@@ -55,7 +55,7 @@ def get_neon_engine(neon_url: str):
 
 
 def sync_table(local_session, neon_session, Model, key_fields: list, days: int = 90):
-    """把本機 Model 的近 N 天資料同步到 Neon（upsert）。"""
+    """把本機 Model 的近 N 天資料同步到 Neon（upsert by key fields）。"""
     from sqlalchemy import inspect
 
     since = date.today() - timedelta(days=days)
@@ -64,25 +64,21 @@ def sync_table(local_session, neon_session, Model, key_fields: list, days: int =
         logger.info(f"  {Model.__tablename__}: 本機無近 {days} 天資料，略過")
         return 0
 
+    mapper  = inspect(Model)
+    all_cols = [col.key for col in mapper.columns]
+
     inserted = updated = 0
     for row in rows:
         key = {f: getattr(row, f) for f in key_fields}
         existing = neon_session.query(Model).filter_by(**key).first()
         if existing:
-            # 更新所有欄位
-            mapper = inspect(Model)
-            for col in mapper.columns:
-                if col.key not in key_fields and col.key != "id":
-                    setattr(existing, col.key, getattr(row, col.key))
+            for col in all_cols:
+                if col not in key_fields and col != "id":
+                    setattr(existing, col, getattr(row, col))
             updated += 1
         else:
-            # 插入新紀錄（不帶 id，讓 Neon 自己產生）
-            mapper = inspect(Model)
-            kwargs = {
-                col.key: getattr(row, col.key)
-                for col in mapper.columns
-                if col.key != "id"
-            }
+            # 帶入本機 id，避免 Neon sequence 與已有記錄衝突
+            kwargs = {col: getattr(row, col) for col in all_cols}
             neon_session.add(Model(**kwargs))
             inserted += 1
 
