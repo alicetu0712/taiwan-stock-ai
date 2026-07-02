@@ -1215,7 +1215,7 @@ def page_backtest():
             return "color: #888"
         return "color: #00c851; font-weight:600" if val > 0 else "color: #ff4444; font-weight:600"
 
-    styled = show.style.applymap(color_ret, subset=["5日%", "20日%", "60日%"])
+    styled = show.style.map(color_ret, subset=["5日%", "20日%", "60日%"])
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
