@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.database import init_db, get_session, Recommendation, PositionMonitor, DailyPrice, Stock
+from src.database import init_db, get_session, Recommendation, PositionMonitor, DailyPrice, Stock  # noqa: F401
 from sqlalchemy import func
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
@@ -91,7 +91,13 @@ def main():
 
         target_pct    = params["target_pct"]
         stop_loss_pct = params["stop_loss_pct"]
-        position_pct  = params["position_pct"]
+        base_pct      = params["position_pct"]
+        # 動態倉位：依信心度調整（與 position_manager.py 一致）
+        confidence_val = float(rec.confidence or 80.0)
+        conf_adj  = round((confidence_val - 80.0) / 10.0 * 5.0)
+        position_pct = max(base_pct - 10, min(base_pct + 10, base_pct + conf_adj))
+        position_pct = min(position_pct, 35.0)
+        position_pct = round(position_pct, 0)
         target_price    = round(entry_price * (1 + target_pct / 100), 2)
         stop_loss_price = round(entry_price * (1 - stop_loss_pct / 100), 2)
 
@@ -156,11 +162,20 @@ def main():
                 pnl_pct     = round(pnl_at_stop, 2)
                 break
 
-            # ── 30 交易日強制出場（≈45 日曆天）──────────────
+            # ── 時間強制出場（與 position_manager.py v6.4 一致）─
             held_days = (fd_dt - entry_dt).days
-            if held_days >= 45 and close:
+            if close:
                 pnl_now = (close - entry_price) / entry_price * 100
-                if abs(pnl_now) < 8.0:   # 無明顯方向才強制出場
+                # 45 天且虧損（pnl < 0）→ 強制出場
+                if held_days >= 45 and pnl_now < 0 and abs(pnl_now) < 8.0:
+                    status      = "closed_signal"
+                    exit_date   = fd_dt
+                    exit_price  = close
+                    exit_reason = "TIME_LIMIT"
+                    pnl_pct     = round(pnl_now, 2)
+                    break
+                # 90 天（不管盈虧）且無明顯方向 → 強制出場
+                if held_days >= 90 and abs(pnl_now) < 8.0:
                     status      = "closed_signal"
                     exit_date   = fd_dt
                     exit_price  = close
@@ -244,7 +259,6 @@ def main():
         # ── 0050 ETF 同期報酬（benchmark）────────────────────
         bench_ret = None
         try:
-            from src.database import DailyPrice
             all_dates = sorted(set(p.date_entered for p in all_pos if p.date_entered))
             if all_dates:
                 start_d, end_d = all_dates[0], date.today()
