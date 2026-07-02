@@ -1266,23 +1266,18 @@ def main():
             st.rerun()
         st.markdown("---")
         try:
-            from src.database import get_session, DailyPrice
+            from src.database import get_session, DailyPrice, Recommendation
             from sqlalchemy import func
             s = get_session()
             cnt = s.query(func.count(DailyPrice.id)).scalar()
             newest = s.query(func.max(DailyPrice.date)).scalar()
-            # 有效最早日期：該日股票數 >= 200 支
-            subq = (s.query(DailyPrice.date, func.count(DailyPrice.stock_id).label("n"))
-                    .group_by(DailyPrice.date)
-                    .having(func.count(DailyPrice.stock_id) >= 200)
-                    .subquery())
-            from sqlalchemy import select, func as f2
-            oldest_valid = s.execute(select(f2.min(subq.c.date))).scalar()
+            # 有效起始：第一筆推薦日期（有推薦才有意義的分析）
+            first_rec = s.query(func.min(Recommendation.date)).scalar()
             s.close()
             if cnt > 0:
                 st.metric("股價資料", f"{cnt:,} 筆")
-                if newest:       st.caption(f"最新：{newest}")
-                if oldest_valid: st.caption(f"最早（有效）：{oldest_valid}")
+                if newest:     st.caption(f"最新：{newest}")
+                if first_rec:  st.caption(f"研究起始：{first_rec}")
             else:
                 st.caption("股價資料存於本機\n需在家中執行分析")
         except Exception:
