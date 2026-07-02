@@ -5,15 +5,18 @@ run_and_sync.py — 分析 + 同步一鍵完成
   python3 run_and_sync.py
 """
 
+import os
 import sys
 import subprocess
 from pathlib import Path
+from dotenv import load_dotenv
 
-NEON_URL = (
-    "postgresql://neondb_owner:npg_JFIrfHWh56Ka"
-    "@ep-raspy-paper-aozvpvba-pooler.c-2.ap-southeast-1.aws.neon.tech"
-    "/neondb?sslmode=require&channel_binding=require"
-)
+load_dotenv()
+
+NEON_URL = os.getenv("NEON_URL") or os.getenv("DATABASE_URL")
+if not NEON_URL:
+    print("❌ 請設定 NEON_URL 環境變數（.env 檔案）")
+    sys.exit(1)
 
 base = Path(__file__).parent
 

@@ -815,10 +815,10 @@ def page_history():
 def load_positions(status: str = "active") -> list:
     """直連 Neon 讀取 position_monitor，不依賴 get_session()。"""
     import os, json as _json
-    neon_url = os.getenv(
-        "DATABASE_URL",
-        "postgresql://neondb_owner:npg_JFIrfHWh56Ka@ep-raspy-paper-aozvpvba-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-    )
+    neon_url = os.getenv("NEON_URL") or os.getenv("DATABASE_URL")
+    if not neon_url:
+        st.error("請設定 NEON_URL 環境變數（.env 或 Streamlit secrets）")
+        return []
     if neon_url.startswith("sqlite"):
         # 本機 fallback：用 SQLAlchemy
         try:
