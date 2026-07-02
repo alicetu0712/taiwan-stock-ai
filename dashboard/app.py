@@ -4,12 +4,28 @@ dashboard/app.py — Responsive Research Dashboard
 """
 
 import sys
+import os
 import re
 import json
 from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# 載入 .env（本機開發）；Streamlit Cloud 用 st.secrets
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
+# Streamlit secrets → 環境變數（雲端部署）
+try:
+    import streamlit as _st
+    if hasattr(_st, "secrets") and "NEON_URL" in _st.secrets:
+        os.environ.setdefault("NEON_URL", _st.secrets["NEON_URL"])
+except Exception:
+    pass
 
 import pandas as pd
 import plotly.express as px
