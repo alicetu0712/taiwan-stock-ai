@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.5.8（2026-07-02）
+當前版本：v6.5.9（2026-07-02）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -3889,6 +3889,7 @@ Chapter 19 完
 ✅ config.py 防護：NEON_URL 存在時本機引擎強制走 SQLite，防止 shell 殘留 DATABASE_URL 誤連舊 Neon endpoint（v6.5.6）
 ✅ 全量歷史資料重新匯入新 Neon（16,979 筆），手機版 Dashboard 歷史資料恢復完整（v6.5.7）
 ✅ config.py：本機 DB 不存在時自動改用 NEON_URL 作為 DATABASE_URL，Streamlit Cloud 上所有 get_session() 呼叫改讀 Neon，歷史資料正常顯示（v6.5.8）
+✅ 加權指數漲跌幅顏色修正：改用 float 解析判斷正負，不再依賴字串含 '+' 符號，未帶正號的漲幅也能正確顯示綠色（v6.5.9）
 
 待完成 / 規劃中：
 ⏳ decision_journal: 5 支持倉上限硬上限（目前只限 100% 資金，見 19.2 ⚠️）
