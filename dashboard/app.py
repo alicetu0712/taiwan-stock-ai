@@ -541,6 +541,21 @@ def page_today(selected_date: date):
     chg_color = "#00c851" if "+" in str(idx_chg) else "#ff4444" if "-" in str(idx_chg) else "white"
 
     today_log = logs[logs["date"] == selected_date] if not logs.empty else pd.DataFrame()
+    if today_log.empty:
+        # 超出最近 90 筆快取範圍，直接查 DB
+        try:
+            from src.database import get_session, ExecutionLog
+            _s = get_session()
+            _el = _s.query(ExecutionLog).filter_by(date=selected_date).order_by(ExecutionLog.id.desc()).first()
+            _s.close()
+            if _el:
+                today_log = pd.DataFrame([{
+                    "date": _el.date, "status": _el.status,
+                    "analyzed": _el.total_stocks, "qualified": _el.qualified_stocks,
+                    "recs": _el.recommended_stocks,
+                }])
+        except Exception:
+            pass
     analyzed  = int(today_log.iloc[0]["analyzed"])  if not today_log.empty else 0
     qualified = int(today_log.iloc[0]["qualified"]) if not today_log.empty else 0
     recs_cnt  = int(today_log.iloc[0]["recs"])      if not today_log.empty else 0
