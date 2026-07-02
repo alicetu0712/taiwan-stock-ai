@@ -1161,7 +1161,8 @@ def page_settings(selected_date: date):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**查看日期**")
-        new_date = st.date_input("", value=selected_date, max_value=date.today(),
+        new_date = st.date_input("", value=selected_date,
+                                 min_value=date(2025, 1, 1), max_value=date.today(),
                                  label_visibility="collapsed")
         if new_date != selected_date:
             st.session_state["selected_date"] = new_date
@@ -1192,7 +1193,7 @@ def page_settings(selected_date: date):
         try:
             price_cnt = s.query(func.count(DailyPrice.id)).scalar() or 0
             chip_cnt  = s.query(func.count(InstitutionalData.id)).scalar() or 0
-            oldest    = s.query(func.min(DailyPrice.date)).scalar()
+            oldest    = s.query(func.min(DailyPrice.date)).filter(DailyPrice.date >= '2025-01-01').scalar()
             newest    = s.query(func.max(DailyPrice.date)).scalar()
         except Exception:
             pass  # 雲端版無本機股價資料，顯示 0
