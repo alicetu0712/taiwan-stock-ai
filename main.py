@@ -846,3 +846,31 @@ if __name__ == "__main__":
         sys.exit(0)
 
     run_pipeline(trade_date=trade_date, dry_run=args.dry_run)
+
+    # 分析完成後自動同步至 Neon（讓手機版 Dashboard 即時更新）
+    if not args.dry_run:
+        neon_url = os.environ.get("NEON_URL", "")
+        if not neon_url:
+            # 從 .env 讀取
+            env_file = Path(__file__).parent / ".env"
+            if env_file.exists():
+                for line in env_file.read_text().splitlines():
+                    if line.startswith("NEON_URL="):
+                        neon_url = line.split("=", 1)[1].strip()
+                        break
+        if neon_url:
+            sync_script = Path(__file__).parent / "scripts" / "sync_to_neon.py"
+            try:
+                import subprocess
+                logger.info("[Step 11] 同步至 Neon...")
+                r = subprocess.run(
+                    [sys.executable, str(sync_script), "--db-url", neon_url, "--days", "3"],
+                    capture_output=True, text=True, timeout=120,
+                    cwd=str(Path(__file__).parent),
+                )
+                if r.returncode == 0:
+                    logger.info("[Step 11] Neon 同步完成")
+                else:
+                    logger.warning(f"[Step 11] Neon 同步失敗：{(r.stderr or r.stdout)[-200:]}")
+            except Exception as e:
+                logger.warning(f"[Step 11] Neon 同步例外：{e}")
