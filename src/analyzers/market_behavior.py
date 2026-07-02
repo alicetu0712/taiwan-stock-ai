@@ -19,16 +19,17 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MarketBehaviorResult:
     """市場行為分析結果"""
-    stock_id:       str
-    behavior_score: float = 0.0    # 0-100
-    foreign_signal: str   = "neutral"   # bullish / bearish / neutral
-    trust_signal:   str   = "neutral"
-    dealer_signal:  str   = "neutral"
-    three_major:    bool  = False    # 三大法人同步買超
-    margin_signal:  str   = "neutral"   # healthy / risky
-    factors_plus:   List[str] = field(default_factory=list)
-    factors_minus:  List[str] = field(default_factory=list)
-    summary:        str   = ""
+    stock_id:           str
+    behavior_score:     float = 0.0    # 0-100
+    has_real_chip_data: bool  = False  # 是否有真實籌碼資料（False=無資料，給中性分）
+    foreign_signal:     str   = "neutral"   # bullish / bearish / neutral
+    trust_signal:       str   = "neutral"
+    dealer_signal:      str   = "neutral"
+    three_major:        bool  = False    # 三大法人同步買超
+    margin_signal:      str   = "neutral"   # healthy / risky
+    factors_plus:       List[str] = field(default_factory=list)
+    factors_minus:      List[str] = field(default_factory=list)
+    summary:            str   = ""
 
 
 class MarketBehaviorAnalyzer:
@@ -111,7 +112,8 @@ class MarketBehaviorAnalyzer:
         else:
             score += 10   # 無融資資料，給中性分數
 
-        result.behavior_score = round(max(0.0, min(100.0, score)), 1)
+        result.behavior_score     = round(max(0.0, min(100.0, score)), 1)
+        result.has_real_chip_data = True
         result.factors_plus   = plus
         result.factors_minus  = minus
         result.summary        = self._build_summary(result)

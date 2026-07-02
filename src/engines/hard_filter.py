@@ -41,6 +41,9 @@ class HardFilter:
     def __init__(self, config: dict = None):
         self.cfg = config or HARD_FILTER
 
+    # 金融業關鍵字（銀行、保險、證券、金控負債比結構性偏高，ROA 較低）
+    _FINANCE_KEYWORDS = ("銀行", "保險", "證券", "金控", "票券", "金融", "壽險", "產險")
+
     def filter_stock(
         self,
         stock_id:     str,
@@ -57,6 +60,7 @@ class HardFilter:
         is_full_cash_delivery: bool = False,     # 全額交割股
         has_major_violation: bool = False,       # 重大違法
         name:         str = "",
+        industry:     str = "",
     ) -> FilterResult:
         """
         對單一股票執行硬性篩選。
@@ -105,6 +109,12 @@ class HardFilter:
             if not ok:
                 return FilterResult(stock_id, False, f"流動性不足（日均成交 {avg_daily_amt_m:.1f}M < {self.cfg['min_avg_daily_amt_m']}M）", checks)
 
+        # ── 產業別閾值（金融業結構性負債高、ROA 較低，採放寬標準）──────
+        is_finance = any(kw in (industry + name) for kw in self._FINANCE_KEYWORDS)
+        min_roe       = 8.0  if is_finance else self.cfg["min_roe"]
+        min_roa       = 0.5  if is_finance else self.cfg["min_roa"]
+        max_debt      = 95.0 if is_finance else self.cfg["max_debt_ratio"]
+
         # ── 財務條件 ──────────────────────────────────────────
         if eps_ttm is not None:
             ok = eps_ttm > self.cfg["min_ttm_eps"]
@@ -113,22 +123,24 @@ class HardFilter:
                 return FilterResult(stock_id, False, f"TTM EPS ≤ 0（虧損，EPS={eps_ttm:.2f}）", checks)
 
         if roe_avg is not None:
-            ok = roe_avg >= self.cfg["min_roe"]
+            ok = roe_avg >= min_roe
             checks["roe"] = (ok, f"ROE={roe_avg:.1f}%")
             if not ok:
-                return FilterResult(stock_id, False, f"ROE 不足（{roe_avg:.1f}% < {self.cfg['min_roe']}%）", checks)
+                label = "（金融業）" if is_finance else ""
+                return FilterResult(stock_id, False, f"ROE 不足{label}（{roe_avg:.1f}% < {min_roe}%）", checks)
 
         if roa_avg is not None:
-            ok = roa_avg >= self.cfg["min_roa"]
+            ok = roa_avg >= min_roa
             checks["roa"] = (ok, f"ROA={roa_avg:.1f}%")
             if not ok:
-                return FilterResult(stock_id, False, f"ROA 不足（{roa_avg:.1f}% < {self.cfg['min_roa']}%）", checks)
+                label = "（金融業）" if is_finance else ""
+                return FilterResult(stock_id, False, f"ROA 不足{label}（{roa_avg:.1f}% < {min_roa}%）", checks)
 
         if debt_ratio is not None:
-            ok = debt_ratio <= self.cfg["max_debt_ratio"]
+            ok = debt_ratio <= max_debt
             checks["debt_ratio"] = (ok, f"負債比={debt_ratio:.1f}%")
             if not ok:
-                return FilterResult(stock_id, False, f"負債比過高（{debt_ratio:.1f}% > {self.cfg['max_debt_ratio']}%）", checks)
+                return FilterResult(stock_id, False, f"負債比過高（{debt_ratio:.1f}% > {max_debt}%）", checks)
 
         # ── 成長趨勢 ──────────────────────────────────────────
         if eps_trend == "down":
@@ -178,6 +190,7 @@ def run_hard_filter(
         r = hf.filter_stock(
             stock_id     = sid,
             name         = info.get("name", ""),
+            industry     = info.get("industry", ""),
             listing_date = info.get("listing_date"),
             market_cap_b = info.get("market_cap_b"),
             capital_b    = info.get("capital_b"),

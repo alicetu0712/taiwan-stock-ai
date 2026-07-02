@@ -148,7 +148,7 @@ def fetch_annual_performance(stock_id: str) -> list:
     return results
 
 
-def build_financial_summary_from_db(stock_id: str, session) -> dict:
+def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> dict:
     """
     從本地 financial_quarters 表（quarter=0 為年度資料）
     組成 FundamentalAnalyzer.analyze() 所需的 fin_summary dict。
@@ -169,13 +169,15 @@ def build_financial_summary_from_db(stock_id: str, session) -> dict:
         "revenue_trend": "unknown", "revenue_yoy_avg": None,
     }
 
-    rows = (
-        session.query(FinancialQuarter)
-        .filter_by(stock_id=stock_id, quarter=0)
-        .order_by(FinancialQuarter.year.desc())
-        .limit(_MAX_YEARS)
-        .all()
-    )
+    q = session.query(FinancialQuarter).filter_by(stock_id=stock_id, quarter=0)
+    if as_of_date is not None:
+        # 年報申報期限：當年度（Y）年報最晚於 Y+1 年 4 月 1 日公告
+        # 只使用截至 as_of_date 已可公開的年度資料
+        from datetime import date as _date
+        d = as_of_date if isinstance(as_of_date, _date) else _date.fromisoformat(str(as_of_date))
+        max_available_year = (d.year - 1) if d.month < 4 else d.year - 1
+        q = q.filter(FinancialQuarter.year <= max_available_year)
+    rows = q.order_by(FinancialQuarter.year.desc()).limit(_MAX_YEARS).all()
 
     if not rows:
         return _empty

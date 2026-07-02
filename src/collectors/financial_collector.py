@@ -223,6 +223,7 @@ def fetch_eps_history(
 def build_financial_summary(
     stock_id: str,
     n_years: int = 5,
+    as_of_date=None,
 ) -> dict:
     """
     整合所有財務指標，回傳供基本面分析用的 dict。
@@ -233,7 +234,7 @@ def build_financial_summary(
       2. FinMind API（需要 FINMIND_TOKEN，且 FinMind Python library 在 macOS 可能 segfault）
     """
     # ── 優先從本地 DB 讀取（goodinfo.tw 已匯入的年度資料）────
-    db_summary = _build_summary_from_db(stock_id)
+    db_summary = _build_summary_from_db(stock_id, as_of_date=as_of_date)
     if db_summary.get("has_data"):
         return db_summary
 
@@ -315,7 +316,7 @@ def _date_to_quarter(date_str: str) -> int:
         return 1
 
 
-def _build_summary_from_db(stock_id: str) -> dict:
+def _build_summary_from_db(stock_id: str, as_of_date=None) -> dict:
     """
     從本地 financial_quarters 表讀取 goodinfo.tw 匯入的年度資料（quarter=0），
     組成 FundamentalAnalyzer 所需的 fin_summary dict。
@@ -332,7 +333,7 @@ def _build_summary_from_db(stock_id: str) -> dict:
         _Session = sessionmaker(bind=_engine)
         _session = _Session()
         try:
-            return build_financial_summary_from_db(stock_id, _session)
+            return build_financial_summary_from_db(stock_id, _session, as_of_date=as_of_date)
         finally:
             _session.close()
     except Exception as e:

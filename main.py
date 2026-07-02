@@ -166,7 +166,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
         if not dry_run:
             try:
                 from src.database import DailyPrice
-                hist_stocks = [r[0] for r in session.query(DailyPrice.stock_id).distinct().all()]
+                hist_stocks = [r[0] for r in session.query(DailyPrice.stock_id).filter(DailyPrice.date <= trade_date).distinct().all()]
                 if hist_stocks:
                     price_df = price_df[price_df["stock_id"].isin(hist_stocks)]
                     logger.info(f"[Step 1] 篩選至有歷史資料的股票：{len(hist_stocks)} 檔")
@@ -178,11 +178,9 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
 
         # 股票名稱對照表（從 stocks 表載入，供後續分析報告使用）
         from src.database import Stock as StockModel
-        _stock_name_map: dict = {
-            r.stock_id: r.name
-            for r in session.query(StockModel).all()
-            if r.name
-        }
+        _stock_db_rows = session.query(StockModel).all()
+        _stock_name_map: dict = {r.stock_id: r.name for r in _stock_db_rows if r.name}
+        _stock_industry_map: dict = {r.stock_id: (r.industry or "") for r in _stock_db_rows}
 
         # Dry-run：注入模擬財務摘要，讓完整流程可以演示
         _dry_run_fin_summaries = _sample_financial_summaries() if dry_run else {}
@@ -199,6 +197,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                         func.max(AnalysisResult.date).label("latest_date")
                     )
                     .filter(AnalysisResult.quality_score > 0)
+                    .filter(AnalysisResult.date < trade_date)
                     .group_by(AnalysisResult.stock_id)
                     .subquery()
                 )
@@ -274,6 +273,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                 rows = (session.query(DailyPrice)
                         .filter(DailyPrice.stock_id.in_(price_df["stock_id"].unique()))
                         .filter(DailyPrice.date >= cutoff)
+                        .filter(DailyPrice.date <= trade_date)
                         .order_by(DailyPrice.stock_id, DailyPrice.date)
                         .all())
                 for r in rows:
@@ -312,7 +312,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             fin_sum = _dry_run_fin_summaries.get(sid, {})
             if not dry_run:
                 try:
-                    fin_sum = build_financial_summary(sid, n_years=5)
+                    fin_sum = build_financial_summary(sid, n_years=5, as_of_date=trade_date)
                 except Exception:
                     fin_sum = {}
 
@@ -325,6 +325,8 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             else:
                 r = hf.filter_stock(
                     stock_id        = sid,
+                    name            = _stock_name_map.get(sid, ""),
+                    industry        = _stock_industry_map.get(sid, ""),
                     avg_daily_amt_m = avg_amt,
                     eps_ttm         = fin_sum.get("eps_ttm"),
                     roe_avg         = fin_sum.get("roe_avg"),

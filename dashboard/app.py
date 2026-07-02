@@ -625,8 +625,10 @@ def page_today(selected_date: date):
         content = recs_section.group(1) if recs_section else ""
         recs = parse_recs_from_report(content)
 
-    # 仍無推薦：用分析結果補卡片（前 8 名）
+    # 仍無推薦：用分析結果補卡片（前 8 名），並標記為「未達門檻」
+    is_fallback = False
     if not recs and not results_df.empty:
+        is_fallback = True
         top_df = results_df.head(8)
         for _, row in top_df.iterrows():
             sid = row["stock_id"]
@@ -648,7 +650,11 @@ def page_today(selected_date: date):
             })
 
     if recs:
-        st.markdown(f'<div class="section-title">今日研究候選（{len(recs)} 檔）</div>', unsafe_allow_html=True)
+        if is_fallback:
+            st.markdown(f'<div class="section-title">分析宇宙（{len(recs)} 檔，未達推薦門檻）</div>', unsafe_allow_html=True)
+            st.caption("⚠️ 本日無符合條件的推薦標的（total_score < 65 或 confidence < 70%），以下為分析分數最高的股票，僅供參考。")
+        else:
+            st.markdown(f'<div class="section-title">今日研究候選（{len(recs)} 檔）</div>', unsafe_allow_html=True)
         cols_data = [recs[i::2] for i in range(2)]
         col_left, col_right = st.columns(2)
         for rec in cols_data[0]:

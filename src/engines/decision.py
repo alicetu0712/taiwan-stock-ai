@@ -101,6 +101,7 @@ class DecisionEngine:
         t_score = technical_result.timing_score if technical_result else 0.0
         b_score = behavior_result.behavior_score if behavior_result else 50.0
         r_score = risk_result.risk_score         if risk_result     else 100.0
+        has_chip = behavior_result.has_real_chip_data if behavior_result else False
 
         rec.quality_score  = q_score
         rec.timing_score   = t_score
@@ -108,7 +109,7 @@ class DecisionEngine:
         rec.risk_score     = r_score
         rec.quality_grade  = quality_result.quality_grade if quality_result else "D"
 
-        # ── 計算綜合評分（Dynamic Weighting：quality 缺失時重分配權重）──
+        # ── 計算綜合評分（Dynamic Weighting：quality/behavior 缺失時重分配權重）──
         w = dict(self.weights)
         if q_score == 0.0:
             # 把 quality 的 40% 等比例分給 timing / behavior / intelligence
@@ -118,6 +119,14 @@ class DecisionEngine:
             w["behavior"]     += extra * (w["behavior"]     / non_q_sum)
             w["intelligence"] += extra * (w["intelligence"] / non_q_sum)
             w["quality"] = 0.0
+        if not has_chip:
+            # 無真實籌碼資料（歷史回補或當日法人未更新）：把 behavior 20% 分給 timing/intelligence
+            non_b_sum = w["timing"] + w["intelligence"]
+            extra = w["behavior"]
+            w["timing"]       += extra * (w["timing"]       / non_b_sum)
+            w["intelligence"] += extra * (w["intelligence"] / non_b_sum)
+            w["behavior"] = 0.0
+            b_score = 0.0  # 不納入計算
 
         base_score = (
             q_score     * w["quality"]    +
@@ -204,10 +213,20 @@ class DecisionEngine:
             )
             return [], reason
 
-        # 依總分降序，取 Top N
+        # 依總分降序後，套用產業集中度控制（同產業最多 2 支）
         qualified.sort(key=lambda r: r.total_score, reverse=True)
-        top_n  = qualified[:max_n]
-        reason = f"今日共有 {len(qualified)} 檔符合條件，推薦其中評分最高的 {len(top_n)} 檔。"
+        top_n: list = []
+        industry_count: dict = {}
+        max_per_industry = 2
+        for r in qualified:
+            ind = (r.industry or "其他").strip()
+            if industry_count.get(ind, 0) >= max_per_industry:
+                continue
+            top_n.append(r)
+            industry_count[ind] = industry_count.get(ind, 0) + 1
+            if len(top_n) >= max_n:
+                break
+        reason = f"今日共有 {len(qualified)} 檔符合條件，推薦其中評分最高的 {len(top_n)} 檔（同產業上限 {max_per_industry} 支）。"
         return top_n, reason
 
     # ── 私有方法 ──────────────────────────────────────────────
