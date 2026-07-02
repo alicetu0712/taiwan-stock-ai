@@ -64,6 +64,14 @@ def main():
 
     added = 0
     skipped = 0
+    skipped_budget = 0
+
+    # 資金追蹤：模擬 100% 總資金，active 持倉依序佔用
+    # budget_map[stock_id] = position_pct（持有中）
+    budget_used: dict = {}   # {stock_id: position_pct}
+
+    def _current_used():
+        return sum(budget_used.values())
 
     for rec in recs:
         date_str = str(rec.date)
@@ -86,6 +94,15 @@ def main():
         position_pct  = params["position_pct"]
         target_price    = round(entry_price * (1 + target_pct / 100), 2)
         stop_loss_price = round(entry_price * (1 - stop_loss_pct / 100), 2)
+
+        # ── 資金控管：超過 100% 不開倉 ──────────────────────────
+        if rec.stock_id in budget_used:
+            skipped_budget += 1
+            continue   # 同股票已有持倉
+        if _current_used() + position_pct > 100.0:
+            skipped_budget += 1
+            logger.debug(f"[Budget] {rec.stock_id} 跳過：已用 {_current_used():.0f}%＋{position_pct:.0f}% > 100%")
+            continue
 
         # 取進場日之後的所有日期（排序）
         future_dates = sorted(
@@ -181,8 +198,14 @@ def main():
         existing_keys.add(key)
         added += 1
 
+        # 更新資金追蹤
+        if status == "active":
+            budget_used[rec.stock_id] = position_pct
+        # 若已出場則不佔用資金（歷史上已釋放）
+        # 但因為回填是順序處理，active 代表截至今日尚未出場
+
     s.commit()
-    logger.info(f"新增持倉：{added} 筆，跳過（已存在）：{skipped} 筆")
+    logger.info(f"新增持倉：{added} 筆，跳過（已存在）：{skipped} 筆，資金不足跳過：{skipped_budget} 筆")
 
     # ── 統計整體報酬 ─────────────────────────────────────────
     all_pos = s.query(PositionMonitor).all()

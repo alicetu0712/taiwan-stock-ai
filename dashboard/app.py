@@ -951,15 +951,15 @@ def page_positions():
                 return ((tp - ep) / ep * 100) if ep > 0 and tp > ep else 0.0
             weighted_exp = sum(_w(p) * _exp(p) for p in positions)
 
-            # 平均建議倉位（每筆推薦當時建議持有的比例，非累加）
-            avg_pos_pct = total_alloc / n_pos if n_pos > 0 else 0
+            cash_pct = max(0.0, 100.0 - total_alloc)
 
             st.markdown("#### 📊 目前配置總覽")
             r1c1, r1c2 = st.columns(2)
-            r1c1.metric("持倉支數", f"{n_pos} 支")
-            r1c2.metric("每筆建議倉位", f"{avg_pos_pct:.0f}%",
-                        help="各筆推薦當時建議持有比例的平均值（A+=30%、A=20%、B=10%）",
-                        delta_color="off")
+            r1c1.metric("持倉支數", f"{n_pos} 支",
+                        help="目前追蹤中的活躍持倉數")
+            r1c2.metric("剩餘現金", f"{cash_pct:.0f}%",
+                        delta=f"已配置 {min(total_alloc, 100):.0f}%", delta_color="off",
+                        help="100% 代表總資金，已配置為所有活躍持倉建議倉位合計")
             r2c1, r2c2 = st.columns(2)
             r2c1.metric("整體預期報酬", f"{weighted_exp:+.2f}%",
                         help="各持倉目標漲幅（或蒙地卡羅期望值）按持倉比例加權平均")

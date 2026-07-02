@@ -75,6 +75,21 @@ def open_position(
         logger.info(f"[Position] {stock_id} 已有活躍持倉，跳過建立")
         return False
 
+    # 資金控管：確認剩餘資金足夠
+    new_pct = POSITION_SIZE_MAP.get(rec_level, 10.0)
+    used_pct = (
+        session.query(PositionMonitor)
+        .filter(PositionMonitor.status == "active")
+        .with_entities(PositionMonitor.position_pct)
+        .all()
+    )
+    total_used = sum((r[0] or 0) for r in used_pct)
+    if total_used + new_pct > 100.0:
+        logger.info(
+            f"[Position] {stock_id} 跳過：已用 {total_used:.0f}%＋新倉 {new_pct:.0f}% > 100%，資金不足"
+        )
+        return False
+
     pos = PositionMonitor(
         stock_id          = stock_id,
         stock_name        = stock_name,
