@@ -885,11 +885,11 @@ def _monte_carlo_chart(pos: dict, prices: list = None):
     import plotly.graph_objects as go
     fig = go.Figure()
 
-    days          = mc["days"]
-    sample_paths  = mc["sample_paths"]
-    target_price  = mc["target_price"]
-    stop_loss_price = mc["stop_loss_price"]
-    entry_price   = mc["entry_price"]
+    days            = mc["days"]
+    sample_paths    = mc["sample_paths"]
+    target_price    = mc.get("target_price")    or pos.get("target_price")
+    stop_loss_price = mc.get("stop_loss_price") or pos.get("stop_loss_price")
+    entry_price     = mc.get("entry_price")     or pos.get("entry_price")
 
     # 採樣路徑（半透明灰線）
     for path in sample_paths:
