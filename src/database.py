@@ -169,16 +169,18 @@ class DecisionJournal(Base):
     id               = Column(Integer, primary_key=True, autoincrement=True)
     date             = Column(Date, nullable=False)
     stock_id         = Column(String(10), nullable=False)
-    quality_score    = Column(Float)
-    timing_score     = Column(Float)
-    behavior_score   = Column(Float)
-    confidence       = Column(Float)
-    rec_level        = Column(String(5))
-    action           = Column(String(50))    # Recommended / WatchList / Rejected / Archived
-    reason           = Column(Text)
-    market_env       = Column(Text)          # 當日市場環境描述
-    strategy_version = Column(String(20), default="v6.0")
-    created_at       = Column(DateTime, default=datetime.utcnow)
+    quality_score       = Column(Float)
+    timing_score        = Column(Float)
+    behavior_score      = Column(Float)
+    intelligence_score  = Column(Float)
+    risk_score          = Column(Float)
+    confidence          = Column(Float)
+    rec_level           = Column(String(5))
+    action              = Column(String(50))    # Recommended / WatchList / Rejected / Archived
+    reason              = Column(Text)
+    market_env          = Column(Text)          # 當日市場環境描述
+    strategy_version    = Column(String(20), default="v6.0")
+    created_at          = Column(DateTime, default=datetime.utcnow)
 
 
 class ResearchStatus(Base):

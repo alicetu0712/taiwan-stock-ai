@@ -136,6 +136,27 @@ def fetch_all_prices(trade_date: Optional[date] = None) -> pd.DataFrame:
     return all_df
 
 
+def fetch_stock_info() -> dict:
+    """從 TWSE t187ap03_L 取得上市股票基本資料（資本額、發行股數）。
+    回傳 {stock_id: {"capital_b": float, "outstanding_shares_k": float}}
+    """
+    data = _get(TWSE_API["listed_stocks"])
+    if not data:
+        return {}
+    result = {}
+    for row in data:
+        sid = str(row.get("公司代號", "")).strip()
+        if not sid:
+            continue
+        capital_raw = _to_float(str(row.get("實收資本額", "")).replace(",", ""))
+        shares_raw  = _to_float(str(row.get("已發行普通股數或TDR原股發行股數", "")).replace(",", ""))
+        result[sid] = {
+            "capital_b":           round(capital_raw / 1e8, 2) if capital_raw else None,
+            "outstanding_shares_k": round(shares_raw / 1000, 0) if shares_raw else None,
+        }
+    return result
+
+
 def fetch_market_summary() -> dict:
     """抓取大盤摘要（加權指數、成交金額等）。"""
     data = _get(TWSE_API["market_index"])

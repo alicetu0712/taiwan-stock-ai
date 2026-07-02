@@ -63,7 +63,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
     logger.info(f"{'='*60}")
 
     # ── 導入模組 ─────────────────────────────────────────────
-    from src.collectors.price_collector import fetch_all_prices, fetch_market_summary
+    from src.collectors.price_collector import fetch_all_prices, fetch_market_summary, fetch_stock_info
     from src.collectors.chip_collector  import fetch_all_institutional, fetch_margin_trading
     from src.collectors.financial_collector import build_financial_summary
     from src.collectors.news_collector  import fetch_rss_news, fetch_mops_announcements
@@ -182,6 +182,27 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
         _stock_db_rows = session.query(StockModel).all()
         _stock_name_map: dict = {r.stock_id: r.name for r in _stock_db_rows if r.name}
         _stock_industry_map: dict = {r.stock_id: (r.industry or "") for r in _stock_db_rows}
+        _stock_capital_map: dict = {r.stock_id: r.capital for r in _stock_db_rows if r.capital}
+        _stock_shares_map:  dict = {r.stock_id: r.outstanding_shares for r in _stock_db_rows if r.outstanding_shares}
+
+        # 每日更新 stocks 表的資本額與發行股數（只在非回補模式執行，避免 API 頻繁呼叫）
+        if not dry_run and not backfill_date:
+            try:
+                info_map = fetch_stock_info()
+                updated_info = 0
+                for row in _stock_db_rows:
+                    si = info_map.get(row.stock_id)
+                    if si and (row.capital != si["capital_b"] or row.outstanding_shares != si["outstanding_shares_k"]):
+                        row.capital            = si["capital_b"]
+                        row.outstanding_shares = si["outstanding_shares_k"]
+                        updated_info += 1
+                        _stock_capital_map[row.stock_id] = si["capital_b"]
+                        _stock_shares_map[row.stock_id]  = si["outstanding_shares_k"]
+                if updated_info:
+                    session.commit()
+                    logger.info(f"[Step 1c] 股票基本資料更新：{updated_info} 筆（資本額/股數）")
+            except Exception as e:
+                logger.warning(f"[Step 1c] 股票基本資料更新失敗（{e}），略過")
 
         # Dry-run：注入模擬財務摘要，讓完整流程可以演示
         _dry_run_fin_summaries = _sample_financial_summaries() if dry_run else {}
@@ -324,6 +345,9 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                 if avg_amt >= 100:   # 100 百萬 = 1 億
                     qualified_stocks.append((sid, fin_sum, latest))
             else:
+                shares_k   = _stock_shares_map.get(sid)
+                close_price = latest.get("close") or 0
+                market_cap_b = round(shares_k * 1000 * close_price / 1e8, 1) if shares_k and close_price else None
                 r = hf.filter_stock(
                     stock_id        = sid,
                     name            = _stock_name_map.get(sid, ""),
@@ -335,6 +359,8 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                     debt_ratio      = fin_sum.get("debt_ratio"),
                     eps_trend       = fin_sum.get("eps_trend", "unknown"),
                     revenue_trend   = fin_sum.get("revenue_trend", "unknown"),
+                    capital_b       = _stock_capital_map.get(sid),
+                    market_cap_b    = market_cap_b,
                 )
                 if r.passed:
                     qualified_stocks.append((sid, fin_sum, latest))
@@ -744,17 +770,19 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                 "WatchList" if rec.total_score >= 55 else "Rejected"
             )
             dj = DecisionJournal(
-                date             = trade_date,
-                stock_id         = rec.stock_id,
-                quality_score    = rec.quality_score,
-                timing_score     = rec.timing_score,
-                behavior_score   = rec.behavior_score,
-                confidence       = rec.confidence,
-                rec_level        = rec.rec_level,
-                action           = action,
-                reason           = rec.summary,
-                market_env       = market_env_desc,
-                strategy_version = "v6.0",
+                date                = trade_date,
+                stock_id            = rec.stock_id,
+                quality_score       = rec.quality_score,
+                timing_score        = rec.timing_score,
+                behavior_score      = rec.behavior_score,
+                intelligence_score  = rec.intelligence_score,
+                risk_score          = rec.risk_score,
+                confidence          = rec.confidence,
+                rec_level           = rec.rec_level,
+                action              = action,
+                reason              = rec.summary,
+                market_env          = market_env_desc,
+                strategy_version    = "v6.0",
             )
             session.add(dj)
 
