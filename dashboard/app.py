@@ -1201,30 +1201,39 @@ def page_settings(selected_date: date):
             pass  # 雲端版無本機股價資料，顯示 0
         rec_cnt = s.query(func.count(Recommendation.id)).scalar() or 0
         s.close()
-        st.markdown(f"""
-        <div class="stat-grid">
-          <div class="stat-box">
-            <div class="stat-val" style="font-size:1.4rem">{price_cnt:,}</div>
-            <div class="stat-lbl">股價紀錄</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-val" style="font-size:1.4rem">{chip_cnt:,}</div>
-            <div class="stat-lbl">法人紀錄</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-val" style="font-size:1.4rem">{rec_cnt}</div>
-            <div class="stat-lbl">推薦紀錄</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-val" style="font-size:0.85rem; color:#667eea">{oldest or '—'}</div>
-            <div class="stat-lbl">最早股價日期</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if newest:
-            st.caption(f"最新股價：{newest}")
-        elif price_cnt == 0:
-            st.caption("股價資料存於本機，雲端版顯示 0 筆為正常")
+        if price_cnt > 0:
+            st.markdown(f"""
+            <div class="stat-grid">
+              <div class="stat-box">
+                <div class="stat-val" style="font-size:1.4rem">{price_cnt:,}</div>
+                <div class="stat-lbl">股價紀錄</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-val" style="font-size:1.4rem">{chip_cnt:,}</div>
+                <div class="stat-lbl">法人紀錄</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-val" style="font-size:1.4rem">{rec_cnt}</div>
+                <div class="stat-lbl">推薦紀錄</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-val" style="font-size:0.85rem; color:#667eea">{oldest or '—'}</div>
+                <div class="stat-lbl">研究起始日期</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            if newest:
+                st.caption(f"最新股價：{newest}")
+        else:
+            st.markdown(f"""
+            <div class="stat-grid">
+              <div class="stat-box">
+                <div class="stat-val" style="font-size:1.4rem">{rec_cnt}</div>
+                <div class="stat-lbl">推薦紀錄</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.caption("股價／法人原始資料存於本機，行動版不顯示")
     except Exception:
         st.caption("資料庫暫時無法連線")
 
