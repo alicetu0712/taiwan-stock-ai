@@ -25,14 +25,16 @@ for _d in [DATA_DIR, REPORTS_DIR / "daily", REPORTS_DIR / "backtests", LOGS_DIR]
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 FINMIND_TOKEN     = os.getenv("FINMIND_TOKEN", "")
 
-# ── 資料庫連線（本機 SQLite；Neon 雲端透過 NEON_URL 另行處理）──
-# 若 NEON_URL 已設定，本機引擎永遠用 SQLite，避免 DATABASE_URL
-# 殘留在 shell 環境時誤連舊 Neon endpoint。
+# ── 資料庫連線 ────────────────────────────────────────────────
+# 本機 DB 檔存在 → SQLite（本機執行）
+# 本機 DB 檔不存在 + NEON_URL 設定 → 直接用 Neon（Streamlit Cloud）
+# 防止 shell 殘留的舊 DATABASE_URL 污染連線
 _raw_db_url = os.getenv("DATABASE_URL", "")
 _neon_url   = os.getenv("NEON_URL", "")
-if _neon_url:
-    # 雙 DB 架構：本機一律 SQLite，雲端由 NEON_URL 負責
+if DB_PATH.exists():
     DATABASE_URL = f"sqlite:///{DB_PATH}"
+elif _neon_url:
+    DATABASE_URL = _neon_url.replace("postgres://", "postgresql://", 1)
 elif _raw_db_url.startswith("postgres://"):
     DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql://", 1)
 elif _raw_db_url.startswith("postgresql://"):
