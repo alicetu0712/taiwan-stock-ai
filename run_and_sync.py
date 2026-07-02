@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 NEON_URL = os.getenv("NEON_URL") or os.getenv("DATABASE_URL")
 if not NEON_URL:

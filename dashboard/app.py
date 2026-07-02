@@ -827,11 +827,18 @@ def page_history():
 
 # ── 持倉追蹤 ─────────────────────────────────────────────────
 
+def _get_neon_url() -> str:
+    """每次呼叫都強制從 .env 重讀，避免 Streamlit hot-reload 沿用舊值。"""
+    from dotenv import load_dotenv as _lde
+    _lde(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
+    return os.getenv("NEON_URL") or os.getenv("DATABASE_URL") or ""
+
+
 @st.cache_data(ttl=120)
 def load_positions(status: str = "active") -> list:
     """直連 Neon 讀取 position_monitor，不依賴 get_session()。"""
-    import os, json as _json
-    neon_url = os.getenv("NEON_URL") or os.getenv("DATABASE_URL")
+    import json as _json
+    neon_url = _get_neon_url()
     if not neon_url:
         return []  # 呼叫端負責顯示錯誤（st.* 不可在 cache_data 內呼叫）
     if neon_url.startswith("sqlite"):
