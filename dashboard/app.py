@@ -1079,144 +1079,218 @@ def page_positions():
 
 @st.cache_data(ttl=1800)
 def compute_backtest() -> pd.DataFrame:
-    """計算所有歷史推薦的 5/20/60 日報酬（以推薦日收盤價為基準）。"""
+    """計算所有歷史推薦的 5/20/60 日報酬與對比 0050 的超額報酬（Alpha）。"""
     from datetime import timedelta
     try:
         from src.database import get_session, Recommendation, DailyPrice
         s = get_session()
         recs = s.query(Recommendation).order_by(Recommendation.date).all()
+
+        # 預載所有推薦股票 + 0050 的價格，減少 N+1 查詢
+        all_ids = {r.stock_id for r in recs} | {"0050"}
+        all_prices_q = (s.query(DailyPrice)
+                        .filter(DailyPrice.stock_id.in_(all_ids))
+                        .order_by(DailyPrice.stock_id, DailyPrice.date)
+                        .all())
+        s.close()
+
+        # 建立 {stock_id: [(date, close), ...]} 索引
+        from collections import defaultdict
+        price_map = defaultdict(list)
+        for p in all_prices_q:
+            price_map[p.stock_id].append((p.date, p.close))
+
+        def _ret_at(plist, ref_date, min_days):
+            """從 ref_date 起，找第一個距離 >= min_days 的收盤價，計算報酬率。"""
+            entry = next((c for d, c in plist if d >= ref_date and c), None)
+            if not entry:
+                return None, None
+            for d, c in plist:
+                if d >= ref_date and (d - ref_date).days >= min_days and c:
+                    return round((c - entry) / entry * 100, 2), entry
+            return None, entry
+
         rows = []
         for r in recs:
-            prices = (s.query(DailyPrice)
-                      .filter(DailyPrice.stock_id == r.stock_id,
-                              DailyPrice.date >= r.date,
-                              DailyPrice.date <= r.date + timedelta(days=90))
-                      .order_by(DailyPrice.date).all())
-            if not prices:
-                continue
-            dates_p = [p.date for p in prices]
-            closes  = [p.close for p in prices]
-            entry   = closes[0]
-            if not entry:
+            sp = price_map.get(r.stock_id, [])
+            bp = price_map.get("0050", [])
+            if not sp:
                 continue
 
-            def _ret(min_days):
-                for i, d in enumerate(dates_p):
-                    if (d - r.date).days >= min_days:
-                        return round((closes[i] - entry) / entry * 100, 2)
-                return None
+            s5,  entry = _ret_at(sp, r.date, 5)
+            s20, _     = _ret_at(sp, r.date, 20)
+            s60, _     = _ret_at(sp, r.date, 60)
+            b5,  _     = _ret_at(bp, r.date, 5)
+            b20, _     = _ret_at(bp, r.date, 20)
+            b60, _     = _ret_at(bp, r.date, 60)
 
             rows.append({
                 "date":       r.date,
                 "stock_id":   r.stock_id,
-                "rec_level":  r.rec_level,
                 "confidence": r.confidence,
                 "entry":      entry,
-                "ret_5d":     _ret(5),
-                "ret_20d":    _ret(20),
-                "ret_60d":    _ret(60),
+                "ret_5d":     s5,  "bench_5d":  b5,
+                "ret_20d":    s20, "bench_20d": b20,
+                "ret_60d":    s60, "bench_60d": b60,
+                "alpha_5d":   round(s5  - b5,  2) if s5  is not None and b5  is not None else None,
+                "alpha_20d":  round(s20 - b20, 2) if s20 is not None and b20 is not None else None,
+                "alpha_60d":  round(s60 - b60, 2) if s60 is not None and b60 is not None else None,
             })
-        s.close()
         return pd.DataFrame(rows)
     except Exception:
         return pd.DataFrame()
 
 
-def _backtest_stats(series: pd.Series, hold_days: int) -> dict:
-    s = series.dropna()
-    if len(s) < 3:
+def _alpha_stats(alpha: pd.Series, ret: pd.Series, hold_days: int) -> dict:
+    a = alpha.dropna()
+    r = ret.dropna()
+    if len(a) < 5:
         return {}
-    wins     = (s > 0).sum()
-    win_rate = wins / len(s) * 100
-    avg_ret  = s.mean()
-    std_ret  = s.std()
-    sharpe   = avg_ret / std_ret * (252 / hold_days) ** 0.5 if std_ret > 0 else 0
-    # Max drawdown on equity curve (equal-weight sequential)
-    cum = (1 + s / 100).cumprod()
-    peak = cum.cummax()
-    mdd  = ((cum - peak) / peak * 100).min()
+    from scipy import stats as _stats
+    t_stat, p_val = _stats.ttest_1samp(a, 0)
+    ir     = a.mean() / a.std() if a.std() > 0 else 0
+    sharpe = r.mean() / r.std() * (252 / hold_days) ** 0.5 if r.std() > 0 else 0
+    cum    = (1 + r / 100).cumprod()
+    mdd    = ((cum - cum.cummax()) / cum.cummax() * 100).min()
     return {
-        "n": len(s), "wins": int(wins), "win_rate": win_rate,
-        "avg_ret": avg_ret, "sharpe": sharpe, "mdd": mdd,
+        "n":            len(a),
+        "mean_alpha":   a.mean(),
+        "win_vs_bench": (a > 0).mean() * 100,
+        "ir":           ir,
+        "t_stat":       t_stat,
+        "p_val":        p_val,
+        "significant":  p_val < 0.05,
+        "mean_ret":     r.mean(),
+        "sharpe":       sharpe,
+        "mdd":          mdd,
     }
 
 
 def page_backtest():
-    st.markdown('<div class="section-title">🧪 推薦回測</div>', unsafe_allow_html=True)
-    st.caption("以推薦日收盤價為基準，計算各時間窗口的實際報酬，評估模型有效性。")
+    import altair as alt
+    st.markdown('<div class="section-title">🧪 超額報酬驗證</div>', unsafe_allow_html=True)
+    st.caption("以 0050 為基準，驗證推薦是否產生統計顯著的超額報酬（Alpha）。")
 
     df = compute_backtest()
     if df.empty:
         st.info("尚無足夠歷史資料，請先執行分析並同步。")
         return
 
-    # ── 統計摘要 ─────────────────────────────────────────────
-    st.markdown("#### 整體績效摘要")
-    horizons = [("5 日", "ret_5d", 5), ("20 日", "ret_20d", 20), ("60 日", "ret_60d", 60)]
+    horizons = [
+        ("5 日",  "alpha_5d",  "ret_5d",  "bench_5d",  5),
+        ("20 日", "alpha_20d", "ret_20d", "bench_20d", 20),
+        ("60 日", "alpha_60d", "ret_60d", "bench_60d", 60),
+    ]
+
+    # ── Alpha 統計摘要 ────────────────────────────────────────
+    st.markdown("#### 超額報酬摘要（vs 0050）")
     cols = st.columns(3)
-    for col, (label, key, days) in zip(cols, horizons):
-        stats = _backtest_stats(df[key], days)
-        if not stats:
+    all_stats = {}
+    for col, (label, ak, rk, bk, days) in zip(cols, horizons):
+        st_d = _alpha_stats(df[ak], df[rk], days)
+        all_stats[label] = st_d
+        if not st_d:
             col.metric(label, "資料不足")
             continue
-        delta_color = "normal" if stats["avg_ret"] >= 0 else "inverse"
+        sig_badge = "✅ p<0.05" if st_d["significant"] else "⚠️ 不顯著"
+        delta_color = "normal" if st_d["mean_alpha"] >= 0 else "inverse"
         col.metric(
-            f"**{label}均報酬**",
-            f"{stats['avg_ret']:+.2f}%",
-            f"勝率 {stats['win_rate']:.0f}%  ({stats['wins']}/{stats['n']})",
+            f"**{label} Alpha**",
+            f"{st_d['mean_alpha']:+.2f}%",
+            f"勝 0050：{st_d['win_vs_bench']:.0f}%（{st_d['n']} 筆）",
             delta_color=delta_color,
         )
         col.markdown(
-            f"<small>Sharpe {stats['sharpe']:.2f} ｜ MDD {stats['mdd']:.1f}%</small>",
+            f"<small>IR {st_d['ir']:.2f} ｜ t={st_d['t_stat']:.2f} ｜ {sig_badge}</small>",
             unsafe_allow_html=True,
         )
 
-    # ── 各 horizon 柱狀圖 ──────────────────────────────────
-    st.markdown("#### 20 日報酬分布")
-    sub20 = df[["date", "stock_id", "ret_20d"]].dropna().copy()
-    sub20["label"] = sub20["date"].astype(str) + " " + sub20["stock_id"]
-    sub20 = sub20.sort_values("date")
-    sub20["color"] = sub20["ret_20d"].apply(lambda x: "#00c851" if x > 0 else "#ff4444")
-    import altair as alt
-    bar = (alt.Chart(sub20)
+    # ── 策略 vs 0050 累積報酬曲線（20日）────────────────────
+    st.markdown("#### 策略 vs 0050 累積報酬（20 日窗口，等權）")
+    sub = df[["date", "stock_id", "ret_20d", "bench_20d", "alpha_20d"]].dropna(subset=["ret_20d", "bench_20d"]).sort_values("date").copy()
+    if not sub.empty:
+        trade_no = list(range(1, len(sub) + 1))
+        cum_strat = ((1 + sub["ret_20d"]   / 100).cumprod() * 100 - 100).tolist()
+        cum_bench = ((1 + sub["bench_20d"] / 100).cumprod() * 100 - 100).tolist()
+        curve_df  = pd.DataFrame({
+            "trade_no": trade_no * 2,
+            "cum_ret":  cum_strat + cum_bench,
+            "type":     ["策略"] * len(trade_no) + ["0050 基準"] * len(trade_no),
+        })
+        line = (alt.Chart(curve_df)
+                .mark_line(point=False)
+                .encode(
+                    x=alt.X("trade_no:Q", title="推薦筆數"),
+                    y=alt.Y("cum_ret:Q",  title="累積報酬 (%)"),
+                    color=alt.Color("type:N", scale=alt.Scale(
+                        domain=["策略", "0050 基準"],
+                        range=["#667eea", "#aaaaaa"])),
+                    tooltip=["trade_no:Q", "type:N", alt.Tooltip("cum_ret:Q", format=".1f")],
+                )
+                .properties(height=260))
+        zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#555", strokeDash=[4,4]).encode(y="y:Q")
+        st.altair_chart(line + zero, use_container_width=True)
+
+    # ── 各筆 Alpha 柱狀圖（20日）────────────────────────────
+    st.markdown("#### 逐筆 Alpha（20 日，推薦報酬 − 0050 同期）")
+    alpha_bar = sub.copy()
+    alpha_bar["label"] = alpha_bar["date"].astype(str) + " " + alpha_bar["stock_id"]
+    alpha_bar["color"] = alpha_bar["alpha_20d"].apply(lambda x: "#00c851" if x >= 0 else "#ff4444")
+    bar = (alt.Chart(alpha_bar)
            .mark_bar()
            .encode(
-               x=alt.X("label:N", sort=None, axis=alt.Axis(labelAngle=-45, labelLimit=80)),
-               y=alt.Y("ret_20d:Q", title="20日報酬 (%)"),
+               x=alt.X("label:N", sort=None, axis=alt.Axis(labelAngle=-60, labelLimit=70, labelFontSize=9)),
+               y=alt.Y("alpha_20d:Q", title="Alpha (%)"),
                color=alt.Color("color:N", scale=None),
-               tooltip=["date:T", "stock_id:N", alt.Tooltip("ret_20d:Q", format=".2f")],
+               tooltip=["date:T", "stock_id:N",
+                        alt.Tooltip("ret_20d:Q",   format=".2f", title="策略報酬%"),
+                        alt.Tooltip("bench_20d:Q", format=".2f", title="0050報酬%"),
+                        alt.Tooltip("alpha_20d:Q", format=".2f", title="Alpha%")],
            )
-           .properties(height=300))
-    st.altair_chart(bar, use_container_width=True)
+           .properties(height=260))
+    zero2 = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#aaa", strokeDash=[4,4]).encode(y="y:Q")
+    st.altair_chart(bar + zero2, use_container_width=True)
 
-    # ── 累積報酬曲線（20日）────────────────────────────────
-    st.markdown("#### 累積報酬曲線（20 日，等權）")
-    cum = (1 + sub20["ret_20d"] / 100).cumprod() * 100 - 100
-    cum_df = pd.DataFrame({"trade_no": range(1, len(cum) + 1), "cum_ret": cum.values})
-    line = (alt.Chart(cum_df)
-            .mark_line(point=True, color="#667eea")
-            .encode(
-                x=alt.X("trade_no:Q", title="推薦筆數"),
-                y=alt.Y("cum_ret:Q", title="累積報酬 (%)"),
-                tooltip=["trade_no:Q", alt.Tooltip("cum_ret:Q", format=".1f")],
-            )
-            .properties(height=240))
-    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#aaa", strokeDash=[4, 4]).encode(y="y:Q")
-    st.altair_chart(line + zero, use_container_width=True)
+    # ── 各窗口完整統計表 ─────────────────────────────────────
+    st.markdown("#### 各時間窗口完整統計")
+    summary_rows = []
+    for label, ak, rk, bk, days in horizons:
+        st_d = all_stats.get(label, {})
+        if not st_d:
+            continue
+        summary_rows.append({
+            "時間窗": label,
+            "樣本數": st_d["n"],
+            "均報酬": f"{st_d['mean_ret']:+.2f}%",
+            "均 Alpha": f"{st_d['mean_alpha']:+.2f}%",
+            "勝 0050": f"{st_d['win_vs_bench']:.0f}%",
+            "Sharpe": f"{st_d['sharpe']:.2f}",
+            "IR": f"{st_d['ir']:.2f}",
+            "t 值": f"{st_d['t_stat']:.2f}",
+            "p 值": f"{st_d['p_val']:.3f}",
+            "顯著": "✅" if st_d["significant"] else "⚠️",
+            "MDD": f"{st_d['mdd']:.1f}%",
+        })
+    if summary_rows:
+        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
     # ── 明細表 ──────────────────────────────────────────────
-    st.markdown("#### 推薦明細")
-    show = df[["date", "stock_id", "confidence", "entry", "ret_5d", "ret_20d", "ret_60d"]].copy()
-    show.columns = ["日期", "股票", "信心", "進場價", "5日%", "20日%", "60日%"]
-    show = show.sort_values("日期", ascending=False)
+    with st.expander("📋 推薦明細（含逐筆 Alpha）", expanded=False):
+        show = df[["date", "stock_id", "confidence", "entry",
+                   "ret_20d", "bench_20d", "alpha_20d",
+                   "ret_60d", "bench_60d", "alpha_60d"]].copy()
+        show.columns = ["日期", "股票", "信心", "進場價",
+                        "20日%", "0050_20日%", "Alpha_20日",
+                        "60日%", "0050_60日%", "Alpha_60日"]
+        show = show.sort_values("日期", ascending=False)
 
-    def color_ret(val):
-        if pd.isna(val):
-            return "color: #888"
-        return "color: #00c851; font-weight:600" if val > 0 else "color: #ff4444; font-weight:600"
+        def _color(val):
+            if pd.isna(val): return "color:#888"
+            return "color:#00c851;font-weight:600" if val > 0 else "color:#ff4444;font-weight:600"
 
-    styled = show.style.map(color_ret, subset=["5日%", "20日%", "60日%"])
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+        colored_cols = ["20日%", "Alpha_20日", "60日%", "Alpha_60日"]
+        st.dataframe(show.style.map(_color, subset=colored_cols),
+                     use_container_width=True, hide_index=True)
 
 
 # ── 設定 ─────────────────────────────────────────────────────
