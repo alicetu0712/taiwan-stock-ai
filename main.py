@@ -25,6 +25,7 @@ AI Taiwan Equity Research Platform v6.0
 
 import argparse
 import logging
+import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
