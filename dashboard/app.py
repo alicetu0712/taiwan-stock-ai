@@ -953,7 +953,8 @@ def page_positions():
                 with st.expander(
                     f"{'🟢' if (pnl or 0) >= 0 else '🔴'} {name}（{sid}）  "
                     f"{f'{pnl:+.1f}%' if pnl is not None else '—'}  ｜  {level}級  ｜  建倉 {pos['date_entered']}",
-                    expanded=False
+                    expanded=False,
+                    key=f"pos_{pos['id']}"
                 ):
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("進場價", f"{pos['entry_price']:.2f}")
@@ -977,7 +978,7 @@ def page_positions():
                     # 手動關倉
                     if curr:
                         col_close, _ = st.columns([1, 3])
-                        if col_close.button(f"手動關倉", key=f"close_{sid}"):
+                        if col_close.button(f"手動關倉", key=f"close_{sid}_{pos['id']}"):
                             try:
                                 from src.database import get_session, PositionMonitor
                                 from datetime import date
