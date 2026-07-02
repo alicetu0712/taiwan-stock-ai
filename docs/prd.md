@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.5（2026-07-02）
+當前版本：v6.5.1（2026-07-02）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -3879,6 +3879,7 @@ Chapter 19 完
 ✅ 財報季節風險自動偵測（距截止日 ≤14 天自動觸發風險扣分）
 ✅ Look-ahead bias 修正（goodinfo_collector 年報日期過濾 bug 修正；季報按 Q1~Q4 公告截止日過濾）
 ✅ 安全性強化（移除所有 hardcoded Neon 密碼；所有憑證改為 NEON_URL 環境變數；Neon 已換新 endpoint）
+✅ Dashboard 持倉顯示修正：@st.cache_data 內不可呼叫 st.*，移除後持倉正常載入（v6.5.1）
 
 待完成 / 規劃中：
 ⏳ decision_journal: 5 支持倉上限硬上限（目前只限 100% 資金，見 19.2 ⚠️）
