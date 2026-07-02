@@ -92,32 +92,64 @@ def main():
             d for d in price_map[rec.stock_id].keys() if d > date_str
         )
 
-        status     = "active"
-        exit_date  = None
-        exit_price = None
+        status      = "active"
+        exit_date   = None
+        exit_price  = None
         exit_reason = None
-        pnl_pct    = None
+        pnl_pct     = None
+
+        # 動態停損（追蹤停損）起始值
+        dynamic_stop = stop_loss_price
+        entry_dt     = date.fromisoformat(date_str)
 
         for fd in future_dates:
             fd_row = price_map[rec.stock_id][fd]
-            high = float(fd_row.high) if fd_row.high else None
-            low  = float(fd_row.low)  if fd_row.low  else None
-            close= float(fd_row.close) if fd_row.close else None
+            high  = float(fd_row.high)  if fd_row.high  else None
+            low   = float(fd_row.low)   if fd_row.low   else None
+            close = float(fd_row.close) if fd_row.close else None
+            fd_dt = date.fromisoformat(fd)
 
+            # ── 追蹤停損更新 ─────────────────────────────────
+            if high:
+                pnl_high = (high - entry_price) / entry_price * 100
+                if pnl_high >= 12.0:
+                    locked = round(entry_price * 1.06, 2)
+                    if locked > dynamic_stop:
+                        dynamic_stop = locked
+                elif pnl_high >= 8.0:
+                    if entry_price > dynamic_stop:
+                        dynamic_stop = entry_price
+
+            # ── 目標價達成 ───────────────────────────────────
             if high and high >= target_price:
                 status      = "closed_profit"
-                exit_date   = date.fromisoformat(fd)
+                exit_date   = fd_dt
                 exit_price  = target_price
                 exit_reason = "TARGET_HIT"
                 pnl_pct     = round((exit_price - entry_price) / entry_price * 100, 2)
                 break
-            if low and low <= stop_loss_price:
-                status      = "closed_loss"
-                exit_date   = date.fromisoformat(fd)
-                exit_price  = stop_loss_price
-                exit_reason = "STOP_LOSS"
-                pnl_pct     = round((exit_price - entry_price) / entry_price * 100, 2)
+
+            # ── 停損觸發（含追蹤停損）───────────────────────
+            if low and low <= dynamic_stop:
+                pnl_at_stop = (dynamic_stop - entry_price) / entry_price * 100
+                status      = "closed_profit" if pnl_at_stop > 0 else "closed_loss"
+                exit_date   = fd_dt
+                exit_price  = round(dynamic_stop, 2)
+                exit_reason = "TRAILING_STOP" if dynamic_stop > stop_loss_price else "STOP_LOSS"
+                pnl_pct     = round(pnl_at_stop, 2)
                 break
+
+            # ── 30 交易日強制出場（≈45 日曆天）──────────────
+            held_days = (fd_dt - entry_dt).days
+            if held_days >= 45 and close:
+                pnl_now = (close - entry_price) / entry_price * 100
+                if abs(pnl_now) < 8.0:   # 無明顯方向才強制出場
+                    status      = "closed_signal"
+                    exit_date   = fd_dt
+                    exit_price  = close
+                    exit_reason = "TIME_LIMIT"
+                    pnl_pct     = round(pnl_now, 2)
+                    break
 
         # active 持倉用最新收盤計算浮動損益
         if status == "active":

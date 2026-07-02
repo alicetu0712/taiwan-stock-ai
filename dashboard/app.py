@@ -932,31 +932,38 @@ def page_positions():
         else:
             # ── 整體配置總覽 ──────────────────────────────────────
             total_alloc = sum(p["position_pct"] or 0 for p in positions)
-            cash_pct    = max(0.0, 100.0 - total_alloc)
+            n_pos       = len(positions)
+            # 正規化權重：各持倉佔實際配置的比例（避免 >100% 失真）
+            def _w(p):
+                return (p["position_pct"] or 0) / total_alloc if total_alloc > 0 else 1 / n_pos
 
-            # 加權預期報酬（MC expected_pnl × position_pct / 100）
-            weighted_exp = sum(
-                (p["position_pct"] or 0) / 100 *
-                ((p["mc_result"] or {}).get("expected_pnl_pct", 0))
-                for p in positions
-            )
-            # 加權目前浮動損益
-            weighted_cur = sum(
-                (p["position_pct"] or 0) / 100 * (p["pnl_pct"] or 0)
-                for p in positions
-            )
+            # 加權目前浮動損益（以各持倉占比為權重）
+            weighted_cur = sum(_w(p) * (p["pnl_pct"] or 0) for p in positions)
+
+            # 加權預期報酬：優先用 MC，無 MC 則用目標價距離
+            def _exp(p):
+                mc = (p["mc_result"] or {}).get("expected_pnl_pct")
+                if mc is not None:
+                    return mc
+                # fallback：用目標價計算潛在報酬（有持倉）
+                ep = p.get("entry_price") or 0
+                tp = p.get("target_price") or 0
+                return ((tp - ep) / ep * 100) if ep > 0 and tp > ep else 0.0
+            weighted_exp = sum(_w(p) * _exp(p) for p in positions)
+
+            cash_pct = max(0.0, 100.0 - total_alloc)
 
             st.markdown("#### 📊 目前配置總覽")
-            # 上排：支數 + 配置（手機 2 欄）
             r1c1, r1c2 = st.columns(2)
-            r1c1.metric("持倉支數",  f"{len(positions)} 支")
-            r1c2.metric("已配置資金", f"{total_alloc:.0f}%",
-                        delta=f"現金 {cash_pct:.0f}%", delta_color="off")
-            # 下排：預期報酬 + 目前損益（手機 2 欄）
+            r1c1.metric("持倉支數", f"{n_pos} 支")
+            alloc_label = f"{total_alloc:.0f}%"
+            alloc_delta = f"現金 {cash_pct:.0f}%" if cash_pct > 0 else "已滿倉（超過 100%）"
+            r1c2.metric("已配置資金", alloc_label, delta=alloc_delta, delta_color="off")
             r2c1, r2c2 = st.columns(2)
             r2c1.metric("整體預期報酬", f"{weighted_exp:+.2f}%",
-                        help="蒙地卡羅 20 日期望報酬 × 各持倉比例之加權平均（以總資金 100% 為基礎）")
-            r2c2.metric("整體目前損益", f"{weighted_cur:+.2f}%")
+                        help="各持倉目標漲幅（或蒙地卡羅期望值）按持倉比例加權平均")
+            r2c2.metric("整體目前損益", f"{weighted_cur:+.2f}%",
+                        help="各持倉現價損益按持倉比例加權平均")
             st.divider()
 
             # 載入現價
