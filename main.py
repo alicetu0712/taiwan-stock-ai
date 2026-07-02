@@ -403,9 +403,27 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             )
             candidates.append(rec)
 
-        # ── Step 8: 選出 Top N ───────────────────────────────
+        # ── Step 8: 大盤方向判斷 + 選出 Top N ──────────────────
         logger.info("[Step 8] Selecting top recommendations...")
-        top_recs, no_rec_reason = decision.select_top_n(candidates)
+
+        # 大盤方向：用 0050 ETF 的 60 日均線判斷多空
+        bear_mode = False
+        try:
+            from src.database import DailyPrice as DP60
+            rows_0050 = (session.query(DP60)
+                         .filter(DP60.stock_id == "0050", DP60.date <= trade_date)
+                         .order_by(DP60.date.desc()).limit(60).all())
+            if len(rows_0050) >= 30:
+                closes_0050 = [float(r.close) for r in rows_0050 if r.close]
+                ma60 = sum(closes_0050) / len(closes_0050)
+                current_0050 = closes_0050[0]
+                bear_mode = current_0050 < ma60
+                mode_str = "空頭（限 A/A+）" if bear_mode else "多頭（正常）"
+                logger.info(f"[Step 8] 大盤方向：0050={current_0050:.2f} MA60={ma60:.2f} → {mode_str}")
+        except Exception as e:
+            logger.warning(f"[Step 8] 大盤方向判斷失敗（{e}），預設多頭模式")
+
+        top_recs, no_rec_reason = decision.select_top_n(candidates, bear_mode=bear_mode)
 
         # ── Step 9: Claude AI 報告生成 ───────────────────────
         logger.info("[Step 9] Generating AI explanations...")

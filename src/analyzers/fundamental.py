@@ -45,7 +45,7 @@ class FundamentalAnalyzer:
     WEIGHTS = {
         "roe":        20,   # ROE 分析
         "roa":        15,   # ROA 分析
-        "eps":        20,   # EPS 趨勢
+        "eps":        35,   # EPS 趨勢（含連續成長獎勵，最高 35）
         "margin":     15,   # 毛利率
         "finance":    15,   # 財務健康
         "valuation":  10,   # 估值
@@ -233,6 +233,22 @@ class FundamentalAnalyzer:
             score -= 2
             minus.append("EPS 近期呈下降趨勢")
 
+        # 連續正成長（績優股核心特徵）
+        valid_eps = [v for v in eps_5y if v is not None and v > 0]
+        if len(valid_eps) >= 5:
+            last_5 = valid_eps[-5:]
+            if all(last_5[i] > last_5[i - 1] for i in range(1, 5)):
+                score += 15
+                plus.append("連續 5 年 EPS 正成長（績優核心特徵）")
+            elif all(last_5[-3:][i] > last_5[-3:][i - 1] for i in range(1, 3)):
+                score += 8
+                plus.append("連續 3 年 EPS 正成長")
+        elif len(valid_eps) >= 3:
+            last_3 = valid_eps[-3:]
+            if all(last_3[i] > last_3[i - 1] for i in range(1, 3)):
+                score += 8
+                plus.append("連續 3 年 EPS 正成長")
+
         # 近四季波動（穩定性加分）
         if len(eps_5y) >= 8:
             recent_8 = [v for v in eps_5y[-8:] if v is not None and v > 0]
@@ -244,7 +260,7 @@ class FundamentalAnalyzer:
                 elif cv > 0.5:
                     minus.append("EPS 波動較大")
 
-        return max(0.0, min(score, 20)), plus, minus
+        return max(0.0, min(score, 35)), plus, minus
 
     def _score_gross_margin(self, gm_avg: Optional[float]):
         """毛利率評分（最高 15 分）"""

@@ -189,6 +189,7 @@ class DecisionEngine:
         self,
         candidates: List[StockRecommendation],
         max_n: int = None,
+        bear_mode: bool = False,
     ) -> Tuple[List[StockRecommendation], str]:
         """
         從候選名單中選出 Top N。
@@ -198,12 +199,20 @@ class DecisionEngine:
         min_conf  = self.rules["min_confidence"]
         min_score = self.rules["min_total_score"]
 
+        # 空頭模式：只接受 A+ / A，最多推薦 1 支，分數門檻提高
+        allowed_levels = ("A+", "A", "B")
+        if bear_mode:
+            allowed_levels = ("A+", "A")
+            max_n = 1
+            min_score = max(min_score, 70.0)
+            logger.info(f"[Decision] 空頭模式：僅接受 A/A+，門檻 {min_score}，最多 1 檔")
+
         # 篩選符合最低標準的候選
         qualified = [
             r for r in candidates
             if r.confidence >= min_conf
             and r.total_score >= min_score
-            and r.rec_level in ("A+", "A", "B")
+            and r.rec_level in allowed_levels
         ]
 
         if not qualified:

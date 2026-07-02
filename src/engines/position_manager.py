@@ -9,7 +9,7 @@ position_manager.py — 持倉管理與出場訊號引擎
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,14 @@ POSITION_SIZE_MAP = {
 # 技術面轉弱閾值（低於此分數發出警示）
 WEAK_TIMING_THRESHOLD   = 45.0
 WEAK_BEHAVIOR_THRESHOLD = 40.0
+
+# 追蹤停損觸發條件
+TRAILING_BREAKEVEN_PCT  = 8.0    # 浮盈 >= 8%：停損移至進場價（保本）
+TRAILING_LOCK_PCT       = 12.0   # 浮盈 >= 12%：停損移至 +6%（鎖利）
+TRAILING_LOCK_FLOOR     = 6.0    # 鎖利後停損保留的最低獲利 %
+
+# 時間停損：持倉超過此日曆天數且無明顯方向，強制出場
+TIME_LIMIT_DAYS         = 45     # ≈ 30 個交易日
 
 
 @dataclass
@@ -125,6 +133,18 @@ def check_exit_signals(
 
         pnl = (current_price - pos.entry_price) / pos.entry_price * 100
 
+        # ── 追蹤停損更新（動態調整 stop_loss_price）────────────
+        if pos.entry_price and pos.entry_price > 0:
+            if pnl >= TRAILING_LOCK_PCT:
+                locked = round(pos.entry_price * (1 + TRAILING_LOCK_FLOOR / 100), 2)
+                if locked > (pos.stop_loss_price or 0):
+                    pos.stop_loss_price = locked
+                    logger.info(f"[Trailing] {sid} 浮盈 {pnl:.1f}%，停損上移至 +{TRAILING_LOCK_FLOOR}%（{locked:.2f}）")
+            elif pnl >= TRAILING_BREAKEVEN_PCT:
+                if pos.entry_price > (pos.stop_loss_price or 0):
+                    pos.stop_loss_price = pos.entry_price
+                    logger.info(f"[Trailing] {sid} 浮盈 {pnl:.1f}%，停損移至保本（{pos.entry_price:.2f}）")
+
         # 1. 目標價達成
         if pos.target_price and current_price >= pos.target_price:
             signals.append(ExitSignal(
@@ -162,6 +182,17 @@ def check_exit_signals(
                 current_price=current_price, pnl_pct=round(pnl, 2),
                 detail=f"法人籌碼大幅轉向，市場行為分 {b_score:.0f}",
             ))
+            continue
+
+        # 5. 30 交易日（≈45 日曆天）強制出場：持倉無方向，釋放資本
+        if pos.date_entered:
+            held_days = (trade_date - pos.date_entered).days
+            if held_days >= TIME_LIMIT_DAYS and abs(pnl) < TRAILING_BREAKEVEN_PCT:
+                signals.append(ExitSignal(
+                    stock_id=sid, reason="TIME_LIMIT",
+                    current_price=current_price, pnl_pct=round(pnl, 2),
+                    detail=f"持倉 {held_days} 天無明顯方向（損益 {pnl:+.1f}%），釋放資本",
+                ))
 
     return signals
 
@@ -207,8 +238,8 @@ def close_position(
 def _exit_status(reason: str, pnl: float) -> str:
     if reason == "TARGET_HIT":
         return "closed_profit"
-    if reason == "STOP_LOSS":
-        return "closed_loss"
+    if reason in ("STOP_LOSS", "TRAILING_STOP"):
+        return "closed_profit" if pnl > 0 else "closed_loss"
     if reason == "MANUAL":
         return "closed_manual"
-    return "closed_signal"
+    return "closed_signal"   # WEAK_TECHNICAL / INSTITUTIONAL_EXIT / TIME_LIMIT
