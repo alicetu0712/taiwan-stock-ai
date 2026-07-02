@@ -3862,20 +3862,23 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.4（2026-07-02）
+當前版本：v6.5（2026-07-02）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
 ✅ 持倉管理系統（追蹤停損、動態倉位大小依信心調整、時間強制出場修正、100% 資金上限）
 ✅ 蒙地卡羅模擬（1000 路徑 × 20 日，Student's t 厚尾分佈，存 DB 供雲端 Dashboard 顯示）
-✅ 歷史持倉回填（120 筆，勝率 64%，均損益 +4.46%，盈虧比 2.12）
-  - 回填報告新增：Sharpe Ratio、最大累積回撤、0050 同期報酬 Benchmark 比較
+✅ 歷史持倉回填（v6.4 重跑：118 筆，勝率 62.4%，均損益 +4.59%，盈虧比 2.29，Sharpe 0.62）
+  - 回填報告含：Sharpe Ratio、最大累積回撤（28%）、0050 同期報酬 Benchmark
+  - 蒙地卡羅批次計算全部 118 筆（Student's t），同步至 Neon
 ✅ Neon 雲端同步（每日自動執行，timeout=600s）
 ✅ 連續 EPS 成長加分（5 年 +15 分、3 年 +8 分）
 ✅ 法人資料 T-1 fallback（當日 API 未更新時使用最近 DB 資料，behavior_score 恢復真實）
 ✅ 估值即時計算 P/E（close / eps_ttm，DB 無 per 時自動補算）
 ✅ 智慧情報無資料時動態重分配 10% 權重
 ✅ 財報季節風險自動偵測（距截止日 ≤14 天自動觸發風險扣分）
+✅ Look-ahead bias 修正（goodinfo_collector 年報日期過濾 bug 修正；季報按 Q1~Q4 公告截止日過濾）
+✅ 安全性強化（移除所有 hardcoded Neon 密碼；所有憑證改為 NEON_URL 環境變數；Neon 已換新 endpoint）
 
 待完成 / 規劃中：
 ⏳ decision_journal: 5 支持倉上限硬上限（目前只限 100% 資金，見 19.2 ⚠️）
