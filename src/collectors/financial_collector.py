@@ -238,7 +238,8 @@ def build_financial_summary(
     if db_summary.get("has_data"):
         return db_summary
 
-    start = f"{date.today().year - n_years - 1}-01-01"
+    cutoff = as_of_date or date.today()
+    start = f"{cutoff.year - n_years - 1}-01-01"
     summary = {
         "stock_id":        stock_id,
         "has_data":        False,
@@ -267,9 +268,20 @@ def build_financial_summary(
         summary["revenue_trend"] = trend
         summary["has_data"] = True
 
-    # --- EPS ---
+    # --- EPS（季報公告截止：Q1=5/15, Q2=8/14, Q3=11/14, Q4=3/31 隔年）---
     eps_df = fetch_eps_history(stock_id, start)
     if not eps_df.empty:
+        # 過濾未來資料：只保留截至 as_of_date 已可公告的季度
+        def _is_available(row) -> bool:
+            y, q = int(row["year"]), int(row["quarter"])
+            cutoff_d = cutoff
+            deadlines = {1: (y, 5, 15), 2: (y, 8, 14), 3: (y, 11, 14), 4: (y+1, 3, 31)}
+            dl = deadlines.get(q)
+            if not dl:
+                return False
+            from datetime import date as _d
+            return cutoff_d >= _d(*dl)
+        eps_df = eps_df[eps_df.apply(_is_available, axis=1)]
         eps_list = eps_df.sort_values(["year", "quarter"])["eps"].tolist()
         summary["eps_5y"] = eps_list[-20:]
         # TTM EPS = 最近四季之和

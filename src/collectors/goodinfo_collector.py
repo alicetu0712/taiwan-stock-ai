@@ -175,7 +175,9 @@ def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> 
         # 只使用截至 as_of_date 已可公開的年度資料
         from datetime import date as _date
         d = as_of_date if isinstance(as_of_date, _date) else _date.fromisoformat(str(as_of_date))
-        max_available_year = (d.year - 1) if d.month < 4 else d.year - 1
+        # 年報截止日為 Y+1 年 3 月 31 日
+        # 4 月後才能用去年（Y-1）年報；3 月前只能用前年（Y-2）
+        max_available_year = (d.year - 2) if d.month < 4 else (d.year - 1)
         q = q.filter(FinancialQuarter.year <= max_available_year)
     rows = q.order_by(FinancialQuarter.year.desc()).limit(_MAX_YEARS).all()
 
