@@ -186,7 +186,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
         _stock_shares_map:  dict = {r.stock_id: r.outstanding_shares for r in _stock_db_rows if r.outstanding_shares}
 
         # 每日更新 stocks 表的資本額與發行股數（只在非回補模式執行，避免 API 頻繁呼叫）
-        if not dry_run and not backfill_date:
+        if not dry_run and not is_backfill:
             try:
                 info_map = fetch_stock_info()
                 updated_info = 0
