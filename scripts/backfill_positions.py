@@ -213,14 +213,50 @@ def main():
     active  = [p for p in all_pos if p.status == "active" and p.pnl_pct is not None]
 
     if closed:
+        import math, sqlite3
         avg_pnl     = sum(p.pnl_pct for p in closed) / len(closed)
         wins        = [p for p in closed if p.pnl_pct > 0]
         losses      = [p for p in closed if p.pnl_pct <= 0]
         win_rate    = len(wins) / len(closed) * 100
         avg_win     = sum(p.pnl_pct for p in wins)  / len(wins)  if wins   else 0
         avg_loss    = sum(p.pnl_pct for p in losses) / len(losses) if losses else 0
-        # 加權平均（依倉位比例）
         weighted_pnl = sum(p.pnl_pct * (p.position_pct or 10) for p in closed) / sum(p.position_pct or 10 for p in closed)
+
+        # ── Sharpe Ratio（假設無風險利率 1.5% / 年 ≈ 0.006% / 日）──
+        pnl_list = [p.pnl_pct for p in closed]
+        rf_per_trade = 1.5 / 252 * 20     # 以平均 20 交易日持倉為基準
+        excess = [r - rf_per_trade for r in pnl_list]
+        std_pnl = (sum((x - avg_pnl) ** 2 for x in pnl_list) / len(pnl_list)) ** 0.5
+        sharpe = (avg_pnl - rf_per_trade) / std_pnl if std_pnl > 0 else 0
+
+        # ── 最大回撤（模擬：用損益序列計算峰谷）────────────────
+        cumulative = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        for r in pnl_list:
+            cumulative += r
+            if cumulative > peak:
+                peak = cumulative
+            dd = peak - cumulative
+            if dd > max_drawdown:
+                max_drawdown = dd
+
+        # ── 0050 ETF 同期報酬（benchmark）────────────────────
+        bench_ret = None
+        try:
+            from src.database import DailyPrice
+            all_dates = sorted(set(p.date_entered for p in all_pos if p.date_entered))
+            if all_dates:
+                start_d, end_d = all_dates[0], date.today()
+                bench_rows = s.query(DailyPrice).filter(
+                    DailyPrice.stock_id == "0050",
+                    DailyPrice.date >= start_d,
+                    DailyPrice.date <= end_d,
+                ).order_by(DailyPrice.date).all()
+                if len(bench_rows) >= 2:
+                    bench_ret = (bench_rows[-1].close - bench_rows[0].close) / bench_rows[0].close * 100
+        except Exception:
+            pass
 
         logger.info("=" * 60)
         logger.info("📊 整體持倉績效報告")
@@ -230,6 +266,10 @@ def main():
         logger.info(f"  平均損益：{avg_pnl:+.2f}%（加權：{weighted_pnl:+.2f}%）")
         logger.info(f"  平均獲利：+{avg_win:.2f}%  |  平均虧損：{avg_loss:.2f}%")
         logger.info(f"  盈虧比：{abs(avg_win/avg_loss):.2f}" if avg_loss != 0 else "  盈虧比：∞")
+        logger.info(f"  Sharpe Ratio：{sharpe:.2f}（每筆交易，rf≈1.5%/年）")
+        logger.info(f"  最大累積回撤：{max_drawdown:.2f}%")
+        if bench_ret is not None:
+            logger.info(f"  同期 0050 報酬：{bench_ret:+.2f}%  |  Alpha：{avg_pnl - bench_ret/len(closed)*20:+.2f}%（每筆）")
         if active:
             active_pnl = sum(p.pnl_pct for p in active) / len(active)
             logger.info(f"  持倉中浮動均損益：{active_pnl:+.2f}%")

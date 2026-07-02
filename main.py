@@ -259,6 +259,29 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                 inst_df = pd.DataFrame()
         else:
             inst_df = fetch_all_institutional(trade_date)
+            # 當日 API 未更新時，fallback 至 DB 最近一日法人資料（T-1）
+            if inst_df is None or inst_df.empty:
+                from src.database import InstitutionalData
+                latest_chip_date = (
+                    session.query(InstitutionalData.date)
+                    .filter(InstitutionalData.date < trade_date)
+                    .order_by(InstitutionalData.date.desc())
+                    .first()
+                )
+                if latest_chip_date:
+                    fallback_rows = session.query(InstitutionalData).filter(
+                        InstitutionalData.date == latest_chip_date[0]
+                    ).all()
+                    if fallback_rows:
+                        inst_df = pd.DataFrame([{
+                            "stock_id":   r.stock_id,
+                            "date":       r.date,
+                            "foreign_net": r.foreign_net or 0,
+                            "trust_net":   r.trust_net   or 0,
+                            "dealer_net":  r.dealer_net  or 0,
+                            "total_net":   (r.foreign_net or 0) + (r.trust_net or 0) + (r.dealer_net or 0),
+                        } for r in fallback_rows])
+                        logger.info(f"[Step 2] 當日法人 API 未更新，使用 {latest_chip_date[0]} DB 資料（{len(inst_df)} 筆）")
 
         inst_valid, inst_msg = validator.validate_institutional_data(inst_df)
         if not inst_valid:
@@ -275,6 +298,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             except Exception as e:
                 logger.warning(f"新聞資料抓取失敗（{e}），繼續執行。")
                 news_list = []
+        has_real_news = len(news_list) > 0
 
         # ── Step 4: 大盤情緒分析 ────────────────────────────
         market_sentiment = analyze_market_sentiment(price_df, trade_date)
@@ -337,6 +361,11 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                     fin_sum = build_financial_summary(sid, n_years=5, as_of_date=trade_date)
                 except Exception:
                     fin_sum = {}
+            # 若 DB 無 P/E，從現價 / EPS_TTM 即時計算
+            if fin_sum.get("has_data") and not fin_sum.get("per") and close > 0:
+                eps_ttm_val = fin_sum.get("eps_ttm")
+                if eps_ttm_val and eps_ttm_val > 0:
+                    fin_sum["per"] = round(close / eps_ttm_val, 1)
 
             # 執行 Hard Filter
             # 若無財務資料，只看流動性（降低門檻）
@@ -412,29 +441,35 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                 close            = close,
                 volume           = volume,
                 avg_volume       = avg_vol,
+                upcoming_events  = _get_earnings_risk_events(trade_date),
             )
 
             # 決策引擎
             rec = decision.evaluate(
-                stock_id         = sid,
-                quality_result   = qual_r,
-                technical_result = tech_r,
-                behavior_result  = behav_r,
-                risk_result      = risk_r,
-                intelligence_score = 60.0,
-                name             = name,
-                close            = close,
-                volume           = volume,
-                market           = market,
-                trade_date       = trade_date,
+                stock_id               = sid,
+                quality_result         = qual_r,
+                technical_result       = tech_r,
+                behavior_result        = behav_r,
+                risk_result            = risk_r,
+                intelligence_score     = 60.0,
+                has_real_intelligence  = has_real_news,
+                name                   = name,
+                close                  = close,
+                volume                 = volume,
+                market                 = market,
+                trade_date             = trade_date,
             )
             candidates.append(rec)
 
         # ── Step 8: 大盤方向判斷 + 選出 Top N ──────────────────
         logger.info("[Step 8] Selecting top recommendations...")
 
-        # 大盤方向：用 0050 ETF 的 60 日均線判斷多空
-        bear_mode = False
+        # 大盤方向：三段式市場方向（多頭/謹慎/空頭），依 0050 偏離 MA60 的幅度漸進調整
+        # 多頭  (deviation > +3%)：正常推薦（max 3 支，min_score 65）
+        # 謹慎  (-3% ~ +3%) ：適度收縮（max 2 支，min_score 68）
+        # 空頭  (deviation < -3%)：防禦模式（max 1 支，min_score 72，僅 A+/A）
+        bear_mode  = False
+        caution_mode = False
         try:
             from src.database import DailyPrice as DP60
             rows_0050 = (session.query(DP60)
@@ -444,13 +479,22 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                 closes_0050 = [float(r.close) for r in rows_0050 if r.close]
                 ma60 = sum(closes_0050) / len(closes_0050)
                 current_0050 = closes_0050[0]
-                bear_mode = current_0050 < ma60
-                mode_str = "空頭（限 A/A+）" if bear_mode else "多頭（正常）"
+                deviation_pct = (current_0050 - ma60) / ma60 * 100
+                if deviation_pct < -3.0:
+                    bear_mode = True
+                    mode_str = f"空頭（偏離 MA60 {deviation_pct:+.1f}%，限 A/A+）"
+                elif deviation_pct < 3.0:
+                    caution_mode = True
+                    mode_str = f"謹慎（偏離 MA60 {deviation_pct:+.1f}%，適度收縮）"
+                else:
+                    mode_str = f"多頭（偏離 MA60 {deviation_pct:+.1f}%，正常）"
                 logger.info(f"[Step 8] 大盤方向：0050={current_0050:.2f} MA60={ma60:.2f} → {mode_str}")
         except Exception as e:
             logger.warning(f"[Step 8] 大盤方向判斷失敗（{e}），預設多頭模式")
 
-        top_recs, no_rec_reason = decision.select_top_n(candidates, bear_mode=bear_mode)
+        top_recs, no_rec_reason = decision.select_top_n(
+            candidates, bear_mode=bear_mode, caution_mode=caution_mode
+        )
 
         # ── Step 9: Claude AI 報告生成 ───────────────────────
         logger.info("[Step 9] Generating AI explanations...")
@@ -840,6 +884,30 @@ def _save_execution_log(
         session.commit()
     except Exception as e:
         logger.debug(f"ExecutionLog save failed: {e}")
+
+
+def _get_earnings_risk_events(trade_date: date) -> list:
+    """
+    判斷當前日期是否接近台灣上市公司財報公告截止日。
+    台灣財報公告期限：
+      Q1 (1-3月) → 5/15；Q2 (4-6月) → 8/14；Q3 (7-9月) → 11/14；年報 → 3/31
+    若距截止日 <= 10 個交易日（約 14 日曆天），發出財報季節風險警示。
+    """
+    from datetime import timedelta
+    year = trade_date.year
+    deadlines = [
+        (date(year, 3, 31), "年報公告截止"),
+        (date(year, 5, 15), "Q1 財報公告截止"),
+        (date(year, 8, 14), "Q2 財報公告截止"),
+        (date(year, 11, 14), "Q3 財報公告截止"),
+        (date(year + 1, 3, 31), "年報公告截止"),  # 跨年
+    ]
+    events = []
+    for deadline, label in deadlines:
+        days_to = (deadline - trade_date).days
+        if 0 <= days_to <= 14:
+            events.append(f"財報季節風險：距 {label}（{deadline}）還有 {days_to} 天，短期波動可能增加")
+    return events
 
 
 # ── CLI ───────────────────────────────────────────────────────

@@ -10,6 +10,12 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 
+try:
+    from scipy import stats as _scipy_stats
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,8 +77,16 @@ def simulate(
         return None
 
     # 模擬 n_paths 條路徑
+    # 使用 Student's t（df=4）取代 Normal，捕捉台股報酬厚尾特性
+    # df=4 是金融資產日報酬的經驗常用值（比正態多 ~3× 極端事件機率）
     rng = np.random.default_rng(seed=42)
-    simulated = rng.normal(loc=mu, scale=sig, size=(n_paths, sim_days))
+    if _HAS_SCIPY:
+        t_samples = _scipy_stats.t.rvs(df=4, loc=mu, scale=sig,
+                                        size=(n_paths, sim_days),
+                                        random_state=42)
+        simulated = np.clip(t_samples, -0.2, 0.2)  # 限制單日最大 ±20%
+    else:
+        simulated = rng.normal(loc=mu, scale=sig, size=(n_paths, sim_days))
 
     # 每條路徑的累積價格
     # price[t] = entry_price × ∏(1 + r_i) for i in 0..t

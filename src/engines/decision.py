@@ -75,6 +75,7 @@ class DecisionEngine:
         behavior_result   = None,
         risk_result       = None,
         intelligence_score: float = 60.0,
+        has_real_intelligence: bool = False,
         name:             str = "",
         close:            Optional[float] = None,
         volume:           Optional[float] = None,
@@ -120,13 +121,22 @@ class DecisionEngine:
             w["intelligence"] += extra * (w["intelligence"] / non_q_sum)
             w["quality"] = 0.0
         if not has_chip:
-            # 無真實籌碼資料（歷史回補或當日法人未更新）：把 behavior 20% 分給 timing/intelligence
+            # 無真實籌碼資料：把 behavior 20% 分給 timing/intelligence
             non_b_sum = w["timing"] + w["intelligence"]
             extra = w["behavior"]
             w["timing"]       += extra * (w["timing"]       / non_b_sum)
             w["intelligence"] += extra * (w["intelligence"] / non_b_sum)
             w["behavior"] = 0.0
             b_score = 0.0  # 不納入計算
+        if not has_real_intelligence:
+            # 無真實新聞/情報資料：把 intelligence 10% 等比例分給 quality/timing/behavior
+            active = {k: v for k, v in w.items() if k != "intelligence" and k != "risk" and v > 0}
+            active_sum = sum(active.values())
+            if active_sum > 0:
+                extra = w["intelligence"]
+                for k in active:
+                    w[k] += extra * (w[k] / active_sum)
+            w["intelligence"] = 0.0
 
         base_score = (
             q_score     * w["quality"]    +
@@ -190,6 +200,7 @@ class DecisionEngine:
         candidates: List[StockRecommendation],
         max_n: int = None,
         bear_mode: bool = False,
+        caution_mode: bool = False,
     ) -> Tuple[List[StockRecommendation], str]:
         """
         從候選名單中選出 Top N。
@@ -199,13 +210,17 @@ class DecisionEngine:
         min_conf  = self.rules["min_confidence"]
         min_score = self.rules["min_total_score"]
 
-        # 空頭模式：只接受 A+ / A，最多推薦 1 支，分數門檻提高
+        # 三段式市場方向控制
         allowed_levels = ("A+", "A", "B")
         if bear_mode:
             allowed_levels = ("A+", "A")
             max_n = 1
-            min_score = max(min_score, 70.0)
+            min_score = max(min_score, 72.0)
             logger.info(f"[Decision] 空頭模式：僅接受 A/A+，門檻 {min_score}，最多 1 檔")
+        elif caution_mode:
+            max_n = min(max_n, 2)
+            min_score = max(min_score, 68.0)
+            logger.info(f"[Decision] 謹慎模式：門檻 {min_score}，最多 {max_n} 檔")
 
         # 篩選符合最低標準的候選
         qualified = [
