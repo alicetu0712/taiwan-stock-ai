@@ -142,15 +142,18 @@ def fetch_market_summary() -> dict:
     if not data:
         return {}
     try:
-        for row in data:
-            idx = str(row.get("Index", ""))
-            if "加權" in idx or "TAIEX" in idx.upper():
-                return {
-                    "index_name":       idx,
-                    "index_close":      _to_float(row.get("Closing")),
-                    "index_change_pct": _to_float(row.get("Change")),
-                    "total_amount_b":   _to_float(row.get("TradingValue")) / 1e9 if row.get("TradingValue") else 0,
-                }
+        row = data[0]
+        taiex  = _to_float(row.get("TAIEX"))
+        change = _to_float(row.get("Change"))
+        tv     = _to_float(row.get("TradeValue"))
+        if taiex:
+            pct = round(change / (taiex - change) * 100, 2) if change and (taiex - change) != 0 else None
+            return {
+                "index_name":       "加權指數",
+                "index_close":      taiex,
+                "index_change_pct": pct,
+                "total_amount_b":   round(tv / 1e9, 1) if tv else 0,
+            }
     except Exception as e:
         logger.warning(f"market_summary parse error: {e}")
     return {}
