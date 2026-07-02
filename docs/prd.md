@@ -641,8 +641,9 @@ AI 必須遵循：
 資本額 ≥ 20 億元
 平均每日成交金額 ≥ 1 億元
 
-⚠️ 實作備註：hard_filter.py 已定義 market_cap_b / capital_b 參數，但 main.py 目前未傳入這兩個參數，
-市值與資本額篩選實際上未生效。平均成交金額篩選有正常運作。待修。
+✅ 已修（v6.4）：main.py Step 1c 每日從 TWSE t187ap03_L 取得資本額（實收資本額）及發行股數，
+存入 Stock.capital / outstanding_shares，並於 Step 6 filter_stock() 傳入 capital_b 和 market_cap_b。
+市值 = outstanding_shares × 1000 × close / 1e8（億）。
 財務條件
 EPS（TTM）> 0
 ROE ≥ 15%
@@ -724,14 +725,12 @@ AI 不只看絕對數值，而是看相對競爭力。
   情報（Market Intelligence）：10%
   風險（Risk Penalty，從總分扣除）：5%
 
-若品質維度資料不可用（quality_score = 0）：
-  不得以 0 分填入，需重新分配品質的 40% 給其餘三個維度：
-    時機：25% + 40% × (25/55) ≈ 43.2%
-    籌碼：20% + 40% × (20/55) ≈ 34.5%
-    情報：10% + 40% × (10/55) ≈ 17.3%
-    風險扣分：維持 5%（不調整）
-  此設計確保無財務資料時，最高可達分數仍接近 100，而非被壓制在 55 分以下
-  已實作於 src/engines/decision.py score() 方法
+動態重分配規則（decision.py，三層觸發）：
+  [1] 品質資料不可用（quality_score = 0）→ 40% 等比分給時機/籌碼/情報
+  [2] 無真實籌碼資料（has_real_chip_data = False）→ 20% 等比分給時機/情報
+  [3] 無真實新聞/情報（has_real_intelligence = False，v6.4）→ 10% 等比分給其他有效維度
+  ※ 規則 [3] 實現背景：RSS/MOPS 新聞 API 長期抓到 0 篇，10% 權重長期給中性 60 分造成扭曲
+  已實作於 src/engines/decision.py evaluate() 方法
 
 4.4.2 品質分快取（Quality Score Cache）
 當 FinMind 財務資料不可用時：
@@ -1020,6 +1019,14 @@ ROA。
 AI 必須說明：
 例如：
 公司近五年營收呈穩定成長，EPS 整體趨勢向上，ROE 長期維持 18% 以上，毛利率高於同產業平均，財務結構穩健，估值仍處合理區間，因此 Company Quality Score 評定為 A 級。
+5.12 估值計算補強（v6.4）
+financial_quarters 表的 per/pbr 欄位多數為空（goodinfo 匯入覆蓋率低）。
+✅ 即時計算 P/E（main.py Step 6）：
+  若 DB 無 per 且 eps_ttm > 0 且 close > 0：
+    fin_sum["per"] = round(close / eps_ttm, 1)
+  此方式讓 fundamental.py _score_valuation() 對幾乎所有有財務資料的股票生效，
+  valuation_score（最高 10 分）從「大部分給 5 分預設值」升級為真實評分。
+
 Chapter 5 完
 
 Chapter 6｜Technical Analysis Engine（技術分析引擎）
@@ -1402,6 +1409,16 @@ AI 必須提供：
 價跌量增
 AI 應說明：
 公司基本面仍然優秀，但目前市場資金尚未支持股價，建議持續觀察，等待市場行為改善後再重新評估。
+7.11 法人資料可用性與 Fallback 策略（v6.4）
+TWSE/TPEx 法人 API（MI_QFIIS、MI_SITC、MI_PROP）通常於收盤後 15:30~17:00 更新，
+main.py 若於更新前執行，會取得空回應，原本只能給 50 分中性值。
+
+✅ Fallback 機制（main.py Step 2）：
+  當日 API 返回空資料 → 查詢 DB 最近一個交易日（T-1）的法人資料（通常有 1000+ 支）
+  → behavior_score 使用真實 T-1 法人資料計算，has_real_chip_data = True
+  → 優於完全中性（50 分）的替代值，大幅改善 20% 行為權重的有效性
+  → 日誌：「當日法人 API 未更新，使用 YYYY-MM-DD DB 資料（N 筆）」
+
 Chapter 7 完
 
 Chapter 8｜Market Intelligence Engine（市場情報引擎）
@@ -2381,6 +2398,14 @@ AI 最後需回答：
 ✓ 完整分析所有風險。
 ✓ 所有推薦皆附風險摘要。
 ✓ 風險分析納入最終推薦。
+12.13 財報季節風險自動偵測（v6.4）
+台灣上市公司財務報告法定公告截止日：
+  Q1（1-3月）→ 5/15；Q2（4-6月）→ 8/14；Q3（7-9月）→ 11/14；年報 → 3/31
+當分析日距截止日 ≤ 14 日曆天時，系統自動產生事件風險警示注入 upcoming_events：
+  「財報季節風險：距 Q2 財報公告截止（YYYY-MM-DD）還有 N 天，短期波動可能增加」
+風險評分由 risk.py _event_risk() 計算扣分（已有實作，v6.4 起自動觸發）。
+實作：main.py _get_earnings_risk_events(trade_date) → 傳入 risk_eng.analyze()
+
 Chapter 12 完
 
 Chapter 13｜Research Lifecycle（研究生命週期管理）
@@ -3617,11 +3642,12 @@ MA 最低資料天數驗證
     - 出場原因：TIME_LIMIT，狀態歸入 closed_signal
     - 解放停滯資本，讓 49 筆 +0.83% 的部位釋放再投入
 
-  [3] 空頭市場過濾器（main.py + decision.py）
-    - 以 0050 ETF 收盤價 vs 60 日均線判斷多空方向
-    - 空頭模式（0050 < MA60）：僅接受 A+/A 等級，最多推薦 1 支，分數門檻提升至 70 分
-    - 多頭模式：維持原有邏輯
-    - 預期：熊市期不再持續建倉累積停損
+  [3] 空頭市場過濾器（main.py + decision.py）→ v6.4 升級為三段式
+    - 以 0050 ETF 收盤價 vs 60 日均線偏離度（%）判斷市場方向
+    - 多頭（deviation > +3%）：正常推薦，最多 3 支，門檻 65 分
+    - 謹慎（-3% ~ +3%）：最多 2 支，門檻提升至 68 分
+    - 空頭（deviation < -3%）：僅 A+/A 等級，最多 1 支，門檻提升至 72 分
+    - 原二元設計（空頭門檻 70 分）已取代為三段漸進設計
 
   [4] 績優股評分強化（fundamental.py）
     - 連續 3 年 EPS 正成長：+8 分加成
@@ -3726,11 +3752,14 @@ Chapter 19｜Position Management（持倉管理系統）
   - 透過蒙地卡羅模擬評估風險/報酬分布
   - 紀錄完整研究生命週期（建倉→持有→出場）
 
-19.2 持倉比例分配（依評分加權）
-  A+ 級：建議倉位 30%（系統最高單支上限）
-  A  級：建議倉位 20%
-  B  級：建議倉位 10%
-  C  級：建議倉位  5%
+19.2 持倉比例分配（依評分加權 + 信心動態調整）
+  基礎倉位（依等級）：
+    A+ 級：30%｜A 級：20%｜B 級：10%｜C 級：5%
+  動態信心調整（v6.4）：
+    - 以 80% 信心度為基準，每 10% 差距加減 5%
+    - 信心 70% → 基礎 -5%；信心 90% → 基礎 +5%
+    - 單支持倉上限 35%，調整範圍 ±10%
+    - 範例：A 級（20%）× 信心 90% → 25%；× 信心 70% → 15%
   總倉位上限：100%（已實作，2026-07-02 v6.3）
     - open_position() 開倉前查詢 active 持倉加總，超過 100% 拒絕開倉
     - backfill_positions.py 歷史回填同步模擬此限制
@@ -3753,19 +3782,22 @@ Chapter 19｜Position Management（持倉管理系統）
   TRAILING_STOP     ：現價 ≤ 動態追蹤停損價（浮盈 8% 後上移至保本；浮盈 12% 後鎖 +6%）
   WEAK_TECHNICAL    ：技術時機分 < 45 AND 市場行為分 < 40（雙弱）
   INSTITUTIONAL_EXIT：市場行為分 < 40（法人持續大幅賣超）
-  TIME_LIMIT        ：持倉 ≥ 45 日曆天且 abs(pnl) < 8%（無方向強制出場，釋放資本）
+  TIME_LIMIT        ：持倉 ≥ 45 日曆天且 pnl < 0（虧損無復甦）強制出場；浮盈 0~8% 延長至 90 天
   MANUAL            ：使用者在 Dashboard 手動關倉
 
 追蹤停損邏輯（position_manager.py，2026-07-02 v6.2 實作）：
   TRAILING_BREAKEVEN_PCT = 8.0   # 浮盈 >= 8%：停損移至進場價（保本）
   TRAILING_LOCK_PCT      = 12.0  # 浮盈 >= 12%：停損移至 +6%（鎖利）
   TRAILING_LOCK_FLOOR    = 6.0   # 鎖利後停損保留的最低獲利 %
-  TIME_LIMIT_DAYS        = 45    # ≈ 30 個交易日，無方向強制出場門檻
+  TIME_LIMIT_DAYS        = 45    # ≈ 30 個交易日；虧損才強制出場，小浮盈給 90 天（v6.4 修正）
 
 19.5 蒙地卡羅模擬
   - 引擎：src/engines/monte_carlo.py
   - 參數：1000 條路徑 × 20 個交易日
   - 輸入：近 60 日歷史收盤價計算之日報酬率分布（μ, σ）
+  - 抽樣分佈：Student's t（df=4），捕捉台股厚尾報酬特性（v6.4 升級）
+      - 比正態分佈多 ~3× 的極端事件機率，stop_loss 機率估計更保守
+      - 單日報酬限制 ±20%（clip）；scipy 不可用時 fallback 至常態分佈
   - 輸出：
       - 達目標價機率（%）
       - 觸及停損機率（%）
@@ -3826,21 +3858,25 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.3（2026-07-02）
+當前版本：v6.4（2026-07-02）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
-✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版）
-✅ 市場方向過濾（0050 ETF vs MA60，熊市降倉位）
-✅ 持倉管理系統（追蹤停損、時間強制出場、100% 資金上限）
-✅ 蒙地卡羅模擬（1000 路徑 × 20 日，存 DB 供雲端 Dashboard 顯示）
+✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
+✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
+✅ 持倉管理系統（追蹤停損、動態倉位大小依信心調整、時間強制出場修正、100% 資金上限）
+✅ 蒙地卡羅模擬（1000 路徑 × 20 日，Student's t 厚尾分佈，存 DB 供雲端 Dashboard 顯示）
 ✅ 歷史持倉回填（120 筆，勝率 64%，均損益 +4.46%，盈虧比 2.12）
+  - 回填報告新增：Sharpe Ratio、最大累積回撤、0050 同期報酬 Benchmark 比較
 ✅ Neon 雲端同步（每日自動執行，timeout=600s）
 ✅ 連續 EPS 成長加分（5 年 +15 分、3 年 +8 分）
-✅ Hard Filter 加入市值 / 資本額篩選（從 TWSE t187ap03_L 每日更新）
+✅ 法人資料 T-1 fallback（當日 API 未更新時使用最近 DB 資料，behavior_score 恢復真實）
+✅ 估值即時計算 P/E（close / eps_ttm，DB 無 per 時自動補算）
+✅ 智慧情報無資料時動態重分配 10% 權重
+✅ 財報季節風險自動偵測（距截止日 ≤14 天自動觸發風險扣分）
 
 待完成 / 規劃中：
 ⏳ decision_journal: 5 支持倉上限硬上限（目前只限 100% 資金，見 19.2 ⚠️）
 ⏳ Confidence Score: 6 項計劃扣分尚未實作（見 9.5）
-⏳ 回測框架（策略參數最佳化）
+⏳ 回測框架（策略參數最佳化、滾動視窗驗證）
 ⏳ ETF 研究 / 產業比較強化
 
 Version 7.0（規劃中）
