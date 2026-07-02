@@ -140,7 +140,7 @@ def main():
 
     from src.database import (
         AnalysisResult, Recommendation, DailyReport, ExecutionLog,
-        DecisionJournal, ResearchStatus, Stock,
+        DecisionJournal, ResearchStatus, Stock, PositionMonitor,
     )
 
     total = 0
@@ -169,6 +169,26 @@ def main():
                             key_fields=["date"], days=args.days)
         total += sync_table(local_s, neon_s, ExecutionLog,
                             key_fields=["date"], days=args.days)
+
+        # position_monitor（全量同步：持倉狀態隨時更新，不限日期）
+        pm_rows = local_s.query(PositionMonitor).all()
+        pm_ins = pm_upd = 0
+        from sqlalchemy import inspect as _inspect
+        pm_cols = [c.key for c in _inspect(PositionMonitor).columns]
+        for row in pm_rows:
+            existing = neon_s.query(PositionMonitor).filter_by(id=row.id).first()
+            if existing:
+                for col in pm_cols:
+                    if col != "id":
+                        setattr(existing, col, getattr(row, col))
+                pm_upd += 1
+            else:
+                kwargs = {col: getattr(row, col) for col in pm_cols}
+                neon_s.add(PositionMonitor(**kwargs))
+                pm_ins += 1
+        neon_s.commit()
+        logger.info(f"  position_monitor: 新增 {pm_ins}，更新 {pm_upd}")
+        total += pm_ins + pm_upd
 
         # ResearchStatus（無日期欄位，全量同步）
         rs_rows = local_s.query(ResearchStatus).all()
