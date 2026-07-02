@@ -979,7 +979,7 @@ if __name__ == "__main__":
                 import subprocess
                 logger.info("[Step 11] 同步至 Neon...")
                 r = subprocess.run(
-                    [sys.executable, str(sync_script), "--db-url", neon_url, "--days", "1"],
+                    [sys.executable, str(sync_script), "--db-url", neon_url, "--days", "1", "--skip-prices"],
                     capture_output=True, text=True, timeout=600,
                     cwd=str(Path(__file__).parent),
                 )

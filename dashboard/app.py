@@ -1595,7 +1595,7 @@ def _run_analysis(dry_run: bool):
         cmd = [sys.executable, str(Path(__file__).parent.parent / "main.py")]
         if dry_run:
             cmd.append("--dry-run")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
         if result.returncode == 0:
             st.success("✅ 分析完成！重新整理頁面查看。")
             st.cache_data.clear()

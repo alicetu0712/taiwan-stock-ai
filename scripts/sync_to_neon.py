@@ -93,6 +93,8 @@ def main():
                         help="Neon 連線字串（預設讀 NEON_URL 環境變數）")
     parser.add_argument("--days", type=int, default=90,
                         help="同步幾天內的資料（預設 90 天）")
+    parser.add_argument("--skip-prices", action="store_true",
+                        help="跳過 daily_prices 同步（每日自動同步用，加快速度）")
     args = parser.parse_args()
 
     neon_url = args.db_url or os.environ.get("NEON_URL", "")
@@ -190,8 +192,10 @@ def main():
         logger.info(f"  position_monitor: 新增 {pm_ins}，更新 {pm_upd}")
         total += pm_ins + pm_upd
 
-        # DailyPrice（僅同步曾被推薦過的股票，供回測頁使用）
-        rec_stock_ids = {r.stock_id for r in local_s.query(Recommendation).all()}
+        # DailyPrice（僅同步曾被推薦過的股票，供回測頁使用；--skip-prices 時略過）
+        if args.skip_prices:
+            logger.info("  daily_prices: 已跳過（--skip-prices）")
+        rec_stock_ids = {} if args.skip_prices else {r.stock_id for r in local_s.query(Recommendation).all()}
         if rec_stock_ids:
             from sqlalchemy import inspect as _inspect2
             dp_cols = [c.key for c in _inspect2(DailyPrice).columns]
