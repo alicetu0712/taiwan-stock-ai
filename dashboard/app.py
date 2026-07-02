@@ -1220,7 +1220,7 @@ def page_backtest():
     # ═══════════════════════════════════════════════════════════
     # 誠實結論卡
     # ═══════════════════════════════════════════════════════════
-    cutoff = sub["date"].max()
+    cutoff = date.today()
     bench_mean = sub["b0050_20"].mean()
     model_mean = sub["ret_20d"].mean()
     alpha_mean = sub["a0050_20"].mean()
