@@ -6,6 +6,11 @@ data/
 logs/
 reports/
 
+# SQLite DB 檔（含分析結果、推薦歷史，不公開）
+*.db
+*.sqlite
+*.sqlite3
+
 # Python
 __pycache__/
 *.pyc
