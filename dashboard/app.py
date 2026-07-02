@@ -833,8 +833,7 @@ def load_positions(status: str = "active") -> list:
     import os, json as _json
     neon_url = os.getenv("NEON_URL") or os.getenv("DATABASE_URL")
     if not neon_url:
-        st.error("請設定 NEON_URL 環境變數（.env 或 Streamlit secrets）")
-        return []
+        return []  # 呼叫端負責顯示錯誤（st.* 不可在 cache_data 內呼叫）
     if neon_url.startswith("sqlite"):
         # 本機 fallback：用 SQLAlchemy
         try:
@@ -942,6 +941,9 @@ def page_positions():
     tab_active, tab_closed = st.tabs(["🟢 持倉中", "📋 歷史紀錄"])
 
     with tab_active:
+        if not (os.getenv("NEON_URL") or os.getenv("DATABASE_URL")):
+            st.error("請設定 NEON_URL 環境變數（.env 或 Streamlit secrets）")
+            return
         positions = load_positions("active")
         if not positions:
             st.info("目前無持倉。每次推薦時系統會自動建立追蹤記錄。")
