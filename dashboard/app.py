@@ -554,7 +554,11 @@ def page_today(selected_date: date):
     idx_val   = mkt.get("index", "—")
     idx_chg   = mkt.get("change", "—")
     sentiment = mkt.get("sentiment", "—")
-    chg_color = "#00c851" if "+" in str(idx_chg) else "#ff4444" if "-" in str(idx_chg) else "white"
+    try:
+        _chg_val = float(str(idx_chg).replace("%","").replace("+",""))
+        chg_color = "#00c851" if _chg_val > 0 else "#ff4444" if _chg_val < 0 else "#aaaaaa"
+    except Exception:
+        chg_color = "#aaaaaa"
 
     today_log = logs[logs["date"] == selected_date] if not logs.empty else pd.DataFrame()
     if today_log.empty:
