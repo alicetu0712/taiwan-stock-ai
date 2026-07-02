@@ -140,7 +140,7 @@ def main():
 
     from src.database import (
         AnalysisResult, Recommendation, DailyReport, ExecutionLog,
-        DecisionJournal, ResearchStatus, Stock, PositionMonitor,
+        DecisionJournal, ResearchStatus, Stock, PositionMonitor, DailyPrice,
     )
 
     total = 0
@@ -189,6 +189,31 @@ def main():
         neon_s.commit()
         logger.info(f"  position_monitor: 新增 {pm_ins}，更新 {pm_upd}")
         total += pm_ins + pm_upd
+
+        # DailyPrice（僅同步曾被推薦過的股票，供回測頁使用）
+        rec_stock_ids = {r.stock_id for r in local_s.query(Recommendation).all()}
+        if rec_stock_ids:
+            from sqlalchemy import inspect as _inspect2
+            dp_cols = [c.key for c in _inspect2(DailyPrice).columns]
+            dp_rows = (local_s.query(DailyPrice)
+                       .filter(DailyPrice.stock_id.in_(rec_stock_ids))
+                       .all())
+            dp_ins = dp_upd = 0
+            for row in dp_rows:
+                existing = neon_s.query(DailyPrice).filter_by(
+                    stock_id=row.stock_id, date=row.date).first()
+                if existing:
+                    for col in dp_cols:
+                        if col != "id":
+                            setattr(existing, col, getattr(row, col))
+                    dp_upd += 1
+                else:
+                    kwargs = {col: getattr(row, col) for col in dp_cols}
+                    neon_s.add(DailyPrice(**kwargs))
+                    dp_ins += 1
+            neon_s.commit()
+            logger.info(f"  daily_prices (推薦股票): 新增 {dp_ins}，更新 {dp_upd}")
+            total += dp_ins + dp_upd
 
         # ResearchStatus（無日期欄位，全量同步）
         rs_rows = local_s.query(ResearchStatus).all()
