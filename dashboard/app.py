@@ -1771,6 +1771,7 @@ def page_my_trades():
 
     for trade in holdings:
         cur = stock_prices.get(trade.stock_id)
+        cur_date_label = "TWSE"
         if not cur:
             try:
                 from sqlalchemy import desc as _dd
@@ -1779,8 +1780,10 @@ def page_my_trades():
                     .order_by(_dd(DailyPrice.date)).first()
                 _s3.close()
                 cur = _dp.close if _dp else None
+                cur_date_label = str(_dp.date) if _dp else "—"
             except Exception:
                 cur = None
+                cur_date_label = "—"
 
         days_held  = (date.today() - trade.buy_date).days
         pnl_pct    = (cur - trade.buy_price) / trade.buy_price * 100    if cur else None
@@ -1811,7 +1814,7 @@ def page_my_trades():
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
             <div style="flex:1;min-width:70px;background:#f5f5f5;border-radius:6px;padding:5px 8px;text-align:center">
-              <div style="font-size:0.6rem;color:#888">現價</div>
+              <div style="font-size:0.6rem;color:#888">現價（{cur_date_label}）</div>
               <div style="font-weight:700">{f"{cur:,.1f}" if cur else "—"}</div>
             </div>
             <div style="flex:1;min-width:70px;background:#e8f5e9;border-radius:6px;padding:5px 8px;text-align:center">
