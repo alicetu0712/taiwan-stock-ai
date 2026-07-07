@@ -341,6 +341,13 @@ def load_stock_names() -> dict:
     return names
 
 
+@st.cache_data(ttl=86400)
+def load_stock_list() -> list:
+    """回傳 [(顯示文字, stock_id), ...] 供 selectbox 搜尋用。"""
+    names = load_stock_names()
+    return sorted([(f"{name}（{sid}）", sid) for sid, name in names.items()], key=lambda x: x[1])
+
+
 @st.cache_data(ttl=300)
 def load_stock_prices() -> dict:
     """讀取 DB 最新一日收盤價。回傳 {stock_id: close_price}"""
@@ -1848,10 +1855,13 @@ def page_my_trades():
 
     # ── 新增交易 ──────────────────────────────────────────────
     with st.expander("➕ 新增交易"):
+        stock_list = load_stock_list()
+        stock_labels = [lbl for lbl, _ in stock_list]
         with st.form("add_trade_form", clear_on_submit=True):
+            stock_sel = st.selectbox("股票（輸入名稱或代號搜尋）", options=stock_labels,
+                                     index=None, placeholder="例：台積電 或 2330")
             c1, c2 = st.columns(2)
             with c1:
-                sid         = st.text_input("股票代號", placeholder="2330", max_chars=6)
                 buy_date_in = st.date_input("買入日期", value=date.today())
                 notes_in    = st.text_input("備註（選填）")
             with c2:
@@ -1864,14 +1874,12 @@ def page_my_trades():
             with c4:
                 stop_in   = st.number_input("停損價（0 = 自動 -7%）",  min_value=0.0, step=0.5, format="%.2f")
             if st.form_submit_button("✅ 新增", use_container_width=True):
+                sid = dict(stock_list).get(stock_sel, "") if stock_sel else ""
                 if not sid or buy_price_in <= 0:
-                    st.error("請填寫股票代號和買入價格")
+                    st.error("請選擇股票並填寫買入價格")
                 else:
-                    # 自動帶出股票名稱
-                    _sn_s = get_session()
-                    _stk  = _sn_s.query(Stock).filter_by(stock_id=sid.strip()).first()
-                    sname = _stk.name if _stk else sid.strip()
-                    _sn_s.close()
+                    # 從 selectbox 解析名稱（格式：「名稱（代號）」）
+                    sname = stock_sel.split("（")[0].strip() if stock_sel else sid
                     t_price = target_in if target_in > 0 else round(buy_price_in * 1.10, 1)
                     s_price = stop_in   if stop_in   > 0 else round(buy_price_in * 0.93, 1)
                     _s = get_session()
@@ -1897,6 +1905,9 @@ def page_my_trades():
     if not holdings:
         st.info("尚無持倉，點上方「新增交易」加入第一筆。")
 
+    BUY_FEE  = 0.001425   # 買入手續費
+    SELL_FEE = 0.004425   # 賣出手續費 + 證交稅
+
     for trade in holdings:
         cur = stock_prices.get(trade.stock_id)
         cur_date_label = "TWSE"
@@ -1913,9 +1924,11 @@ def page_my_trades():
                 cur = None
                 cur_date_label = "—"
 
-        days_held  = (date.today() - trade.buy_date).days
-        pnl_pct    = (cur - trade.buy_price) / trade.buy_price * 100    if cur else None
-        pnl_amount = (cur - trade.buy_price) * trade.shares               if cur else None
+        days_held    = (date.today() - trade.buy_date).days
+        eff_buy      = trade.buy_price * (1 + BUY_FEE)   # 含買入手續費的每股成本
+        pnl_pct      = (cur - eff_buy) / eff_buy * 100    if cur else None
+        pnl_amount   = (cur - eff_buy) * trade.shares      if cur else None
+        total_cost   = eff_buy * trade.shares
 
         if cur and trade.stop_price and cur < trade.stop_price:
             signal, sig_color = "🔴 已觸停損，建議出場", "#ff4444"
@@ -1938,6 +1951,7 @@ def page_my_trades():
             <div style="text-align:right">
               <div style="font-size:1.4rem;font-weight:800;color:{pnl_color}">{f"{pnl_pct:+.2f}%" if pnl_pct is not None else "—"}</div>
               <div style="font-size:0.75rem;color:{pnl_color}">{f"{pnl_amount:+,.0f}元" if pnl_amount is not None else ""}</div>
+              <div style="font-size:0.6rem;color:#aaa">未含賣出手續費+稅 0.4425%</div>
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
@@ -1954,8 +1968,8 @@ def page_my_trades():
               <div style="font-weight:700;color:#c62828">{f"{trade.stop_price:,.1f}" if trade.stop_price else "—"}</div>
             </div>
             <div style="flex:1;min-width:70px;background:#fff8e1;border-radius:6px;padding:5px 8px;text-align:center">
-              <div style="font-size:0.6rem;color:#f57f17">成本總額</div>
-              <div style="font-weight:700;color:#f57f17">{trade.buy_price * trade.shares:,.0f}元</div>
+              <div style="font-size:0.6rem;color:#f57f17">成本總額（含手續費）</div>
+              <div style="font-weight:700;color:#f57f17">{total_cost:,.0f}元</div>
             </div>
           </div>
           <div style="font-size:0.85rem;color:{sig_color};font-weight:600">{signal}</div>
@@ -1975,8 +1989,10 @@ def page_my_trades():
                     sell_p = st.number_input("出場價", min_value=0.0, step=0.5,
                                              value=float(cur or trade.buy_price), key=f"sp_{trade.id}", format="%.2f")
                     if st.form_submit_button("確認出場"):
-                        r_pct = (sell_p - trade.buy_price) / trade.buy_price * 100
-                        r_pnl = (sell_p - trade.buy_price) * trade.shares
+                        net_sell = sell_p * (1 - SELL_FEE)   # 扣手續費+證交稅
+                        eff_buy_c = trade.buy_price * (1 + BUY_FEE)
+                        r_pct = (net_sell - eff_buy_c) / eff_buy_c * 100
+                        r_pnl = (net_sell - eff_buy_c) * trade.shares
                         _sx = get_session()
                         _tx = _sx.query(UserTrade).filter_by(id=trade.id).first()
                         _tx.status = "closed"; _tx.sell_date = sell_d
