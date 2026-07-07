@@ -1212,6 +1212,7 @@ def compute_backtest() -> pd.DataFrame:
                     deduped_recs.append(r)
                     last_rec_date[r.stock_id] = r.date
 
+        today_dt = date.today()
         rows = []
         for r in deduped_recs:
             sp = price_map.get(r.stock_id, [])
@@ -1219,8 +1220,22 @@ def compute_backtest() -> pd.DataFrame:
                 continue
             s20, entry = _ret_at(sp, r.date, 20)
             s60, _     = _ret_at(sp, r.date, 60)
+
+            # 停牌 / 下市處理：推薦超過 35 日但仍無 20 日報酬，不靜默刪除
+            data_flag = None
+            if s20 is None and entry is not None and (today_dt - r.date).days > 35:
+                after_rec = [(d, c) for d, c in sp if d > r.date and c]
+                if after_rec:
+                    # 有部分交易紀錄但不足 20 日 → 停牌，用最後成交價
+                    s20 = round((after_rec[-1][1] - entry) / entry * 100 - ROUND_TRIP_COST, 2)
+                    data_flag = "⚠️ 停牌"
+                else:
+                    # 完全無後續交易 → 下市，視為最大損失（-100% 扣成本）
+                    s20 = round(-100.0 - ROUND_TRIP_COST, 2)
+                    data_flag = "❌ 下市"
+
             # 扣除交易成本（買進 + 賣出）
-            if s20 is not None:
+            if s20 is not None and data_flag is None:
                 s20 = round(s20 - ROUND_TRIP_COST, 2)
             if s60 is not None:
                 s60 = round(s60 - ROUND_TRIP_COST, 2)
@@ -1245,6 +1260,7 @@ def compute_backtest() -> pd.DataFrame:
                 "a0050_20": _a(s20, b0050_20), "a0056_20": _a(s20, b0056_20),
                 "a0050_60": _a(s60, b0050_60), "a0056_60": _a(s60, b0056_60),
                 "_all_ids": list(all_ids - {r.stock_id}),
+                "data_flag": data_flag,
             })
         return pd.DataFrame(rows)
     except Exception as e:
@@ -1389,6 +1405,11 @@ def page_backtest():
         st.info("尚無足夠歷史資料，請先執行分析並同步。")
         return
 
+    # 停牌 / 下市統計（已用最後成交或 -100% 計入，不靜默刪除）
+    n_flagged = df["data_flag"].notna().sum() if "data_flag" in df.columns else 0
+    halt_count = (df["data_flag"] == "⚠️ 停牌").sum() if "data_flag" in df.columns else 0
+    delist_count = (df["data_flag"] == "❌ 下市").sum() if "data_flag" in df.columns else 0
+
     sub = df.dropna(subset=["ret_20d", "b0050_20"]).sort_values("date").copy()
     if sub.empty:
         st.info("尚無足夠價格資料（需同步後等待回測窗口完成）。")
@@ -1416,6 +1437,12 @@ def page_backtest():
         else:              verdict, verdict_color = "❌ 目前沒有足夠證據顯示模型優於大盤", "#ff4444"
     else:
         verdict, verdict_color = "—", "#888"
+
+    # ── 樣本數警告 ────────────────────────────────────────────
+    if n_samp < 30:
+        st.error(f"⚠️ 樣本數僅 {n_samp} 筆（建議至少 30 筆），統計結論可靠性低，請勿過度解讀 p 值與 Alpha。")
+    elif n_samp < 60:
+        st.warning(f"⚠️ 樣本數 {n_samp} 筆，建議累積至 60+ 筆後統計結論才較穩定。")
 
     # ── 模型信心分數 ──────────────────────────────────────────
     conf_color = ["#ff4444","#ff4444","#ffbb33","#ffbb33","#00c851"][conf_stars - 1]
@@ -1455,7 +1482,9 @@ def page_backtest():
   <div style="color:#888;font-size:0.75rem;margin-top:6px">
     ⚠️ 模型、0050、0056、隨機基準報酬均已扣除單次買賣成本 0.585%（手續費＋證交稅），未扣滑價 ·
     模型與隨機基準均套用 20 交易日冷卻期（同股票不重複計算）·
-    回測期間偏短，需持續累積跨越完整財報週期的樣本
+    回測期間偏短，需持續累積跨越完整財報週期的樣本<br>
+    {"⚠️ 本回測含 " + str(n_flagged) + " 筆停牌/下市紀錄（停牌用最後成交價、下市用 -100%），不靜默刪除以保留完整損益。 · " if n_flagged > 0 else ""}
+    ⚠️ 倖存者偏差：分析池僅含現存且有完整價格資料的股票，歷史上已下市標的無法納入，可能使績效偏高。
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -1565,9 +1594,14 @@ def page_backtest():
 
     # ── 明細 ────────────────────────────────────────────────
     with st.expander("📋 推薦明細", expanded=False):
-        show = df[["date","stock_id","confidence","entry",
-                   "ret_20d","b0050_20","a0050_20","b0056_20","a0056_20"]].copy()
-        show.columns = ["日期","股票","信心","進場價","20日%","0050%","Alpha_0050","0056%","Alpha_0056"]
+        cols = ["date","stock_id","confidence","entry","ret_20d","b0050_20","a0050_20","b0056_20","a0056_20"]
+        if "data_flag" in df.columns:
+            cols.append("data_flag")
+        show = df[cols].copy()
+        col_names = ["日期","股票","信心","進場價","20日%","0050%","Alpha_0050","0056%","Alpha_0056"]
+        if "data_flag" in df.columns:
+            col_names.append("備注")
+        show.columns = col_names
         show = show.sort_values("日期", ascending=False)
         def _c(v):
             if pd.isna(v): return "color:#888"
