@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.8.12（2026-07-07）
+當前版本：v6.8.13（2026-07-07）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -3986,6 +3986,13 @@ Chapter 19 完
     - 0.05s 間隔避免 rate limit
   - fetch_all_prices() 自動偵測 API 回傳日期 < 今天 → 啟用 Yahoo 備援
   - 同步修正 TPEx SSL 憑證問題（requests verify=False）
+✅ 7/7 收盤價日期錯誤修正（v6.8.13）：
+  - 問題根因：前次 session 呼叫 fetch_all_prices(trade_date=date.today()) 時
+    將 TWSE 7/6 資料強制標成 7/7 日期存入 DB（共 1225 筆）
+  - 修正：刪除全部錯誤 7/7 資料，改用 Yahoo Finance HTTP API 正確存入
+    - 2345（智邦）：2645 → 2455
+    - 0050：108.25 → 106.20
+  - 後續：TWSE OpenAPI 更新後再補全部市場 7/7 資料
 
 ---
 
