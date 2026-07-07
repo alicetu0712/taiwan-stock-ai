@@ -222,7 +222,8 @@ def fetch_margin_trading(trade_date: Optional[date] = None) -> pd.DataFrame:
                 "short_buy":      _to_float(row.get("Short_Sell_Back")),
                 "short_balance":  _to_float(row.get("Short_Remain")),
             })
-        except Exception:
+        except Exception as e:
+            logger.debug(f"chip row parse skip: {e}")
             continue
 
     df = pd.DataFrame(records)

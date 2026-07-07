@@ -105,7 +105,8 @@ def fetch_financial_statements(
             try:
                 year    = int(date_str[:4])
                 quarter = _date_to_quarter(date_str)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"financial row date parse skip ({stock_id}): {e}")
                 continue
             result_rows.append({
                 "stock_id": stock_id,
@@ -316,7 +317,8 @@ def _calc_trend(series: list) -> str:
             return "down"
         else:
             return "stable"
-    except Exception:
+    except Exception as e:
+        logger.debug(f"revenue trend calc failed: {e}")
         return "unknown"
 
 
@@ -324,7 +326,8 @@ def _date_to_quarter(date_str: str) -> int:
     try:
         m = int(date_str[5:7])
         return (m - 1) // 3 + 1
-    except Exception:
+    except Exception as e:
+        logger.debug(f"_date_to_quarter({date_str!r}) failed: {e}")
         return 1
 
 

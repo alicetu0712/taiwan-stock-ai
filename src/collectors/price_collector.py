@@ -41,8 +41,8 @@ def _parse_roc_date(roc_str: str) -> Optional[date]:
         s = str(roc_str).strip()
         if len(s) == 7:
             return date(int(s[:3]) + 1911, int(s[3:5]), int(s[5:7]))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"_parse_roc_date({roc_str!r}) failed: {e}")
     return None
 
 
@@ -88,7 +88,8 @@ def fetch_twse_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
                 "volume":     _to_float(row.get("TradeVolume")),   # 千股
                 "amount":     _to_float(row.get("TradeValue")),    # 元 → 轉百萬
             })
-        except Exception:
+        except Exception as e:
+            logger.debug(f"TWSE row parse skip ({row.get('Code','')}): {e}")
             continue
 
     df = pd.DataFrame(records)
@@ -130,7 +131,8 @@ def fetch_tpex_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
                 "volume":     _to_float(row.get("TradeVolume")),
                 "amount":     _to_float(row.get("TradeValue")),
             })
-        except Exception:
+        except Exception as e:
+            logger.debug(f"TPEx row parse skip ({row.get('SecuritiesCompanyCode','')}): {e}")
             continue
 
     df = pd.DataFrame(records)

@@ -418,7 +418,8 @@ def _trend_direction(values: List[float]) -> str:
         elif rel_slope < -0.05:
             return "down"
         return "stable"
-    except Exception:
+    except Exception as e:
+        logger.debug(f"revenue trend calc failed: {e}")
         return "unknown"
 
 
@@ -434,5 +435,6 @@ def _coeff_variation(values: List[float]) -> float:
             return 0.0
         std = (sum((v - mean) ** 2 for v in arr) / len(arr)) ** 0.5
         return std / abs(mean)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"_coeff_variation failed: {e}")
         return 0.0

@@ -27,10 +27,13 @@ try:
 except Exception:
     pass
 
+import logging
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 from config import REPORTS_DIR
 
@@ -250,8 +253,8 @@ def load_report(report_date: date) -> str:
         s.close()
         if r and r.content_md:
             return r.content_md
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"load_report({report_date}) DB failed: {e}")
     path = REPORTS_DIR / "daily" / f"{report_date.isoformat()}_report.md"
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
@@ -280,7 +283,8 @@ def load_exec_logs(limit: int = 90) -> pd.DataFrame:
             "analyzed": r.total_stocks, "qualified": r.qualified_stocks,
             "recs": r.recommended_stocks,
         } for r in rows])
-    except Exception:
+    except Exception as e:
+        logger.warning(f"load_exec_logs failed: {e}")
         return pd.DataFrame()
 
 
@@ -306,7 +310,8 @@ def load_recent_recs(days: int = 60) -> pd.DataFrame:
             "watch_points": json.loads(r.watch_points) if r.watch_points else [],
             "ai_conclusion": r.ai_conclusion or "",
         } for r in rows])
-    except Exception:
+    except Exception as e:
+        logger.warning(f"load_recent_recs failed: {e}")
         return pd.DataFrame()
 
 
@@ -321,8 +326,8 @@ def load_stock_names() -> dict:
         rows = s.execute(select(Stock)).scalars().all()
         s.close()
         names = {r.stock_id: r.name for r in rows if r.name}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"load_stock_names DB failed: {e}")
     # 補充：TWSE API（補本地沒有的股票）
     try:
         import requests
@@ -336,7 +341,8 @@ def load_stock_names() -> dict:
                 name = item.get("Name", "").strip()
                 if sid and name and sid not in names:
                     names[sid] = name
-    except Exception:
+    except Exception as e:
+        logger.warning(f"load_stock_names TWSE API failed: {e}")
         pass
     return names
 
@@ -361,8 +367,8 @@ def load_stock_prices() -> dict:
             rows = s.query(DailyPrice.stock_id, DailyPrice.close).filter_by(date=latest_date).all()
             prices = {sid: close for sid, close in rows if close}
         s.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"load_stock_prices failed: {e}")
     return prices
 
 
@@ -424,7 +430,8 @@ def load_db_recommendations(target_date: date) -> list:
                 "position_pct":    pm.position_pct    if pm else None,
             })
         return result
-    except Exception:
+    except Exception as e:
+        logger.warning(f"load_db_recommendations failed: {e}")
         return []
 
 
@@ -452,7 +459,8 @@ def load_analysis_results(target_date: date) -> pd.DataFrame:
             "total": r.total_score, "confidence": r.confidence,
             "rec_level": r.rec_level,
         } for r in rows])
-    except Exception:
+    except Exception as e:
+        logger.warning(f"load_analysis_results failed: {e}")
         return pd.DataFrame()
 
 
@@ -613,7 +621,8 @@ def page_today(selected_date: date):
     try:
         _chg_val = float(str(idx_chg).replace("%","").replace("+",""))
         chg_color = "#00c851" if _chg_val > 0 else "#ff4444" if _chg_val < 0 else "#aaaaaa"
-    except Exception:
+    except Exception as e:
+        logger.debug(f"index change color parse failed: {e}")
         chg_color = "#aaaaaa"
 
     today_log = logs[logs["date"] == selected_date] if not logs.empty else pd.DataFrame()
@@ -630,8 +639,8 @@ def page_today(selected_date: date):
                     "analyzed": _el.total_stocks, "qualified": _el.qualified_stocks,
                     "recs": _el.recommended_stocks,
                 }])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"today_log DB fallback failed: {e}")
     analyzed  = int(today_log.iloc[0]["analyzed"])  if not today_log.empty else 0
     qualified = int(today_log.iloc[0]["qualified"]) if not today_log.empty else 0
     recs_cnt  = int(today_log.iloc[0]["recs"])      if not today_log.empty else 0
@@ -939,7 +948,8 @@ def load_positions(status: str = "active") -> list:
             } for r in rows]
             s.close()
             return result
-        except Exception:
+        except Exception as e:
+            logger.warning(f"load_positions SQLite failed: {e}")
             return []
     try:
         import psycopg2
@@ -967,7 +977,8 @@ def load_positions(status: str = "active") -> list:
             r["exit_date"]    = str(r["exit_date"])    if r.get("exit_date")    else None
             result.append(r)
         return result
-    except Exception:
+    except Exception as e:
+        logger.warning(f"load_positions failed: {e}")
         return []
 
 
@@ -1761,8 +1772,8 @@ def page_settings(selected_date: date):
             chip_cnt  = s.query(func.count(InstitutionalData.id)).scalar() or 0
             oldest    = s.query(func.min(DailyPrice.date)).filter(DailyPrice.date >= '2025-01-01').scalar()
             newest    = s.query(func.max(DailyPrice.date)).scalar()
-        except Exception:
-            pass  # 雲端版無本機股價資料，顯示 0
+        except Exception as e:
+            logger.debug(f"page_settings price date query failed: {e}")  # 雲端版無本機股價資料
         rec_cnt = s.query(func.count(Recommendation.id)).scalar() or 0
         s.close()
         if price_cnt > 0:
@@ -1798,7 +1809,8 @@ def page_settings(selected_date: date):
             </div>
             """, unsafe_allow_html=True)
             st.caption("股價／法人原始資料存於本機，行動版不顯示")
-    except Exception:
+    except Exception as e:
+        logger.error(f"page_settings DB query failed: {e}")
         st.caption("資料庫暫時無法連線")
 
 
@@ -1920,7 +1932,8 @@ def page_my_trades():
                 _s3.close()
                 cur = _dp.close if _dp else None
                 cur_date_label = str(_dp.date) if _dp else "—"
-            except Exception:
+            except Exception as e:
+                logger.debug(f"trade price fallback failed ({trade.stock_id}): {e}")
                 cur = None
                 cur_date_label = "—"
 
@@ -2085,8 +2098,8 @@ def main():
                 if first_rec:  st.caption(f"研究起始：{first_rec}")
             else:
                 st.caption("股價資料存於本機\n需在家中執行分析")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"guide page stock info query failed: {e}")
         st.markdown("---")
         st.markdown("""
         <div style="font-size:0.65rem; color:#aaa; text-align:center; line-height:1.6">

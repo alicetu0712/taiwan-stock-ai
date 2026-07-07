@@ -230,7 +230,8 @@ class TechnicalAnalyzer:
                 return 100.0
             rs = avg_gain / avg_loss
             return round(100 - 100 / (1 + rs), 2)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"RSI calc failed: {e}")
             return None
 
     def _score_rsi(self, rsi: Optional[float]):
@@ -344,7 +345,8 @@ class TechnicalAnalyzer:
                 sig = "overbought"
                 score = 2.0
             return score, sig
-        except Exception:
+        except Exception as e:
+            logger.debug(f"MACD/stoch score failed: {e}")
             return 0.0, "neutral"
 
     def _detect_patterns(self, close, high, low, volume):
@@ -399,7 +401,8 @@ class TechnicalAnalyzer:
             recent_high = float(np.max(high[-20:]))
             recent_low  = float(np.min(low[-20:]))
             return round(recent_low, 2), round(recent_high, 2)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"support/resistance calc failed: {e}")
             return None, None
 
     def _build_summary(self, r: "TechnicalResult") -> str:
