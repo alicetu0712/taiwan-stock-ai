@@ -8,7 +8,7 @@ fundamental.py — 基本面分析引擎（PRD Chapter 5）
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from config import QUALITY_CONFIG
 
@@ -143,7 +143,7 @@ class FundamentalAnalyzer:
 
     # ── 子評分方法 ────────────────────────────────────────────
 
-    def _score_roe(self, roe_avg: Optional[float], roe_list: List[float]):
+    def _score_roe(self, roe_avg: Optional[float], roe_list: List[float]) -> Tuple[float, List[str], List[str]]:
         """ROE 評分（最高 20 分）"""
         score = 0.0
         plus, minus = [], []
@@ -179,7 +179,7 @@ class FundamentalAnalyzer:
 
         return max(0.0, min(score, 20)), plus, minus
 
-    def _score_roa(self, roa_avg: Optional[float]):
+    def _score_roa(self, roa_avg: Optional[float]) -> Tuple[float, List[str], List[str]]:
         """ROA 評分（最高 15 分）"""
         score = 0.0
         plus, minus = [], []
@@ -208,7 +208,7 @@ class FundamentalAnalyzer:
         eps_ttm: Optional[float],
         eps_trend: str,
         eps_5y: List[float],
-    ):
+    ) -> Tuple[float, List[str], List[str]]:
         """EPS 評分（最高 20 分）"""
         score = 0.0
         plus, minus = [], []
@@ -262,7 +262,7 @@ class FundamentalAnalyzer:
 
         return max(0.0, min(score, 35)), plus, minus
 
-    def _score_gross_margin(self, gm_avg: Optional[float]):
+    def _score_gross_margin(self, gm_avg: Optional[float]) -> Tuple[float, List[str], List[str]]:
         """毛利率評分（最高 15 分）"""
         score = 0.0
         plus, minus = [], []
@@ -291,7 +291,7 @@ class FundamentalAnalyzer:
         debt_ratio: Optional[float],
         free_cf: Optional[float],
         current_ratio: Optional[float],
-    ):
+    ) -> Tuple[float, List[str], List[str]]:
         """財務健康評分（最高 15 分）"""
         score = 0.0
         plus, minus = [], []
@@ -331,7 +331,7 @@ class FundamentalAnalyzer:
         self,
         per: Optional[float],
         pbr: Optional[float],
-    ):
+    ) -> Tuple[float, List[str], List[str]]:
         """估值評分（最高 10 分）"""
         score = 5.0   # 預設中立
         plus, minus = [], []
@@ -359,7 +359,7 @@ class FundamentalAnalyzer:
 
         return max(0.0, min(score, 10)), plus, minus
 
-    def _score_revenue(self, rev_trend: str):
+    def _score_revenue(self, rev_trend: str) -> Tuple[float, List[str], List[str]]:
         """營收趨勢評分（最高 5 分）"""
         score = 0.0
         plus, minus = [], []

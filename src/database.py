@@ -8,11 +8,13 @@ database.py — SQLite 資料庫與 SQLAlchemy 設定
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Float, Integer, String, Text,
     UniqueConstraint, create_engine, event, text
 )
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import DB_PATH
@@ -284,7 +286,7 @@ class DailyReport(Base):
 
 # ── 引擎與 Session ───────────────────────────────────────────
 
-def get_engine():
+def get_engine() -> Engine:
     from config import DATABASE_URL
     is_sqlite = DATABASE_URL.startswith("sqlite")
     engine = create_engine(
@@ -300,7 +302,7 @@ def get_engine():
     return engine
 
 
-def init_db(engine=None):
+def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)

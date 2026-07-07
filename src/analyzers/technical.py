@@ -11,7 +11,7 @@ technical.py — 技術分析引擎（PRD Chapter 6）
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -130,7 +130,7 @@ class TechnicalAnalyzer:
 
     # ── 分析子方法 ────────────────────────────────────────────
 
-    def _analyze_ma(self, close: np.ndarray):
+    def _analyze_ma(self, close: np.ndarray) -> Tuple[float, str, Dict[str, float]]:
         """均線分析（最高 25 分）"""
         score = 0.0
         n = len(close)
@@ -181,7 +181,7 @@ class TechnicalAnalyzer:
 
         return max(0.0, min(score, 25)), trend, ma_vals
 
-    def _analyze_volume(self, close: np.ndarray, volume: np.ndarray):
+    def _analyze_volume(self, close: np.ndarray, volume: np.ndarray) -> Tuple[float, str]:
         """成交量分析（最高 20 分）"""
         if len(volume) < 20:
             return 0.0, "neutral"
@@ -234,7 +234,7 @@ class TechnicalAnalyzer:
             logger.debug(f"RSI calc failed: {e}")
             return None
 
-    def _score_rsi(self, rsi: Optional[float]):
+    def _score_rsi(self, rsi: Optional[float]) -> Tuple[float, Optional[str]]:
         """RSI 評分（最高 15 分）"""
         if rsi is None:
             return 0.0, None
@@ -256,7 +256,7 @@ class TechnicalAnalyzer:
             score = 8.0      # RSI < 30，可能超賣回彈
         return score, risk
 
-    def _analyze_macd(self, close: np.ndarray):
+    def _analyze_macd(self, close: np.ndarray) -> Tuple[float, str]:
         """MACD 分析（最高 20 分）"""
         if len(close) < TA_CONFIG["macd_slow"] + TA_CONFIG["macd_signal"]:
             return 0.0, "neutral"
@@ -300,7 +300,7 @@ class TechnicalAnalyzer:
             logger.debug(f"MACD calc error: {e}")
             return 0.0, "neutral"
 
-    def _analyze_kd(self, high: np.ndarray, low: np.ndarray, close: np.ndarray):
+    def _analyze_kd(self, high: np.ndarray, low: np.ndarray, close: np.ndarray) -> Tuple[float, str]:
         """KD 分析（最高 10 分）"""
         period = TA_CONFIG["kd_period"]
         if len(close) < period:
@@ -349,7 +349,7 @@ class TechnicalAnalyzer:
             logger.debug(f"MACD/stoch score failed: {e}")
             return 0.0, "neutral"
 
-    def _detect_patterns(self, close, high, low, volume):
+    def _detect_patterns(self, close: np.ndarray, high: np.ndarray, low: np.ndarray, volume: np.ndarray) -> Tuple[List[str], float]:
         """K 線型態偵測（最高 10 分）"""
         patterns = []
         score = 0.0
@@ -393,7 +393,7 @@ class TechnicalAnalyzer:
 
     def _find_support_resistance(
         self, close: np.ndarray, high: np.ndarray, low: np.ndarray
-    ):
+    ) -> Tuple[Optional[float], Optional[float]]:
         """簡單支撐壓力估算（近期高低點）。"""
         if len(close) < 20:
             return None, None

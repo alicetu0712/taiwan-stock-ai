@@ -9,7 +9,7 @@ financial_collector.py — 財務資料蒐集
 
 import logging
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -18,7 +18,7 @@ from config import FINMIND_TOKEN
 logger = logging.getLogger(__name__)
 
 
-def _get_dataloader():
+def _get_dataloader() -> Optional[Any]:
     """建立 FinMind DataLoader 並登入。"""
     try:
         from FinMind.data import DataLoader
