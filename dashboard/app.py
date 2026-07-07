@@ -10,7 +10,7 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # 載入 .env（本機開發）；Streamlit Cloud 用 st.secrets
 try:
