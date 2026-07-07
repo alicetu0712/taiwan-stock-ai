@@ -1314,6 +1314,7 @@ def compute_random_baseline(n_sim: int = 1000) -> dict:
                 alts = [sid for sid in all_ids if sid != r.stock_id and price_map.get(sid)]
             pool_per_rec.append((r.date, alts))
 
+        _rng = _rnd.Random(42)  # 固定 seed，確保每次結果可重現
         sim_means = []
         for _ in range(n_sim):
             sim_rets = []
@@ -1323,7 +1324,7 @@ def compute_random_baseline(n_sim: int = 1000) -> dict:
                 # 冷卻期過濾：同股票 20 個交易日內不重複抽取
                 eligible = [s for s in alts if
                             last_pick.get(s) is None or _tdays(s, last_pick[s], ref_date) >= 20]
-                sid = _rnd.choice(eligible if eligible else alts)
+                sid = _rng.choice(eligible if eligible else alts)
                 last_pick[sid] = ref_date
                 ret = _ret20(price_map[sid], ref_date)
                 if ret is not None:
