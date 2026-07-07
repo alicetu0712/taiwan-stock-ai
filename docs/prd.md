@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.8.3（2026-07-07）
+當前版本：v6.8.4（2026-07-07）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -3926,6 +3926,14 @@ Chapter 19 完
   - price_collector.py 改用 API 回傳的民國日期（Date 欄位，格式 '1150706'）轉換西元日期
     作為存入 DB 的 trade_date，不再用 date.today()
   - 修正根源：TWSE/TPEx API 盤中仍回傳前一交易日資料，但程式用今日日期存入造成日期超前
+✅ 回測誠實度強化（v6.8.4）：
+  - 回測報酬扣除交易成本：手續費（買+賣 0.285%）+ 證交稅（0.3%）= 0.585%（不含滑價）
+  - 誠實結論卡加注：報酬已扣成本；同一檔多次推薦樣本非獨立，p 值可能偏樂觀
+  - 推薦卡片目標價來源標示：PositionMonitor 模型算出顯示「目標價」，
+    fallback 估算（×1.10/×0.93）明確顯示「目標價 (估)」
+  - MC 隨機基準說明文字修正：明確說明股票池為「AnalysisResult 且有價格資料」，
+    非全體分析股票（受 price_map 範圍限制）
+  - compute_backtest / compute_random_baseline：except 改為 logger.exception，不再靜默失敗
 
 ---
 
