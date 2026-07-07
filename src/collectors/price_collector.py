@@ -4,12 +4,13 @@ price_collector.py — 每日股價資料蒐集
 資料來源：
   - TWSE OpenAPI（上市）
   - TPEx OpenAPI（上櫃）
+  - yfinance（備援：當 TWSE/TPEx API 尚未更新當日資料時）
 每個交易日收盤後自動更新。
 """
 
 import logging
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -140,8 +141,104 @@ def fetch_tpex_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
     return df
 
 
+def _fetch_yahoo_one(ticker: str, target_date: date) -> Optional[dict]:
+    """用 Yahoo Finance chart API 抓單一股票當日 OHLCV。不依賴 yfinance 套件。"""
+    import calendar
+    day_start = int(datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0).timestamp())
+    day_end   = day_start + 86400
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+           f"?period1={day_start}&period2={day_end}&interval=1d")
+    headers = {**HTTP_HEADERS, "Accept": "application/json"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10, verify=False)
+        if resp.status_code != 200:
+            return None
+        j = resp.json()
+        result = j.get("chart", {}).get("result")
+        if not result:
+            return None
+        meta = result[0].get("meta", {})
+        indicators = result[0].get("indicators", {})
+        q = indicators.get("quote", [{}])[0]
+        adjclose_list = indicators.get("adjclose", [{}])
+        adjclose = adjclose_list[0].get("adjclose", []) if adjclose_list else []
+        timestamps = result[0].get("timestamp", [])
+        if not timestamps or not q.get("close"):
+            return None
+        idx = 0  # 只取第一筆（當日）
+        close = (adjclose[idx] if adjclose and idx < len(adjclose) else None) or q["close"][idx]
+        if not close:
+            return None
+        return {
+            "open":   q.get("open",   [None])[idx],
+            "high":   q.get("high",   [None])[idx],
+            "low":    q.get("low",    [None])[idx],
+            "close":  close,
+            "volume": q.get("volume", [None])[idx],
+        }
+    except Exception:
+        return None
+
+
+def fetch_yfinance_daily(stale_df: pd.DataFrame, target_date: date) -> pd.DataFrame:
+    """Yahoo Finance HTTP 備援：當 TWSE/TPEx API 尚未更新當日資料時使用。
+    只補抓「分析過的股票 + 0050/0056 benchmark」，避免逐一呼叫 6000+ 股。
+    不依賴 yfinance 套件（避免 macOS segfault），直接呼叫 Yahoo chart API。
+    """
+    # 取得需要補抓的 stock_id 清單（AnalysisResult + benchmarks）
+    try:
+        from src.database import get_session
+        from sqlalchemy import text
+        s = get_session()
+        result = s.execute(text("SELECT DISTINCT stock_id FROM analysis_results")).fetchall()
+        s.close()
+        tracked_ids = {r[0] for r in result} | {"0050", "0056"}
+    except Exception as e:
+        logger.warning(f"無法讀取 AnalysisResult，改用全部股票: {e}")
+        tracked_ids = None
+
+    # 用 stale_df 建立 stock_id → market 對應
+    sid_to_market = {str(row["stock_id"]): str(row.get("market", "TWSE"))
+                     for _, row in stale_df.iterrows()}
+
+    suffix_map = {"TWSE": ".TW", "TPEx": ".TWO"}
+    rows_info = []
+    for sid, market in sid_to_market.items():
+        if tracked_ids is not None and sid not in tracked_ids:
+            continue
+        suffix = suffix_map.get(market, ".TW")
+        rows_info.append((sid, market, f"{sid}{suffix}"))
+
+    logger.info(f"Yahoo 備援：補抓 {len(rows_info)} 支追蹤股票…")
+    records = []
+    ok = fail = 0
+    for sid, market, ticker in rows_info:
+        data = _fetch_yahoo_one(ticker, target_date)
+        if data and data.get("close") and data["close"] > 0:
+            records.append({
+                "stock_id":   sid,
+                "market":     market,
+                "date":       target_date,
+                "open":       _to_float(data.get("open")),
+                "high":       _to_float(data.get("high")),
+                "low":        _to_float(data.get("low")),
+                "close":      _to_float(data["close"]),
+                "volume":     _to_float(data.get("volume", 0)) / 1000 if data.get("volume") else None,
+                "amount":     None,
+                "change_pct": None,
+            })
+            ok += 1
+        else:
+            fail += 1
+        time.sleep(0.05)
+
+    df = pd.DataFrame(records)
+    logger.info(f"Yahoo 備援: 成功 {ok} 筆 / 失敗 {fail} 筆 ({target_date})")
+    return df
+
+
 def fetch_all_prices(trade_date: Optional[date] = None) -> pd.DataFrame:
-    """合併上市 + 上櫃當日行情。"""
+    """合併上市 + 上櫃當日行情；若 API 未更新則自動啟用 yfinance 備援。"""
     twse = fetch_twse_daily(trade_date)
     tpex = fetch_tpex_daily(trade_date)
     all_df = pd.concat([twse, tpex], ignore_index=True)
@@ -149,6 +246,27 @@ def fetch_all_prices(trade_date: Optional[date] = None) -> pd.DataFrame:
     all_df = all_df.drop_duplicates(subset="stock_id", keep="first")
     # 過濾收盤價為 0 或 NaN
     all_df = all_df[all_df["close"].notna() & (all_df["close"] > 0)]
+
+    # yfinance 備援：API 回傳日期 < 今天 → 嘗試抓今日資料
+    today = date.today()
+    if trade_date is None and not all_df.empty:
+        api_date = all_df["date"].iloc[0]
+        if isinstance(api_date, str):
+            api_date = date.fromisoformat(api_date)
+        if hasattr(api_date, "date"):
+            api_date = api_date.date()
+        if api_date < today:
+            logger.info(f"TWSE/TPEx API 仍回傳 {api_date}（今日 {today}），啟用 yfinance 備援…")
+            yf_df = fetch_yfinance_daily(all_df, today)
+            if not yf_df.empty:
+                yf_date = yf_df["date"].iloc[0]
+                if hasattr(yf_date, "date"):
+                    yf_date = yf_date.date()
+                if yf_date == today:
+                    logger.info(f"yfinance 備援成功：{len(yf_df)} 筆 ({today})")
+                    return yf_df
+            logger.warning("yfinance 備援無今日資料，仍使用 TWSE/TPEx 舊資料。")
+
     logger.info(f"Total stocks fetched: {len(all_df)}")
     return all_df
 
