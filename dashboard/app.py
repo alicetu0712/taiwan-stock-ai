@@ -1865,7 +1865,7 @@ def page_my_trades():
                 buy_date_in = st.date_input("買入日期", value=date.today())
                 notes_in    = st.text_input("備註（選填）")
             with c2:
-                buy_price_in = st.number_input("買入價格（元）", min_value=0.0, step=0.5, format="%.2f")
+                buy_price_in = st.number_input("買入均價（元，含手續費，依券商顯示填入）", min_value=0.0, step=0.5, format="%.2f")
                 shares_in    = st.number_input("股數（整張=1000股，零股直接填）",
                                                min_value=1, step=1, value=1000)
             c3, c4 = st.columns(2)
@@ -1925,8 +1925,8 @@ def page_my_trades():
                 cur_date_label = "—"
 
         days_held    = (date.today() - trade.buy_date).days
-        eff_buy      = trade.buy_price * (1 + BUY_FEE)       # 含買入手續費的每股成本
-        net_cur      = cur * (1 - SELL_FEE) if cur else None  # 含賣出手續費+稅的淨收入
+        eff_buy      = trade.buy_price                         # 使用者填入的均價（已含買入手續費）
+        net_cur      = cur * (1 - SELL_FEE) if cur else None  # 扣賣出手續費+稅的淨收入
         pnl_pct      = (net_cur - eff_buy) / eff_buy * 100    if net_cur else None
         pnl_amount   = (net_cur - eff_buy) * trade.shares      if net_cur else None
         total_cost   = eff_buy * trade.shares
@@ -1991,7 +1991,7 @@ def page_my_trades():
                                              value=float(cur or trade.buy_price), key=f"sp_{trade.id}", format="%.2f")
                     if st.form_submit_button("確認出場"):
                         net_sell = sell_p * (1 - SELL_FEE)   # 扣手續費+證交稅
-                        eff_buy_c = trade.buy_price * (1 + BUY_FEE)
+                        eff_buy_c = trade.buy_price           # 均價已含買入手續費
                         r_pct = (net_sell - eff_buy_c) / eff_buy_c * 100
                         r_pnl = (net_sell - eff_buy_c) * trade.shares
                         _sx = get_session()
