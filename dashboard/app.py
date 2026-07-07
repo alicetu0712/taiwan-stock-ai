@@ -33,6 +33,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config import REPORTS_DIR
+from src.database import (
+    get_session, UserTrade, DailyPrice, Recommendation,
+    AnalysisResult, PositionMonitor, Stock,
+)
 
 
 # ── 頁面設定 ──────────────────────────────────────────────────
@@ -1657,7 +1661,6 @@ def _render_trade_mc(trade, current_price, n_sim=500, days=20):
     """從當前價格做 Monte Carlo 20 日預測"""
     import numpy as np
     try:
-        from src.database import get_session, DailyPrice
         from sqlalchemy import desc as _d
         sess = get_session()
         prices_db = sess.query(DailyPrice).filter_by(stock_id=trade.stock_id)\
@@ -1726,9 +1729,8 @@ def page_my_trades():
                 else:
                     t_price = target_in if target_in > 0 else round(buy_price_in * 1.10, 1)
                     s_price = stop_in   if stop_in   > 0 else round(buy_price_in * 0.93, 1)
-                    from src.database import get_session as _gs, UserTrade as _UT
-                    _s = _gs()
-                    _s.add(_UT(
+                    _s = get_session()
+                    _s.add(UserTrade(
                         stock_id=sid.strip(), stock_name=sname.strip() or sid.strip(),
                         buy_date=buy_date_in, buy_price=buy_price_in,
                         shares=int(shares_in), target_price=t_price, stop_price=s_price,
@@ -1739,9 +1741,8 @@ def page_my_trades():
                     st.rerun()
 
     # ── 讀取所有交易 ───────────────────────────────────────────
-    from src.database import get_session as _gs2, UserTrade as _UT2
-    _sess = _gs2()
-    all_trades = _sess.query(_UT2).order_by(_UT2.buy_date.desc()).all()
+    _sess = get_session()
+    all_trades = _sess.query(UserTrade).order_by(UserTrade.buy_date.desc()).all()
     _sess.close()
     holdings = [t for t in all_trades if t.status == "holding"]
     closed   = [t for t in all_trades if t.status == "closed"]
@@ -1755,11 +1756,10 @@ def page_my_trades():
         cur = stock_prices.get(trade.stock_id)
         if not cur:
             try:
-                from src.database import get_session as _g3, DailyPrice as _DP
                 from sqlalchemy import desc as _dd
-                _s3 = _g3()
-                _dp = _s3.query(_DP).filter_by(stock_id=trade.stock_id)\
-                    .order_by(_dd(_DP.date)).first()
+                _s3 = get_session()
+                _dp = _s3.query(DailyPrice).filter_by(stock_id=trade.stock_id)\
+                    .order_by(_dd(DailyPrice.date)).first()
                 _s3.close()
                 cur = _dp.close if _dp else None
             except Exception:
@@ -1829,8 +1829,8 @@ def page_my_trades():
                     if st.form_submit_button("確認出場"):
                         r_pct = (sell_p - trade.buy_price) / trade.buy_price * 100
                         r_pnl = (sell_p - trade.buy_price) * trade.shares * 1000
-                        _sx = _gs2()
-                        _tx = _sx.query(_UT2).filter_by(id=trade.id).first()
+                        _sx = get_session()
+                        _tx = _sx.query(UserTrade).filter_by(id=trade.id).first()
                         _tx.status = "closed"; _tx.sell_date = sell_d
                         _tx.sell_price = sell_p; _tx.realized_pct = r_pct; _tx.realized_pnl = r_pnl
                         _sx.commit(); _sx.close()
