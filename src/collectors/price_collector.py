@@ -34,6 +34,17 @@ def _get(url: str, timeout: int = HTTP_TIMEOUT) -> Optional[list]:
     return None
 
 
+def _parse_roc_date(roc_str: str) -> Optional[date]:
+    """將民國日期字串（如 '1150706'）轉為西元 date，失敗回傳 None。"""
+    try:
+        s = str(roc_str).strip()
+        if len(s) == 7:
+            return date(int(s[:3]) + 1911, int(s[3:5]), int(s[5:7]))
+    except Exception:
+        pass
+    return None
+
+
 def _is_excluded(name: str, stock_id: str) -> bool:
     """排除 ETF、權證等非股票標的。"""
     name_upper = str(name).upper()
@@ -54,17 +65,20 @@ def fetch_twse_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
         return pd.DataFrame()
 
     records = []
+    _api_date: Optional[date] = None  # 從第一筆取得 API 實際交易日
     for row in data:
         sid = str(row.get("Code", "")).strip()
         name = str(row.get("Name", "")).strip()
         if not sid or _is_excluded(name, sid):
             continue
         try:
+            if _api_date is None:
+                _api_date = _parse_roc_date(row.get("Date", ""))
             records.append({
                 "stock_id":   sid,
                 "name":       name,
                 "market":     "TWSE",
-                "date":       trade_date or date.today(),
+                "date":       trade_date or _api_date or date.today(),
                 "open":       _to_float(row.get("OpeningPrice")),
                 "high":       _to_float(row.get("HighestPrice")),
                 "low":        _to_float(row.get("LowestPrice")),
@@ -93,17 +107,20 @@ def fetch_tpex_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
         return pd.DataFrame()
 
     records = []
+    _api_date_tpex: Optional[date] = None
     for row in data:
         sid = str(row.get("SecuritiesCompanyCode", "")).strip()
         name = str(row.get("CompanyName", "")).strip()
         if not sid or _is_excluded(name, sid):
             continue
         try:
+            if _api_date_tpex is None:
+                _api_date_tpex = _parse_roc_date(row.get("Date", ""))
             records.append({
                 "stock_id":   sid,
                 "name":       name,
                 "market":     "TPEx",
-                "date":       trade_date or date.today(),
+                "date":       trade_date or _api_date_tpex or date.today(),
                 "open":       _to_float(row.get("Open")),
                 "high":       _to_float(row.get("High")),
                 "low":        _to_float(row.get("Low")),
