@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.8.9（2026-07-07）
+當前版本：v6.8.10（2026-07-07）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -3963,6 +3963,9 @@ Chapter 19 完
   - 加 caption 說明：此區為依模型推薦與歷史資料建立的模擬追蹤，不代表實際下單；
     實際交易請以「我的實際交易紀錄」為準
   - 我的交易 section title：「我的交易紀錄」→「我的實際交易紀錄」
+✅ Random baseline 可重現性修正（v6.8.10）：
+  - compute_random_baseline 加入固定 seed：`_rng = random.Random(42)`
+  - 改用 `_rng.choice()` 取代 `random.choice()`，確保每次模擬結果可重現、便於驗證
 
 ---
 
