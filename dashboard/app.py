@@ -689,11 +689,25 @@ def page_today(selected_date: date):
         if r["price"] is None:
             r["price"] = stock_prices.get(r["sid"])
 
+    # 確保每筆推薦都有目標價 / 停損價（無論來源為何）
+    for r in recs:
+        p = r.get("price")
+        if p and not r.get("target_price"):
+            r["target_price"]    = round(p * 1.10, 1)
+            r["stop_loss_price"] = round(p * 0.93, 1)
+
     # DB 無推薦時降級到 markdown 解析
     if not recs:
         recs_section = re.search(r'## ③ Research Candidates.*?\n(.*?)(?=## ④|## 免責)', report, re.DOTALL)
         content = recs_section.group(1) if recs_section else ""
         recs = parse_recs_from_report(content)
+        for r in recs:
+            if r.get("price") is None:
+                r["price"] = stock_prices.get(r.get("sid", ""))
+            p = r.get("price")
+            if p and not r.get("target_price"):
+                r["target_price"]    = round(p * 1.10, 1)
+                r["stop_loss_price"] = round(p * 0.93, 1)
 
     # 仍無推薦：用分析結果補卡片（前 8 名），並標記為「未達門檻」
     is_fallback = False
