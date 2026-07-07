@@ -1175,13 +1175,15 @@ def compute_backtest() -> pd.DataFrame:
         for p in all_prices_q:
             price_map[p.stock_id].append((p.date, p.close))
 
-        def _ret_at(plist, ref_date, min_days):
-            entry = next((c for d, c in plist if d >= ref_date and c), None)
-            if not entry:
+        def _ret_at(plist, ref_date, n_trading_days):
+            # 取 ref_date 當日或之後的收盤序列（交易日）
+            after = [(d, c) for d, c in plist if d >= ref_date and c]
+            if not after:
                 return None, None
-            for d, c in plist:
-                if d >= ref_date and (d - ref_date).days >= min_days and c:
-                    return round((c - entry) / entry * 100, 2), entry
+            entry = after[0][1]
+            if len(after) > n_trading_days:
+                exit_c = after[n_trading_days][1]
+                return round((exit_c - entry) / entry * 100, 2), entry
             return None, entry
 
         rows = []
@@ -1216,35 +1218,41 @@ def compute_backtest() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def compute_random_baseline(n_sim: int = 1000) -> dict:
-    """Monte Carlo：對每筆推薦日期，從其他股票中隨機抽一支，計算 20 日報酬。
+    """Monte Carlo：對每筆推薦日期，從當天分析股票池中隨機抽一支，計算第 20 交易日報酬。
     重複 n_sim 次，返回隨機選股平均報酬的分布。"""
     try:
         import random as _rnd
         from collections import defaultdict
-        from src.database import get_session, Recommendation, DailyPrice
+        from src.database import get_session, Recommendation, DailyPrice, AnalysisResult as _AR
         s = get_session()
         recs = s.query(Recommendation).order_by(Recommendation.date).all()
         all_ids = {r.stock_id for r in recs} | {"0050", "0056"}
         all_prices_q = (s.query(DailyPrice)
                         .filter(DailyPrice.stock_id.in_(all_ids))
                         .order_by(DailyPrice.stock_id, DailyPrice.date).all())
+        ar_rows = s.query(_AR.date, _AR.stock_id).all()
         s.close()
         price_map = defaultdict(list)
         for p in all_prices_q:
             price_map[p.stock_id].append((p.date, p.close))
 
         def _ret20(plist, ref_date):
-            entry = next((c for d, c in plist if d >= ref_date and c), None)
-            if not entry: return None
-            for d, c in plist:
-                if d >= ref_date and (d - ref_date).days >= 20 and c:
-                    return (c - entry) / entry * 100
-            return None
+            # 第 20 個交易日報酬（非日曆天）
+            after = [(d, c) for d, c in plist if d >= ref_date and c]
+            if len(after) <= 20: return None
+            return (after[20][1] - after[0][1]) / after[0][1] * 100
 
-        # 建立每筆推薦的「可選替代股票 pool」與 rec date
+        # 從 AnalysisResult 取每天實際分析過的股票池（公平隨機基準）
+        analyzed_by_date: dict = defaultdict(set)
+        for ar_date, ar_sid in ar_rows:
+            analyzed_by_date[ar_date].add(ar_sid)
+
         pool_per_rec = []
         for r in recs:
-            alts = [sid for sid in all_ids if sid != r.stock_id and price_map.get(sid)]
+            day_pool = analyzed_by_date.get(r.date, set())
+            alts = [sid for sid in day_pool if sid != r.stock_id and price_map.get(sid)]
+            if not alts:  # fallback：用有價格的歷史推薦股
+                alts = [sid for sid in all_ids if sid != r.stock_id and price_map.get(sid)]
             pool_per_rec.append((r.date, alts))
 
         sim_means = []
@@ -1424,7 +1432,7 @@ def page_backtest():
             "t 值": f"{st_d['t']:.2f}",
             "p 值": f"{st_d['p']:.3f}",
             "顯著": "✅" if st_d["sig"] else "⚠️",
-            "MDD": f"{st_d['mdd']:.1f}%",
+            "推薦序列 MDD": f"{st_d['mdd']:.1f}%",
         })
     if tbl:
         st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
