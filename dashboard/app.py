@@ -1196,8 +1196,23 @@ def compute_backtest() -> pd.DataFrame:
         # 台股單邊交易成本：手續費(買+賣)×0.285% + 證交稅(賣)×0.3%，不含滑價
         ROUND_TRIP_COST = 0.585
 
+        # 20 個交易日冷卻期：同股票上次推薦後未滿 20 個交易日的重複推薦不算新樣本
+        last_rec_date: dict = {}
+        deduped_recs = []
+        for r in sorted(recs, key=lambda x: x.date):
+            prev = last_rec_date.get(r.stock_id)
+            if prev is None:
+                deduped_recs.append(r)
+                last_rec_date[r.stock_id] = r.date
+            else:
+                sp_chk = price_map.get(r.stock_id, [])
+                tdays = sum(1 for d, _ in sp_chk if prev < d <= r.date)
+                if tdays >= 20:
+                    deduped_recs.append(r)
+                    last_rec_date[r.stock_id] = r.date
+
         rows = []
-        for r in recs:
+        for r in deduped_recs:
             sp = price_map.get(r.stock_id, [])
             if not sp:
                 continue
@@ -1305,10 +1320,36 @@ def _calc_stats(ret: pd.Series, alpha: pd.Series, hold_days: int) -> dict:
     }
 
 
+def _calc_beta(ret_s: pd.Series, ret_m: pd.Series):
+    df = pd.DataFrame({"s": ret_s, "m": ret_m}).dropna()
+    if len(df) < 5: return None
+    var_m = df["m"].var()
+    return round(df["s"].cov(df["m"]) / var_m, 2) if var_m > 0 else None
+
+
+def _model_confidence(st_dict: dict) -> tuple:
+    """根據樣本數、p 值、Alpha、IR 計算模型信心分數（1–5 星）"""
+    if not st_dict:
+        return 1, "★☆☆☆☆", "樣本不足，無法評估"
+    n, p, alpha, ir = st_dict["n"], st_dict["p"], st_dict["mean_alpha"], st_dict["ir"]
+    score = 0
+    score += 3 if n >= 80 else 2 if n >= 40 else 1 if n >= 20 else 0   # 樣本數
+    score += 3 if p < 0.05 else 2 if p < 0.10 else 1 if p < 0.20 else 0  # p 值
+    score += 3 if alpha > 2 else 2 if alpha > 0.5 else 1 if alpha > 0 else 0  # Alpha
+    score += 3 if ir > 0.5 else 2 if ir > 0.2 else 1 if ir > 0 else 0    # IR
+    stars = max(1, min(5, round(score / 2.5 + 0.5)))
+    descs = {1: "效力存疑，請持續累積樣本",
+             2: "初步跡象，尚無統計支撐",
+             3: "尚可，需跨越更多市場環境",
+             4: "良好，具初步超額報酬能力",
+             5: "優秀，Alpha 統計顯著"}
+    return stars, "★" * stars + "☆" * (5 - stars), descs[stars]
+
+
 def page_backtest():
     import altair as alt
     from datetime import date as _date
-    st.markdown('<div class="section-title">🧪 超額報酬驗證</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🔬 模型驗證</div>', unsafe_allow_html=True)
 
     df = compute_backtest()
     if df.empty:
@@ -1323,54 +1364,67 @@ def page_backtest():
     st20 = _calc_stats(sub["ret_20d"], sub["a0050_20"].dropna(), 20)
     st20_56 = _calc_stats(sub["ret_20d"], sub["a0056_20"].dropna(), 20)
 
-    # ═══════════════════════════════════════════════════════════
-    # 誠實結論卡
-    # ═══════════════════════════════════════════════════════════
-    cutoff = date.today()
-    bench_mean = sub["b0050_20"].mean()
+    cutoff    = date.today()
     model_mean = sub["ret_20d"].mean()
+    bench_mean = sub["b0050_20"].mean()
     alpha_mean = sub["a0050_20"].mean()
     win_bench  = (sub["a0050_20"] > 0).mean() * 100
+    beta       = _calc_beta(sub["ret_20d"], sub["b0050_20"])
+    p_val      = st20["p"]   if st20 else None
+    ir         = st20["ir"]  if st20 else None
+    sharpe     = st20["sharpe"] if st20 else None
+    mdd        = st20["mdd"] if st20 else None
+    n_samp     = st20["n"]   if st20 else len(sub)
+    conf_stars, conf_str, conf_desc = _model_confidence(st20)
 
-    if st20:
-        p_val = st20["p"]
-        if p_val < 0.05:
-            verdict = "✅ **有統計顯著的超額報酬（p < 0.05）**"
-            verdict_color = "#00c851"
-        elif p_val < 0.15:
-            verdict = "⚠️ **初步跡象但尚不顯著（p < 0.15）**，需更多樣本"
-            verdict_color = "#ffbb33"
-        else:
-            verdict = "❌ **目前沒有足夠證據顯示模型優於大盤**"
-            verdict_color = "#ff4444"
+    if p_val is not None:
+        if p_val < 0.05:   verdict, verdict_color = "✅ 有統計顯著的超額報酬（p < 0.05）", "#00c851"
+        elif p_val < 0.15: verdict, verdict_color = "⚠️ 初步跡象但尚不顯著（p < 0.15）", "#ffbb33"
+        else:              verdict, verdict_color = "❌ 目前沒有足夠證據顯示模型優於大盤", "#ff4444"
     else:
-        verdict = "—"; verdict_color = "#888"
+        verdict, verdict_color = "—", "#888"
 
+    # ── 模型信心分數 ──────────────────────────────────────────
+    conf_color = ["#ff4444","#ff4444","#ffbb33","#ffbb33","#00c851"][conf_stars - 1]
     st.markdown(f"""
-<div style="background:#1a1a2e;border:1px solid #333;border-radius:12px;padding:20px 24px;margin-bottom:16px">
-  <div style="font-size:1rem;font-weight:700;color:#aaa;margin-bottom:12px">
-    📊 驗證結論（截至 {cutoff}）
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;margin-bottom:14px">
-    <div><span style="color:#888;font-size:0.8rem">推薦後 20 日均報酬（扣成本）</span><br>
-         <span style="font-size:1.3rem;font-weight:700;color:#667eea">{model_mean:+.2f}%</span></div>
-    <div><span style="color:#888;font-size:0.8rem">0050 同期均報酬</span><br>
-         <span style="font-size:1.3rem;font-weight:700;color:#aaa">{bench_mean:+.2f}%</span></div>
-    <div><span style="color:#888;font-size:0.8rem">Alpha（超額報酬）</span><br>
-         <span style="font-size:1.3rem;font-weight:700;color:{'#00c851' if alpha_mean>=0 else '#ff4444'}">{alpha_mean:+.2f}%</span></div>
-    <div><span style="color:#888;font-size:0.8rem">勝率 vs 0050</span><br>
-         <span style="font-size:1.3rem;font-weight:700;color:#aaa">{win_bench:.0f}%</span></div>
-  </div>
-  <div style="border-top:1px solid #333;padding-top:12px">
-    <div style="color:{verdict_color};font-size:0.95rem;margin-bottom:6px">{verdict}</div>
-    {"<div style='color:#888;font-size:0.8rem'>統計檢定 p = " + f"{p_val:.3f}" + " （樣本 " + str(st20['n']) + " 筆）</div>" if st20 else ""}
-    <div style="color:#888;font-size:0.78rem;margin-top:6px">
-      ⚠️ 回測期間仍偏短，需持續累積不同市場環境的樣本（目標：跨越 1～2 個完整財報週期）<br>
-      ⚠️ 報酬已扣除手續費＋證交稅（0.585%），未扣滑價。同一檔若多次被推薦，樣本非完全獨立，p 值可能偏樂觀。
+<div style="background:#1a1a2e;border:1px solid #333;border-radius:12px;padding:16px 20px;margin-bottom:12px">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div style="font-size:1.5rem;color:{conf_color}">{conf_str}</div>
+    <div>
+      <div style="font-size:0.7rem;color:#888">模型信心分數（樣本數 · p 值 · Alpha · IR 綜合）</div>
+      <div style="font-size:0.85rem;color:{conf_color};font-weight:600">{conf_desc}</div>
     </div>
   </div>
-</div>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
+
+    # ── 完整指標卡 ────────────────────────────────────────────
+    def _m(label, val, color="#fff"):
+        return f'<div style="background:#111;border-radius:8px;padding:10px 12px"><div style="font-size:0.68rem;color:#888">{label}</div><div style="font-size:1.1rem;font-weight:700;color:{color}">{val}</div></div>'
+
+    ac = "#00c851" if alpha_mean >= 0 else "#ff4444"
+    st.markdown(f"""
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+  {_m("樣本數（冷卻後）", f"{n_samp} 筆")}
+  {_m("20日均報酬（扣成本）", f"{model_mean:+.2f}%", "#667eea")}
+  {_m("Alpha vs 0050", f"{alpha_mean:+.2f}%", ac)}
+  {_m("Beta", f"{beta:.2f}" if beta is not None else "—")}
+  {_m("Sharpe Ratio", f"{sharpe:.2f}" if sharpe is not None else "—")}
+  {_m("IR（資訊比率）", f"{ir:.2f}" if ir is not None else "—")}
+  {_m("p 值", f"{p_val:.3f}" if p_val is not None else "—")}
+  {_m("勝率 vs 0050", f"{win_bench:.0f}%")}
+  {_m("推薦序列 MDD", f"{mdd:.1f}%" if mdd is not None else "—")}
+</div>""", unsafe_allow_html=True)
+
+    # ── 結論 ──────────────────────────────────────────────────
+    st.markdown(f"""
+<div style="background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:12px 16px;margin-bottom:16px">
+  <div style="color:{verdict_color};font-size:0.95rem;font-weight:600">{verdict}</div>
+  <div style="color:#888;font-size:0.75rem;margin-top:6px">
+    ⚠️ 報酬已扣手續費＋證交稅（0.585%），未扣滑價 ·
+    已套用 20 交易日冷卻期去除重複推薦 ·
+    回測期間偏短，需持續累積跨越完整財報週期的樣本
+  </div>
+</div>""", unsafe_allow_html=True)
 
     # ── Monte Carlo 隨機選股基準 ──────────────────────────────
     st.markdown("#### 🎲 隨機選股基準（Monte Carlo 1000 次模擬）")
@@ -1986,7 +2040,7 @@ def main():
     """, unsafe_allow_html=True)
 
     # Tab 導航（電腦版是橫向底線樣式，手機版是圓角膠囊樣式）
-    tabs = st.tabs(["📊今日", "🔍個股", "📋歷史", "📈持倉", "🧪回測", "💼我的交易", "📖說明", "⚙️設定"])
+    tabs = st.tabs(["📊今日", "🔍個股", "📋歷史", "📈持倉", "🔬模型驗證", "💼我的交易", "📖說明", "⚙️設定"])
 
     with tabs[0]:
         page_today(sel_date)
