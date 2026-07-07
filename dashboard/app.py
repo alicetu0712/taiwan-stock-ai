@@ -551,23 +551,27 @@ def render_rec_card(r: dict):
     target_price    = r.get("target_price")
     stop_loss_price = r.get("stop_loss_price")
     position_pct    = r.get("position_pct")
+    target_is_est   = False
     if price and not target_price:
         target_price    = round(price * 1.10, 1)
         stop_loss_price = round(price * 0.93, 1)
+        target_is_est   = True
     price_block = ""
     if price and target_price:
         target_pct   = round((target_price    - price) / price * 100, 1)
         stoploss_pct = round((stop_loss_price - price) / price * 100, 1)
         pos_str = f"　建議部位 {position_pct:.0f}%" if position_pct else ""
+        tp_label = "目標價 (估)" if target_is_est else "目標價"
+        sl_label = "停損價 (估)" if target_is_est else "停損價"
         price_block = f"""
       <div style="display:flex;gap:8px;margin:8px 0 4px;flex-wrap:wrap">
         <div style="flex:1;min-width:80px;background:#e8f5e9;border-radius:6px;padding:6px 10px;text-align:center">
-          <div style="font-size:0.65rem;color:#2e7d32;font-weight:600">目標價</div>
+          <div style="font-size:0.65rem;color:#2e7d32;font-weight:600">{tp_label}</div>
           <div style="font-size:0.95rem;font-weight:800;color:#2e7d32">{target_price:,.1f}</div>
           <div style="font-size:0.65rem;color:#2e7d32">+{target_pct}%</div>
         </div>
         <div style="flex:1;min-width:80px;background:#fce4ec;border-radius:6px;padding:6px 10px;text-align:center">
-          <div style="font-size:0.65rem;color:#c62828;font-weight:600">停損價</div>
+          <div style="font-size:0.65rem;color:#c62828;font-weight:600">{sl_label}</div>
           <div style="font-size:0.95rem;font-weight:800;color:#c62828">{stop_loss_price:,.1f}</div>
           <div style="font-size:0.65rem;color:#c62828">{stoploss_pct}%</div>
         </div>
@@ -1186,6 +1190,9 @@ def compute_backtest() -> pd.DataFrame:
                 return round((exit_c - entry) / entry * 100, 2), entry
             return None, entry
 
+        # 台股單邊交易成本：手續費(買+賣)×0.285% + 證交稅(賣)×0.3%，不含滑價
+        ROUND_TRIP_COST = 0.585
+
         rows = []
         for r in recs:
             sp = price_map.get(r.stock_id, [])
@@ -1193,6 +1200,11 @@ def compute_backtest() -> pd.DataFrame:
                 continue
             s20, entry = _ret_at(sp, r.date, 20)
             s60, _     = _ret_at(sp, r.date, 60)
+            # 扣除交易成本（買進 + 賣出）
+            if s20 is not None:
+                s20 = round(s20 - ROUND_TRIP_COST, 2)
+            if s60 is not None:
+                s60 = round(s60 - ROUND_TRIP_COST, 2)
             b0050_20, _ = _ret_at(price_map.get("0050", []), r.date, 20)
             b0050_60, _ = _ret_at(price_map.get("0050", []), r.date, 60)
             b0056_20, _ = _ret_at(price_map.get("0056", []), r.date, 20)
@@ -1208,11 +1220,11 @@ def compute_backtest() -> pd.DataFrame:
                 "b0050_60": b0050_60, "b0056_60": b0056_60,
                 "a0050_20": _a(s20, b0050_20), "a0056_20": _a(s20, b0056_20),
                 "a0050_60": _a(s60, b0050_60), "a0056_60": _a(s60, b0056_60),
-                # 用於 Monte Carlo：存下可用的 non-self 股票 ID
                 "_all_ids": list(all_ids - {r.stock_id}),
             })
         return pd.DataFrame(rows)
-    except Exception:
+    except Exception as e:
+        logger.exception(f"compute_backtest failed: {e}")
         return pd.DataFrame()
 
 
@@ -1267,7 +1279,8 @@ def compute_random_baseline(n_sim: int = 1000) -> dict:
             if sim_rets:
                 sim_means.append(sum(sim_rets) / len(sim_rets))
         return {"sim_means": sim_means, "n_sim": n_sim}
-    except Exception:
+    except Exception as e:
+        logger.exception(f"compute_random_baseline failed: {e}")
         return {}
 
 
@@ -1334,7 +1347,7 @@ def page_backtest():
     📊 驗證結論（截至 {cutoff}）
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;margin-bottom:14px">
-    <div><span style="color:#888;font-size:0.8rem">推薦後 20 日均報酬</span><br>
+    <div><span style="color:#888;font-size:0.8rem">推薦後 20 日均報酬（扣成本）</span><br>
          <span style="font-size:1.3rem;font-weight:700;color:#667eea">{model_mean:+.2f}%</span></div>
     <div><span style="color:#888;font-size:0.8rem">0050 同期均報酬</span><br>
          <span style="font-size:1.3rem;font-weight:700;color:#aaa">{bench_mean:+.2f}%</span></div>
@@ -1347,7 +1360,8 @@ def page_backtest():
     <div style="color:{verdict_color};font-size:0.95rem;margin-bottom:6px">{verdict}</div>
     {"<div style='color:#888;font-size:0.8rem'>統計檢定 p = " + f"{p_val:.3f}" + " （樣本 " + str(st20['n']) + " 筆）</div>" if st20 else ""}
     <div style="color:#888;font-size:0.78rem;margin-top:6px">
-      ⚠️ 回測期間仍偏短，需持續累積不同市場環境的樣本（目標：跨越 1～2 個完整財報週期）
+      ⚠️ 回測期間仍偏短，需持續累積不同市場環境的樣本（目標：跨越 1～2 個完整財報週期）<br>
+      ⚠️ 報酬已扣除手續費＋證交稅（0.585%），未扣滑價。同一檔若多次被推薦，樣本非完全獨立，p 值可能偏樂觀。
     </div>
   </div>
 </div>
@@ -1355,7 +1369,7 @@ def page_backtest():
 
     # ── Monte Carlo 隨機選股基準 ──────────────────────────────
     st.markdown("#### 🎲 隨機選股基準（Monte Carlo 1000 次模擬）")
-    st.caption("在相同日期隨機從分析股票池中選一支（排除實際推薦股），重複 1000 次，比較模型是否有識別能力。")
+    st.caption("在相同日期隨機從當天 AnalysisResult 股票池中選一支（排除實際推薦股，限有價格資料者），重複 1000 次，比較模型是否有識別能力。")
 
     with st.spinner("計算中…"):
         mc = compute_random_baseline(1000)
