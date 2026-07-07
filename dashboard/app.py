@@ -1727,7 +1727,7 @@ def page_settings(selected_date: date):
         st.markdown("**查看日期**")
         _min_date = date(2025, 1, 1)
         _clamped  = max(selected_date, _min_date)
-        new_date = st.date_input("", value=_clamped,
+        new_date = st.date_input("分析日期", value=_clamped,
                                  min_value=_min_date, max_value=date.today(),
                                  label_visibility="collapsed")
         if new_date != selected_date:
@@ -1925,9 +1925,10 @@ def page_my_trades():
                 cur_date_label = "—"
 
         days_held    = (date.today() - trade.buy_date).days
-        eff_buy      = trade.buy_price * (1 + BUY_FEE)   # 含買入手續費的每股成本
-        pnl_pct      = (cur - eff_buy) / eff_buy * 100    if cur else None
-        pnl_amount   = (cur - eff_buy) * trade.shares      if cur else None
+        eff_buy      = trade.buy_price * (1 + BUY_FEE)       # 含買入手續費的每股成本
+        net_cur      = cur * (1 - SELL_FEE) if cur else None  # 含賣出手續費+稅的淨收入
+        pnl_pct      = (net_cur - eff_buy) / eff_buy * 100    if net_cur else None
+        pnl_amount   = (net_cur - eff_buy) * trade.shares      if net_cur else None
         total_cost   = eff_buy * trade.shares
 
         if cur and trade.stop_price and cur < trade.stop_price:
@@ -1951,7 +1952,7 @@ def page_my_trades():
             <div style="text-align:right">
               <div style="font-size:1.4rem;font-weight:800;color:{pnl_color}">{f"{pnl_pct:+.2f}%" if pnl_pct is not None else "—"}</div>
               <div style="font-size:0.75rem;color:{pnl_color}">{f"{pnl_amount:+,.0f}元" if pnl_amount is not None else ""}</div>
-              <div style="font-size:0.6rem;color:#aaa">未含賣出手續費+稅 0.4425%</div>
+              <div style="font-size:0.6rem;color:#aaa">含買賣手續費及證交稅</div>
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">

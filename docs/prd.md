@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.8.15（2026-07-07）
+當前版本：v6.8.16（2026-07-07）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -4007,6 +4007,11 @@ Chapter 19 完
     - 新增 load_stock_list()：回傳「名稱（代號）」格式清單，TTL=86400
     - 表單改為 st.selectbox，輸入股票名稱或代號皆可搜尋
     - 選擇後 stock_id 與 stock_name 自動帶入，不需手動填代號
+✅ 持倉損益改含賣出費用 + 空 label 修正（v6.8.16）：
+  - 未實現損益改為「假設現在賣出」完整損益（對齊華銀等券商 APP 顯示邏輯）：
+    net_cur = 現價 × (1 − 0.4425%)，P&L = (net_cur − eff_buy) × 股數
+  - 說明文字從「未含賣出手續費+稅」改為「含買賣手續費及證交稅」
+  - 修正 page_settings st.date_input("") 空 label → 新版 Streamlit 會 crash
 
 ---
 
