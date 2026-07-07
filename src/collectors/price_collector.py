@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def _get(url: str, timeout: int = HTTP_TIMEOUT) -> Optional[list]:
     for attempt in range(HTTP_RETRY):
         try:
-            resp = requests.get(url, headers=HTTP_HEADERS, timeout=timeout)
+            resp = requests.get(url, headers=HTTP_HEADERS, timeout=timeout, verify=False)
             resp.raise_for_status()
             data = resp.json()
             return data
