@@ -380,15 +380,19 @@ def load_db_recommendations(target_date: date) -> list:
         ar_map = {r.stock_id: r for r in s.execute(
             select(AnalysisResult).where(AnalysisResult.date == target_date)
         ).scalars().all()}
+        # 補充 PositionMonitor（目標價 / 停損 / 部位）
+        from src.database import PositionMonitor
+        pm_map = {r.stock_id: r for r in s.execute(select(PositionMonitor)).scalars().all()}
         s.close()
         result = []
         for r in recs_rows:
             ar = ar_map.get(r.stock_id)
+            pm = pm_map.get(r.stock_id)
             result.append({
-                "name":       stock_name_map.get(r.stock_id, ""),
-                "sid":        r.stock_id,
-                "price":      None,
-                "level":      r.rec_level or "B",
+                "name":            stock_name_map.get(r.stock_id, ""),
+                "sid":             r.stock_id,
+                "price":           None,
+                "level":           r.rec_level or "B",
                 "scores": {
                     "quality":  ar.quality_score  if ar else 0,
                     "timing":   ar.timing_score   if ar else 0,
@@ -396,12 +400,15 @@ def load_db_recommendations(target_date: date) -> list:
                     "risk":     ar.risk_score     if ar else 0,
                     "total":    ar.total_score    if ar else 0,
                 },
-                "confidence": r.confidence or 0,
-                "advantages": json.loads(r.advantages)   if r.advantages   else [],
-                "risks":      json.loads(r.risks)        if r.risks        else [],
-                "watch":      json.loads(r.watch_points) if r.watch_points else [],
-                "conclusion": r.ai_conclusion or "",
-                "summary":    r.summary or "",
+                "confidence":      r.confidence or 0,
+                "advantages":      json.loads(r.advantages)   if r.advantages   else [],
+                "risks":           json.loads(r.risks)        if r.risks        else [],
+                "watch":           json.loads(r.watch_points) if r.watch_points else [],
+                "conclusion":      r.ai_conclusion or "",
+                "summary":         r.summary or "",
+                "target_price":    pm.target_price    if pm else None,
+                "stop_loss_price": pm.stop_loss_price if pm else None,
+                "position_pct":    pm.position_pct    if pm else None,
             })
         return result
     except Exception:
@@ -513,6 +520,37 @@ def render_rec_card(r: dict):
     price     = r.get("price")
     price_str = f"　NT$ {price:,.1f}" if price else ""
 
+    # 目標價 / 停損價：優先用 PositionMonitor，其次用當前價格估算
+    target_price    = r.get("target_price")
+    stop_loss_price = r.get("stop_loss_price")
+    position_pct    = r.get("position_pct")
+    if price and not target_price:
+        target_price    = round(price * 1.10, 1)
+        stop_loss_price = round(price * 0.93, 1)
+    price_block = ""
+    if price and target_price:
+        target_pct   = round((target_price    - price) / price * 100, 1)
+        stoploss_pct = round((stop_loss_price - price) / price * 100, 1)
+        pos_str = f"　建議部位 {position_pct:.0f}%" if position_pct else ""
+        price_block = f"""
+      <div style="display:flex;gap:8px;margin:8px 0 4px;flex-wrap:wrap">
+        <div style="flex:1;min-width:80px;background:#e8f5e9;border-radius:6px;padding:6px 10px;text-align:center">
+          <div style="font-size:0.65rem;color:#2e7d32;font-weight:600">目標價</div>
+          <div style="font-size:0.95rem;font-weight:800;color:#2e7d32">{target_price:,.1f}</div>
+          <div style="font-size:0.65rem;color:#2e7d32">+{target_pct}%</div>
+        </div>
+        <div style="flex:1;min-width:80px;background:#fce4ec;border-radius:6px;padding:6px 10px;text-align:center">
+          <div style="font-size:0.65rem;color:#c62828;font-weight:600">停損價</div>
+          <div style="font-size:0.95rem;font-weight:800;color:#c62828">{stop_loss_price:,.1f}</div>
+          <div style="font-size:0.65rem;color:#c62828">{stoploss_pct}%</div>
+        </div>
+        <div style="flex:1;min-width:80px;background:#f3e5f5;border-radius:6px;padding:6px 10px;text-align:center">
+          <div style="font-size:0.65rem;color:#6a1b9a;font-weight:600">現價</div>
+          <div style="font-size:0.95rem;font-weight:800;color:#6a1b9a">{price:,.1f}</div>
+          <div style="font-size:0.65rem;color:#6a1b9a">{pos_str.strip() or '—'}</div>
+        </div>
+      </div>"""
+
     name = r.get("name", "")
     sid  = r.get("sid", "")
     name_html = (
@@ -529,6 +567,7 @@ def render_rec_card(r: dict):
         <span class="rec-badge badge-{grade_c}">{level} 級</span>
       </div>
       {score_bars}
+      {price_block}
       <div class="tags">{adv_tags}{risk_tags}</div>
       {f'<div class="tags">{watch_tags}</div>' if watch_tags else ''}
       <div class="confidence-row">
