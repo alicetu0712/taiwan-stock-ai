@@ -381,8 +381,19 @@ def load_db_recommendations(target_date: date) -> list:
             select(AnalysisResult).where(AnalysisResult.date == target_date)
         ).scalars().all()}
         # 補充 PositionMonitor（目標價 / 停損 / 部位）
-        from src.database import PositionMonitor
+        from src.database import PositionMonitor, DailyPrice
+        from sqlalchemy import desc as _desc
         pm_map = {r.stock_id: r for r in s.execute(select(PositionMonitor)).scalars().all()}
+        # 從 DB 拿推薦股票最新收盤價（比 TWSE API 更可靠）
+        rec_ids = [r.stock_id for r in recs_rows]
+        db_price_map = {}
+        for sid in rec_ids:
+            dp = s.execute(
+                select(DailyPrice).where(DailyPrice.stock_id == sid)
+                .order_by(_desc(DailyPrice.date)).limit(1)
+            ).scalar_one_or_none()
+            if dp:
+                db_price_map[sid] = dp.close
         s.close()
         result = []
         for r in recs_rows:
@@ -391,7 +402,7 @@ def load_db_recommendations(target_date: date) -> list:
             result.append({
                 "name":            stock_name_map.get(r.stock_id, ""),
                 "sid":             r.stock_id,
-                "price":           None,
+                "price":           db_price_map.get(r.stock_id),
                 "level":           r.rec_level or "B",
                 "scores": {
                     "quality":  ar.quality_score  if ar else 0,
