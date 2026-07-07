@@ -142,7 +142,7 @@ def main():
 
     from src.database import (
         AnalysisResult, Recommendation, DailyReport, ExecutionLog,
-        DecisionJournal, ResearchStatus, Stock, PositionMonitor, DailyPrice,
+        DecisionJournal, ResearchStatus, Stock, PositionMonitor, DailyPrice, UserTrade,
     )
 
     total = 0
@@ -218,6 +218,24 @@ def main():
             neon_s.commit()
             logger.info(f"  daily_prices (推薦股票): 新增 {dp_ins}，更新 {dp_upd}")
             total += dp_ins + dp_upd
+
+        # UserTrade（全量同步，確保本機與雲端一致）
+        from sqlalchemy import inspect as _insp_ut
+        ut_cols = [c.key for c in _insp_ut(UserTrade).columns]
+        ut_rows = local_s.query(UserTrade).all()
+        ut_ins = ut_upd = 0
+        for row in ut_rows:
+            existing = neon_s.query(UserTrade).filter_by(id=row.id).first()
+            if existing:
+                for col in ut_cols:
+                    if col != "id": setattr(existing, col, getattr(row, col))
+                ut_upd += 1
+            else:
+                neon_s.add(UserTrade(**{col: getattr(row, col) for col in ut_cols}))
+                ut_ins += 1
+        neon_s.commit()
+        logger.info(f"  user_trades: 新增 {ut_ins}，更新 {ut_upd}")
+        total += ut_ins + ut_upd
 
         # ResearchStatus（無日期欄位，全量同步）
         rs_rows = local_s.query(ResearchStatus).all()

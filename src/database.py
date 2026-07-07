@@ -232,6 +232,28 @@ class PositionMonitor(Base):
     updated_at       = Column(DateTime, default=datetime.utcnow)
 
 
+class UserTrade(Base):
+    """使用者真實下單紀錄"""
+    __tablename__ = "user_trades"
+
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    stock_id     = Column(String(10), nullable=False)
+    stock_name   = Column(String(50))
+    buy_date     = Column(Date, nullable=False)
+    buy_price    = Column(Float, nullable=False)
+    shares       = Column(Integer, nullable=False, default=1)  # 張數
+    target_price = Column(Float)      # 自設目標價
+    stop_price   = Column(Float)      # 自設停損價
+    status       = Column(String(10), default="holding")  # holding / closed
+    sell_date    = Column(Date)
+    sell_price   = Column(Float)
+    realized_pnl = Column(Float)      # 實現損益（元）
+    realized_pct = Column(Float)      # 實現損益（%）
+    notes        = Column(Text)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+    updated_at   = Column(DateTime, default=datetime.utcnow)
+
+
 class ExecutionLog(Base):
     """每日執行記錄"""
     __tablename__ = "execution_logs"
