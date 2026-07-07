@@ -1227,6 +1227,11 @@ def compute_backtest() -> pd.DataFrame:
             b0050_60, _ = _ret_at(price_map.get("0050", []), r.date, 60)
             b0056_20, _ = _ret_at(price_map.get("0056", []), r.date, 20)
             b0056_60, _ = _ret_at(price_map.get("0056", []), r.date, 60)
+            # benchmark 同樣扣成本，使比較基準一致
+            if b0050_20 is not None: b0050_20 = round(b0050_20 - ROUND_TRIP_COST, 2)
+            if b0050_60 is not None: b0050_60 = round(b0050_60 - ROUND_TRIP_COST, 2)
+            if b0056_20 is not None: b0056_20 = round(b0056_20 - ROUND_TRIP_COST, 2)
+            if b0056_60 is not None: b0056_60 = round(b0056_60 - ROUND_TRIP_COST, 2)
 
             def _a(s, b): return round(s - b, 2) if s is not None and b is not None else None
 
@@ -1268,11 +1273,32 @@ def compute_random_baseline(n_sim: int = 1000) -> dict:
         for p in all_prices_q:
             price_map[p.stock_id].append((p.date, p.close))
 
+        ROUND_TRIP_COST = 0.585  # 與 compute_backtest 一致
+
         def _ret20(plist, ref_date):
-            # 第 20 個交易日報酬（非日曆天）
             after = [(d, c) for d, c in plist if d >= ref_date and c]
             if len(after) <= 20: return None
             return (after[20][1] - after[0][1]) / after[0][1] * 100
+
+        # 與 compute_backtest 相同的 20 交易日冷卻期，過濾 recs
+        _last: dict = {}
+        deduped = []
+        for r in sorted(recs, key=lambda x: x.date):
+            prev = _last.get(r.stock_id)
+            if prev is None:
+                deduped.append(r); _last[r.stock_id] = r.date
+            else:
+                tdays = sum(1 for d, _ in price_map.get(r.stock_id, []) if prev < d <= r.date)
+                if tdays >= 20:
+                    deduped.append(r); _last[r.stock_id] = r.date
+
+        # 預建日期索引，供冷卻期快速查詢
+        import bisect as _bs
+        dates_idx = {sid: sorted(d for d, _ in plist) for sid, plist in price_map.items()}
+
+        def _tdays(sid, d1, d2):
+            dl = dates_idx.get(sid, [])
+            return _bs.bisect_right(dl, d2) - _bs.bisect_right(dl, d1)
 
         # 從 AnalysisResult 取每天實際分析過的股票池（公平隨機基準）
         analyzed_by_date: dict = defaultdict(set)
@@ -1280,22 +1306,27 @@ def compute_random_baseline(n_sim: int = 1000) -> dict:
             analyzed_by_date[ar_date].add(ar_sid)
 
         pool_per_rec = []
-        for r in recs:
+        for r in deduped:
             day_pool = analyzed_by_date.get(r.date, set())
             alts = [sid for sid in day_pool if sid != r.stock_id and price_map.get(sid)]
-            if not alts:  # fallback：用有價格的歷史推薦股
+            if not alts:
                 alts = [sid for sid in all_ids if sid != r.stock_id and price_map.get(sid)]
             pool_per_rec.append((r.date, alts))
 
         sim_means = []
         for _ in range(n_sim):
             sim_rets = []
+            last_pick: dict = {}  # 每次模擬獨立冷卻追蹤
             for ref_date, alts in pool_per_rec:
                 if not alts: continue
-                sid = _rnd.choice(alts)
+                # 冷卻期過濾：同股票 20 個交易日內不重複抽取
+                eligible = [s for s in alts if
+                            last_pick.get(s) is None or _tdays(s, last_pick[s], ref_date) >= 20]
+                sid = _rnd.choice(eligible if eligible else alts)
+                last_pick[sid] = ref_date
                 ret = _ret20(price_map[sid], ref_date)
                 if ret is not None:
-                    sim_rets.append(ret)
+                    sim_rets.append(ret - ROUND_TRIP_COST)  # 扣同樣交易成本
             if sim_rets:
                 sim_means.append(sum(sim_rets) / len(sim_rets))
         return {"sim_means": sim_means, "n_sim": n_sim}
@@ -1405,8 +1436,8 @@ def page_backtest():
     st.markdown(f"""
 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
   {_m("樣本數（冷卻後）", f"{n_samp} 筆")}
-  {_m("20日均報酬（扣成本）", f"{model_mean:+.2f}%", "#667eea")}
-  {_m("Alpha vs 0050", f"{alpha_mean:+.2f}%", ac)}
+  {_m("20日均報酬（淨）", f"{model_mean:+.2f}%", "#667eea")}
+  {_m("Alpha vs 0050（淨）", f"{alpha_mean:+.2f}%", ac)}
   {_m("Beta", f"{beta:.2f}" if beta is not None else "—")}
   {_m("Sharpe Ratio", f"{sharpe:.2f}" if sharpe is not None else "—")}
   {_m("IR（資訊比率）", f"{ir:.2f}" if ir is not None else "—")}
@@ -1420,8 +1451,8 @@ def page_backtest():
 <div style="background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:12px 16px;margin-bottom:16px">
   <div style="color:{verdict_color};font-size:0.95rem;font-weight:600">{verdict}</div>
   <div style="color:#888;font-size:0.75rem;margin-top:6px">
-    ⚠️ 報酬已扣手續費＋證交稅（0.585%），未扣滑價 ·
-    已套用 20 交易日冷卻期去除重複推薦 ·
+    ⚠️ 模型、0050、0056、隨機基準報酬均已扣除單次買賣成本 0.585%（手續費＋證交稅），未扣滑價 ·
+    模型與隨機基準均套用 20 交易日冷卻期（同股票不重複計算）·
     回測期間偏短，需持續累積跨越完整財報週期的樣本
   </div>
 </div>""", unsafe_allow_html=True)
@@ -1439,7 +1470,7 @@ def page_backtest():
         percentile = sum(1 for x in sim_means if x < model_mean) / len(sim_means) * 100
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("模型 20日均報酬", f"{model_mean:+.2f}%")
+        c1.metric("模型 20日均報酬（淨）", f"{model_mean:+.2f}%")
         c2.metric("隨機選股均報酬", f"{rand_mean:+.2f}%",
                   f"{'模型領先' if model_mean > rand_mean else '模型落後'} {abs(model_mean-rand_mean):.2f}%",
                   delta_color="normal" if model_mean > rand_mean else "inverse")
