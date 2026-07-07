@@ -15,15 +15,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RiskResult:
     """風險分析結果"""
-    stock_id:       str
-    risk_score:     float = 100.0   # 0-100，越高越安全
-    risk_grade:     str   = "A"     # A/B/C/D/E
-    company_risk:   str   = "low"
-    technical_risk: str   = "low"
-    market_risk:    str   = "low"
-    liquidity_risk: str   = "low"
-    risk_factors:   List[str] = field(default_factory=list)
-    summary:        str   = ""
+
+    stock_id: str
+    risk_score: float = 100.0  # 0-100，越高越安全
+    risk_grade: str = "A"  # A/B/C/D/E
+    company_risk: str = "low"
+    technical_risk: str = "low"
+    market_risk: str = "low"
+    liquidity_risk: str = "low"
+    risk_factors: List[str] = field(default_factory=list)
+    summary: str = ""
 
 
 class RiskAnalyzer:
@@ -34,19 +35,19 @@ class RiskAnalyzer:
 
     def analyze(
         self,
-        stock_id:        str,
-        technical_result = None,    # TechnicalResult
-        behavior_result  = None,    # MarketBehaviorResult
-        fin_summary:     dict = None,
+        stock_id: str,
+        technical_result=None,  # TechnicalResult
+        behavior_result=None,  # MarketBehaviorResult
+        fin_summary: dict = None,
         market_sentiment: dict = None,
-        close:           float = None,
-        volume:          float = None,
-        avg_volume:      float = None,
+        close: float = None,
+        volume: float = None,
+        avg_volume: float = None,
         upcoming_events: List[str] = None,
     ) -> RiskResult:
         """主要入口：綜合風險評分。"""
-        result    = RiskResult(stock_id=stock_id)
-        score     = 100.0
+        result = RiskResult(stock_id=stock_id)
+        score = 100.0
         risk_factors = []
 
         # ── 技術風險（PRD 12.6）─────────────────────────────
@@ -96,19 +97,21 @@ class RiskAnalyzer:
             score -= evt_deduct
             risk_factors.extend(evt_factors)
 
-        result.risk_score   = round(max(0.0, min(100.0, score)), 1)
-        result.risk_grade   = self._to_grade(result.risk_score)
+        result.risk_score = round(max(0.0, min(100.0, score)), 1)
+        result.risk_grade = self._to_grade(result.risk_score)
         result.risk_factors = risk_factors
-        result.summary      = self._build_summary(result)
+        result.summary = self._build_summary(result)
 
-        logger.debug(f"{stock_id}: Risk Score={result.risk_score:.1f} ({result.risk_grade})")
+        logger.debug(
+            f"{stock_id}: Risk Score={result.risk_score:.1f} ({result.risk_grade})"
+        )
         return result
 
     # ── 子評估方法 ────────────────────────────────────────────
 
     def _technical_risk(self, tech) -> tuple:
         """技術面風險扣分。"""
-        deduct  = 0
+        deduct = 0
         factors = []
 
         # RSI 過熱
@@ -149,7 +152,7 @@ class RiskAnalyzer:
 
     def _chip_risk(self, behavior) -> tuple:
         """籌碼風險扣分。"""
-        deduct  = 0
+        deduct = 0
         factors = []
 
         if behavior.foreign_signal == "bearish":
@@ -166,7 +169,7 @@ class RiskAnalyzer:
 
     def _company_risk(self, fin_summary: dict) -> tuple:
         """公司財務風險扣分。"""
-        deduct  = 0
+        deduct = 0
         factors = []
 
         eps_trend = fin_summary.get("eps_trend", "unknown")
@@ -197,13 +200,13 @@ class RiskAnalyzer:
         avg_volume: Optional[float],
     ) -> tuple:
         """流動性風險扣分。"""
-        deduct  = 0
+        deduct = 0
         factors = []
 
         if volume is None or avg_volume is None:
             return deduct, factors
 
-        if avg_volume < 100:   # 日均成交量 < 100 張
+        if avg_volume < 100:  # 日均成交量 < 100 張
             deduct += 25
             factors.append(f"成交量偏低（均量 {avg_volume:.0f} 張），流動性不足")
         elif avg_volume < 500:
@@ -219,7 +222,7 @@ class RiskAnalyzer:
 
     def _market_risk(self, market_sentiment: dict) -> tuple:
         """市場整體風險扣分。"""
-        deduct  = 0
+        deduct = 0
         factors = []
 
         sentiment = market_sentiment.get("sentiment", "Neutral")
@@ -233,7 +236,7 @@ class RiskAnalyzer:
 
     def _event_risk(self, events: List[str]) -> tuple:
         """即將到來的重大事件風險扣分。"""
-        deduct  = 0
+        deduct = 0
         factors = []
 
         if not events:
@@ -259,11 +262,15 @@ class RiskAnalyzer:
         return deduct, factors
 
     def _to_grade(self, score: float) -> str:
-        if score >= 80:   return "A"   # 低風險
-        elif score >= 65: return "B"   # 普通
-        elif score >= 50: return "C"   # 偏高
-        elif score >= 35: return "D"   # 高風險
-        return "E"   # 避免研究
+        if score >= 80:
+            return "A"  # 低風險
+        elif score >= 65:
+            return "B"  # 普通
+        elif score >= 50:
+            return "C"  # 偏高
+        elif score >= 35:
+            return "D"  # 高風險
+        return "E"  # 避免研究
 
     def _build_summary(self, r: "RiskResult") -> str:
         if not r.risk_factors:

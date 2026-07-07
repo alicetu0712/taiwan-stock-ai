@@ -9,7 +9,6 @@ import logging
 from datetime import date
 from typing import Tuple
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -29,10 +28,12 @@ class DataValidator:
       - 是否有異常值
     """
 
-    PRICE_ABNORMAL_THRESHOLD = 1e9     # 成交量/金額異常門檻
-    MIN_VALID_STOCKS          = 100    # 最少需要幾檔股票資料才視為有效
+    PRICE_ABNORMAL_THRESHOLD = 1e9  # 成交量/金額異常門檻
+    MIN_VALID_STOCKS = 100  # 最少需要幾檔股票資料才視為有效
 
-    def validate_price_data(self, df: pd.DataFrame, trade_date: date) -> Tuple[bool, str]:
+    def validate_price_data(
+        self, df: pd.DataFrame, trade_date: date
+    ) -> Tuple[bool, str]:
         """
         驗證每日股價資料。
         回傳 (is_valid, message)
@@ -55,7 +56,9 @@ class DataValidator:
         if "date" in df.columns:
             dup_count = df.duplicated(subset=["stock_id", "date"]).sum()
             if dup_count > 0:
-                logger.warning(f"股價資料有 {dup_count} 筆重複 (stock_id, date)，已自動去重。")
+                logger.warning(
+                    f"股價資料有 {dup_count} 筆重複 (stock_id, date)，已自動去重。"
+                )
                 df.drop_duplicates(subset=["stock_id", "date"], inplace=True)
 
         # 異常值偵測（成交量異常大）
@@ -69,7 +72,10 @@ class DataValidator:
         # 檢查收盤價合理性（不應為 0 或負數）
         invalid_close = df[(df["close"].isna()) | (df["close"] <= 0)]
         if len(invalid_close) > len(df) * 0.2:
-            return False, f"超過 20% 的股票收盤價異常（{len(invalid_close)} 筆），資料可能不完整。"
+            return (
+                False,
+                f"超過 20% 的股票收盤價異常（{len(invalid_close)} 筆），資料可能不完整。",
+            )
 
         logger.info(f"股價資料驗證通過：{len(df)} 筆 | 日期：{trade_date}")
         return True, "OK"
@@ -122,7 +128,10 @@ class DataValidator:
         """
         stock_df = df[df["stock_id"] == stock_id]
         if len(stock_df) < min_days:
-            return False, f"{stock_id}：歷史資料不足 {min_days} 天（{len(stock_df)} 天），跳過技術分析。"
+            return (
+                False,
+                f"{stock_id}：歷史資料不足 {min_days} 天（{len(stock_df)} 天），跳過技術分析。",
+            )
         return True, "OK"
 
     def generate_data_quality_report(
@@ -136,8 +145,8 @@ class DataValidator:
         生成資料品質摘要供 Dashboard 顯示。
         """
         return {
-            "price_data":        "✅ 正常" if price_valid else "❌ 異常",
+            "price_data": "✅ 正常" if price_valid else "❌ 異常",
             "institutional_data": "✅ 正常" if inst_valid else "⚠️ 缺漏",
             "financial_coverage": f"{n_financial_ok}/{n_total} 筆有財務資料",
-            "overall_status":    "完整" if (price_valid and inst_valid) else "部分缺漏",
+            "overall_status": "完整" if (price_valid and inst_valid) else "部分缺漏",
         }

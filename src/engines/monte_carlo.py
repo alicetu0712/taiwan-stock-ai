@@ -6,12 +6,14 @@ monte_carlo.py — 蒙地卡羅價格路徑模擬
 """
 
 import logging
-import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+
 try:
     from scipy import stats as _scipy_stats
+
     _HAS_SCIPY = True
 except ImportError:
     _HAS_SCIPY = False
@@ -29,21 +31,21 @@ class MonteCarloResult:
     n_paths: int
 
     # 機率
-    prob_target: float       # 達到目標價的機率
-    prob_stop_loss: float    # 觸及停損的機率
-    prob_neutral: float      # 兩者都沒觸及
+    prob_target: float  # 達到目標價的機率
+    prob_stop_loss: float  # 觸及停損的機率
+    prob_neutral: float  # 兩者都沒觸及
 
     # 期末分布（第 sim_days 日）
     median_price: float
-    pct_5: float             # 5th percentile（壞情況）
+    pct_5: float  # 5th percentile（壞情況）
     pct_25: float
     pct_75: float
-    pct_95: float            # 95th percentile（好情況）
+    pct_95: float  # 95th percentile（好情況）
     expected_pnl_pct: float  # 期望報酬%
 
     # 路徑資料（供繪圖用，最多 50 條採樣）
-    sample_paths: list        # list of list[float]（每條路徑每日價格）
-    days: list                # [0, 1, 2, ..., sim_days]
+    sample_paths: list  # list of list[float]（每條路徑每日價格）
+    days: list  # [0, 1, 2, ..., sim_days]
 
 
 def simulate(
@@ -51,10 +53,10 @@ def simulate(
     entry_price: float,
     target_price: float,
     stop_loss_price: float,
-    daily_returns: list,        # 歷史日報酬率序列（float list，e.g. [0.01, -0.02, ...]）
+    daily_returns: list,  # 歷史日報酬率序列（float list，e.g. [0.01, -0.02, ...]）
     sim_days: int = 20,
     n_paths: int = 1000,
-    sample_n: int = 50,         # 繪圖用採樣路徑數
+    sample_n: int = 50,  # 繪圖用採樣路徑數
 ) -> Optional[MonteCarloResult]:
     """
     執行蒙地卡羅模擬。
@@ -69,7 +71,7 @@ def simulate(
         return None
 
     rets = np.array(daily_returns, dtype=float)
-    mu  = float(np.mean(rets))
+    mu = float(np.mean(rets))
     sig = float(np.std(rets))
 
     if sig == 0:
@@ -81,36 +83,38 @@ def simulate(
     # df=4 是金融資產日報酬的經驗常用值（比正態多 ~3× 極端事件機率）
     rng = np.random.default_rng(seed=42)
     if _HAS_SCIPY:
-        t_samples = _scipy_stats.t.rvs(df=4, loc=mu, scale=sig,
-                                        size=(n_paths, sim_days),
-                                        random_state=42)
+        t_samples = _scipy_stats.t.rvs(
+            df=4, loc=mu, scale=sig, size=(n_paths, sim_days), random_state=42
+        )
         simulated = np.clip(t_samples, -0.2, 0.2)  # 限制單日最大 ±20%
     else:
         simulated = rng.normal(loc=mu, scale=sig, size=(n_paths, sim_days))
 
     # 每條路徑的累積價格
     # price[t] = entry_price × ∏(1 + r_i) for i in 0..t
-    cum_ret = np.cumprod(1 + simulated, axis=1)   # shape: (n_paths, sim_days)
-    prices  = entry_price * cum_ret                # shape: (n_paths, sim_days)
+    cum_ret = np.cumprod(1 + simulated, axis=1)  # shape: (n_paths, sim_days)
+    prices = entry_price * cum_ret  # shape: (n_paths, sim_days)
 
     # 是否在路徑中任何一天觸及目標/停損
-    hit_target    = np.any(prices >= target_price,    axis=1)  # (n_paths,)
+    hit_target = np.any(prices >= target_price, axis=1)  # (n_paths,)
     hit_stop_loss = np.any(prices <= stop_loss_price, axis=1)
 
     # 同時觸及時，以先觸及的為準（簡化：假設目標優先）
-    prob_target    = float(np.mean(hit_target & ~hit_stop_loss) +
-                           np.mean(hit_target & hit_stop_loss) * 0.5)
-    prob_stop_loss = float(np.mean(hit_stop_loss & ~hit_target) +
-                           np.mean(hit_target & hit_stop_loss) * 0.5)
-    prob_neutral   = max(0.0, 1.0 - prob_target - prob_stop_loss)
+    prob_target = float(
+        np.mean(hit_target & ~hit_stop_loss) + np.mean(hit_target & hit_stop_loss) * 0.5
+    )
+    prob_stop_loss = float(
+        np.mean(hit_stop_loss & ~hit_target) + np.mean(hit_target & hit_stop_loss) * 0.5
+    )
+    prob_neutral = max(0.0, 1.0 - prob_target - prob_stop_loss)
 
     # 期末價格分布
     final_prices = prices[:, -1]
     median_price = float(np.median(final_prices))
-    pct_5        = float(np.percentile(final_prices, 5))
-    pct_25       = float(np.percentile(final_prices, 25))
-    pct_75       = float(np.percentile(final_prices, 75))
-    pct_95       = float(np.percentile(final_prices, 95))
+    pct_5 = float(np.percentile(final_prices, 5))
+    pct_25 = float(np.percentile(final_prices, 25))
+    pct_75 = float(np.percentile(final_prices, 75))
+    pct_95 = float(np.percentile(final_prices, 95))
     expected_pnl = float((np.mean(final_prices) - entry_price) / entry_price * 100)
 
     # 採樣路徑（供繪圖）

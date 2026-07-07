@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=67"]
+build-backend = "setuptools.backends.legacy:build"
+
+# ── 專案 Metadata ─────────────────────────────────────────────
+[project]
+name = "stock-platform"
+version = "0.1.0"
+description = "AI 台股研究平台 — 技術面 + 基本面 + AI 綜合評分"
+requires-python = ">=3.11"
+
+dependencies = [
+    "streamlit>=1.35.0",
+    "plotly>=5.22.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "sqlalchemy>=2.0.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "anthropic>=0.28.0",
+    "openpyxl>=3.1.2",
+    "tabulate>=0.9.0",
+    "feedparser>=6.0.0",
+    "psycopg2-binary>=2.9.0",
+    "scipy>=1.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.4.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "flake8>=7.0.0",
+]
+
+# ── Ruff ─────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E203",  # whitespace before ':' — black compatible
+    "E501",  # line too long — handled by black
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]           # sys.path.insert before imports
+"dashboard/app.py" = ["E402"]  # streamlit secrets block before imports
+
+# ── Black ────────────────────────────────────────────────────
+[tool.black]
+line-length = 88
+target-version = ["py311", "py313"]
+
+# ── isort ────────────────────────────────────────────────────
+[tool.isort]
+profile = "black"
+line_length = 88
+
+# ── Pytest ───────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+# ── Coverage ─────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["src", "dashboard"]
+omit = [
+    "src/analyzers/market_behavior.py",
+    "src/analyzers/risk.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+]

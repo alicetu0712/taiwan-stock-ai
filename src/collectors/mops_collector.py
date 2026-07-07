@@ -10,25 +10,25 @@ mops_collector.py — 公開資訊觀測站 (MOPS) 財務資料收集器
 """
 
 import logging
-import time
 import random
+import time
 from typing import Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-_BASE    = "https://mops.twse.com.tw/mops/api/"
+_BASE = "https://mops.twse.com.tw/mops/api/"
 _HEADERS = {
     "Content-Type": "application/json",
-    "Origin":       "https://mops.twse.com.tw",
-    "Referer":      "https://mops.twse.com.tw/mops/",
-    "User-Agent":   (
+    "Origin": "https://mops.twse.com.tw",
+    "Referer": "https://mops.twse.com.tw/mops/",
+    "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ),
 }
-_TIMEOUT  = 20
+_TIMEOUT = 20
 _MAX_YEARS = 7
 
 
@@ -74,8 +74,12 @@ def _post(endpoint: str, payload: dict) -> Optional[dict]:
 def _parse_income(result: dict) -> dict:
     """從損益表結果解析各項財務指標。"""
     out = {
-        "eps": None, "gross_margin": None, "op_margin": None,
-        "net_margin": None, "net_income": None, "revenue": None,
+        "eps": None,
+        "gross_margin": None,
+        "op_margin": None,
+        "net_margin": None,
+        "net_income": None,
+        "revenue": None,
     }
     if not result:
         return out
@@ -85,8 +89,8 @@ def _parse_income(result: dict) -> dict:
         if len(item) < 2:
             continue
 
-        val  = _parse_num(item[1]) if len(item) > 1 else None
-        pct  = _parse_num(item[2]) if len(item) > 2 else None
+        val = _parse_num(item[1]) if len(item) > 1 else None
+        pct = _parse_num(item[2]) if len(item) > 2 else None
 
         if ("營業收入合計" in name or "收入合計" in name) and out["revenue"] is None:
             out["revenue"] = val
@@ -96,7 +100,7 @@ def _parse_income(result: dict) -> dict:
             out["op_margin"] = pct
         if "本期淨利" in name and out["net_income"] is None:
             out["net_income"] = val
-            out["net_margin"]  = pct
+            out["net_margin"] = pct
         if "基本每股盈餘" in name and item[1] and out["eps"] is None:
             out["eps"] = _parse_num(item[1])
 
@@ -106,17 +110,21 @@ def _parse_income(result: dict) -> dict:
 def _parse_balance(result: dict) -> dict:
     """從資產負債表結果解析各項財務指標。"""
     out = {
-        "total_assets": None, "total_liab": None, "equity": None,
-        "current_assets": None, "current_liab": None,
-        "debt_ratio": None, "current_ratio": None,
+        "total_assets": None,
+        "total_liab": None,
+        "equity": None,
+        "current_assets": None,
+        "current_liab": None,
+        "debt_ratio": None,
+        "current_ratio": None,
     }
     if not result:
         return out
 
     for item in result.get("reportList", []):
         name = item[0].strip().replace("　", "")
-        val  = _parse_num(item[1]) if len(item) > 1 else None
-        pct  = _parse_num(item[2]) if len(item) > 2 else None
+        val = _parse_num(item[1]) if len(item) > 1 else None
+        pct = _parse_num(item[2]) if len(item) > 2 else None
 
         if "流動資產合計" in name:
             out["current_assets"] = val
@@ -126,7 +134,7 @@ def _parse_balance(result: dict) -> dict:
             out["total_assets"] = val
         if "負債總額" in name or "負債總計" in name:
             out["total_liab"] = val
-            out["debt_ratio"] = pct          # 負債總額 % = 負債比
+            out["debt_ratio"] = pct  # 負債總額 % = 負債比
         if "權益總額" in name or "權益總計" in name or "股東權益總計" in name:
             out["equity"] = val
 
@@ -152,12 +160,12 @@ def fetch_annual_financials(stock_id: str, roc_year: int) -> Optional[dict]:
         "subsidiaryCompanyId": "",
     }
 
-    income  = _parse_income(_post("t164sb04", payload_base))
+    income = _parse_income(_post("t164sb04", payload_base))
     balance = _parse_balance(_post("t164sb03", payload_base))
 
     eps = income.get("eps")
     if eps is None and income.get("net_income") is None:
-        return None            # 兩個 API 都沒資料，跳過
+        return None  # 兩個 API 都沒資料，跳過
 
     # 計算 ROE / ROA
     roe, roa = None, None
@@ -168,14 +176,14 @@ def fetch_annual_financials(stock_id: str, roc_year: int) -> Optional[dict]:
         roa = round(ni / balance["total_assets"] * 100, 2)
 
     return {
-        "year":          _roc_to_ad(roc_year),
-        "eps":           eps,
-        "roe":           roe,
-        "roa":           roa,
-        "gross_margin":  income.get("gross_margin"),
-        "op_margin":     income.get("op_margin"),
-        "net_margin":    income.get("net_margin"),
-        "debt_ratio":    balance.get("debt_ratio"),
+        "year": _roc_to_ad(roc_year),
+        "eps": eps,
+        "roe": roe,
+        "roa": roa,
+        "gross_margin": income.get("gross_margin"),
+        "op_margin": income.get("op_margin"),
+        "net_margin": income.get("net_margin"),
+        "debt_ratio": balance.get("debt_ratio"),
         "current_ratio": balance.get("current_ratio"),
     }
 
@@ -187,6 +195,7 @@ def fetch_multi_year(stock_id: str, n_years: int = _MAX_YEARS) -> list:
     每次請求間隔短暫隨機延遲。
     """
     from datetime import date
+
     current_roc = date.today().year - 1911
     results = []
 

@@ -1,6 +1,7 @@
 """
 pages/guide.py — 評分說明頁 + 設定 & 執行頁
 """
+
 import logging
 import sys
 from datetime import date
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 def _run_analysis(dry_run: bool) -> None:
     import subprocess
+
     try:
         cmd = [sys.executable, str(Path(__file__).parent.parent.parent / "main.py")]
         if dry_run:
@@ -143,10 +145,14 @@ def page_settings(selected_date: date) -> None:
     with col1:
         st.markdown("**查看日期**")
         _min_date = date(2025, 1, 1)
-        _clamped  = max(selected_date, _min_date)
-        new_date = st.date_input("分析日期", value=_clamped,
-                                 min_value=_min_date, max_value=date.today(),
-                                 label_visibility="collapsed")
+        _clamped = max(selected_date, _min_date)
+        new_date = st.date_input(
+            "分析日期",
+            value=_clamped,
+            min_value=_min_date,
+            max_value=date.today(),
+            label_visibility="collapsed",
+        )
         if new_date != selected_date:
             st.session_state["selected_date"] = new_date
             st.rerun()
@@ -166,24 +172,17 @@ def page_settings(selected_date: date) -> None:
     st.divider()
     st.markdown('<div class="section-title">資料庫狀態</div>', unsafe_allow_html=True)
     try:
-        from src.database import get_session, DailyPrice, InstitutionalData, Recommendation
-        from sqlalchemy import func
-        s = get_session()
-        price_cnt = 0
-        chip_cnt  = 0
-        oldest    = None
-        newest    = None
-        try:
-            price_cnt = s.query(func.count(DailyPrice.id)).scalar() or 0
-            chip_cnt  = s.query(func.count(InstitutionalData.id)).scalar() or 0
-            oldest    = s.query(func.min(DailyPrice.date)).filter(DailyPrice.date >= '2025-01-01').scalar()
-            newest    = s.query(func.max(DailyPrice.date)).scalar()
-        except Exception as e:
-            logger.debug(f"page_settings price date query failed: {e}")
-        rec_cnt = s.query(func.count(Recommendation.id)).scalar() or 0
-        s.close()
+        from dashboard.loaders import load_db_stats
+
+        stats = load_db_stats()
+        price_cnt = stats.get("price_cnt", 0)
+        chip_cnt = stats.get("chip_cnt", 0)
+        rec_cnt = stats.get("rec_cnt", 0)
+        oldest = stats.get("oldest")
+        newest = stats.get("newest")
         if price_cnt > 0:
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div class="stat-grid">
               <div class="stat-box">
                 <div class="stat-val" style="font-size:1.4rem">{price_cnt:,}</div>
@@ -202,18 +201,23 @@ def page_settings(selected_date: date) -> None:
                 <div class="stat-lbl">研究起始日期</div>
               </div>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
             if newest:
                 st.caption(f"最新股價：{newest}")
         else:
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div class="stat-grid">
               <div class="stat-box">
                 <div class="stat-val" style="font-size:1.4rem">{rec_cnt}</div>
                 <div class="stat-lbl">推薦紀錄</div>
               </div>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
             st.caption("股價／法人原始資料存於本機，行動版不顯示")
     except Exception as e:
         logger.error(f"page_settings DB query failed: {e}")

@@ -8,12 +8,13 @@ financial_collector.py — 財務資料蒐集
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Optional
 
 import pandas as pd
 
 from config import FINMIND_TOKEN
+from src.core.result import CollectResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ def _get_dataloader() -> Optional[Any]:
     """建立 FinMind DataLoader 並登入。"""
     try:
         from FinMind.data import DataLoader
+
         dl = DataLoader()
         if FINMIND_TOKEN:
             dl.login_by_token(api_token=FINMIND_TOKEN)
@@ -53,21 +55,27 @@ def fetch_monthly_revenue(
         if df.empty:
             return pd.DataFrame()
 
-        df = df.rename(columns={
-            "stock_id": "stock_id",
-            "revenue": "revenue",
-            "revenue_year": "year",
-            "revenue_month": "month",
-        })
+        df = df.rename(
+            columns={
+                "stock_id": "stock_id",
+                "revenue": "revenue",
+                "revenue_year": "year",
+                "revenue_month": "month",
+            }
+        )
 
         # 計算 YoY
         df = df.sort_values(["year", "month"]).reset_index(drop=True)
         df["yoy_growth"] = df["revenue"].pct_change(12) * 100
 
         df["stock_id"] = stock_id
-        df["revenue"]  = df["revenue"] / 1_000     # 轉換為百萬元
+        df["revenue"] = df["revenue"] / 1_000  # 轉換為百萬元
 
-        cols = [c for c in ["stock_id", "year", "month", "revenue", "yoy_growth"] if c in df.columns]
+        cols = [
+            c
+            for c in ["stock_id", "year", "month", "revenue", "yoy_growth"]
+            if c in df.columns
+        ]
         return df[cols].dropna(subset=["revenue"])
 
     except Exception as e:
@@ -103,18 +111,20 @@ def fetch_financial_statements(
             val = row.get("value", None)
             date_str = str(row.get("date", ""))
             try:
-                year    = int(date_str[:4])
+                year = int(date_str[:4])
                 quarter = _date_to_quarter(date_str)
             except Exception as e:
                 logger.debug(f"financial row date parse skip ({stock_id}): {e}")
                 continue
-            result_rows.append({
-                "stock_id": stock_id,
-                "year":     year,
-                "quarter":  quarter,
-                "type":     t,
-                "value":    val,
-            })
+            result_rows.append(
+                {
+                    "stock_id": stock_id,
+                    "year": year,
+                    "quarter": quarter,
+                    "type": t,
+                    "value": val,
+                }
+            )
 
         if not result_rows:
             return pd.DataFrame()
@@ -156,8 +166,10 @@ def fetch_profitability(
 
         df["stock_id"] = stock_id
         df["date"] = pd.to_datetime(df.get("date", df.index))
-        df["year"]    = df["date"].dt.year
-        df["quarter"] = df["date"].dt.month.map({1:1, 2:1, 3:1, 4:2, 5:2, 6:2, 7:3, 8:3, 9:3, 10:4, 11:4, 12:4})
+        df["year"] = df["date"].dt.year
+        df["quarter"] = df["date"].dt.month.map(
+            {1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4, 11: 4, 12: 4}
+        )
 
         return df
 
@@ -204,14 +216,16 @@ def fetch_eps_history(
         if df.empty:
             return pd.DataFrame()
 
-        eps_rows = df[df["type"].str.contains("EPS|每股盈餘", na=False, case=False)].copy()
+        eps_rows = df[
+            df["type"].str.contains("EPS|每股盈餘", na=False, case=False)
+        ].copy()
         if eps_rows.empty:
             return pd.DataFrame()
 
         eps_rows["stock_id"] = stock_id
-        eps_rows["year"]     = pd.to_datetime(eps_rows["date"]).dt.year
-        eps_rows["quarter"]  = pd.to_datetime(eps_rows["date"]).dt.month.map(
-            {1:1, 2:1, 3:1, 4:2, 5:2, 6:2, 7:3, 8:3, 9:3, 10:4, 11:4, 12:4}
+        eps_rows["year"] = pd.to_datetime(eps_rows["date"]).dt.year
+        eps_rows["quarter"] = pd.to_datetime(eps_rows["date"]).dt.month.map(
+            {1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4, 11: 4, 12: 4}
         )
         eps_rows = eps_rows.rename(columns={"value": "eps"})
         return eps_rows[["stock_id", "year", "quarter", "eps"]].dropna()
@@ -242,22 +256,24 @@ def build_financial_summary(
     cutoff = as_of_date or date.today()
     start = f"{cutoff.year - n_years - 1}-01-01"
     summary = {
-        "stock_id":        stock_id,
-        "has_data":        False,
-        "eps_ttm":         None,
-        "eps_5y":          [],
-        "roe_avg":         None,
-        "roa_avg":         None,
+        "stock_id": stock_id,
+        "has_data": False,
+        "eps_ttm": None,
+        "eps_5y": [],
+        "roe_avg": None,
+        "roa_avg": None,
         "gross_margin_avg": None,
-        "debt_ratio":      None,
+        "debt_ratio": None,
         "revenue_yoy_avg": None,
-        "revenue_trend":   "unknown",
-        "eps_trend":       "unknown",
-        "roe_trend":       "unknown",
+        "revenue_trend": "unknown",
+        "eps_trend": "unknown",
+        "roe_trend": "unknown",
     }
 
     if not FINMIND_TOKEN:
-        logger.debug(f"No FinMind token and no DB data; skipping financial summary for {stock_id}.")
+        logger.debug(
+            f"No FinMind token and no DB data; skipping financial summary for {stock_id}."
+        )
         return summary
 
     # --- 月營收 ---
@@ -276,12 +292,19 @@ def build_financial_summary(
         def _is_available(row) -> bool:
             y, q = int(row["year"]), int(row["quarter"])
             cutoff_d = cutoff
-            deadlines = {1: (y, 5, 15), 2: (y, 8, 14), 3: (y, 11, 14), 4: (y+1, 3, 31)}
+            deadlines = {
+                1: (y, 5, 15),
+                2: (y, 8, 14),
+                3: (y, 11, 14),
+                4: (y + 1, 3, 31),
+            }
             dl = deadlines.get(q)
             if not dl:
                 return False
             from datetime import date as _d
+
             return cutoff_d >= _d(*dl)
+
         eps_df = eps_df[eps_df.apply(_is_available, axis=1)]
         eps_list = eps_df.sort_values(["year", "quarter"])["eps"].tolist()
         summary["eps_5y"] = eps_list[-20:]
@@ -300,11 +323,12 @@ def _calc_trend(series: list) -> str:
     if len(series) < 4:
         return "unknown"
     import numpy as np
+
     try:
         values = [v for v in series if v is not None and not pd.isna(v)]
         if len(values) < 4:
             return "unknown"
-        recent = values[-min(12, len(values)):]
+        recent = values[-min(12, len(values)) :]
         x = list(range(len(recent)))
         slope = np.polyfit(x, recent, 1)[0]
         mean_val = abs(sum(recent) / len(recent))
@@ -336,21 +360,72 @@ def _build_summary_from_db(stock_id: str, as_of_date=None) -> dict:
     從本地 financial_quarters 表讀取 goodinfo.tw 匯入的年度資料（quarter=0），
     組成 FundamentalAnalyzer 所需的 fin_summary dict。
     """
-    from src.collectors.goodinfo_collector import build_financial_summary_from_db
-    from config import DB_PATH
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
+
+    from config import DB_PATH
+    from src.collectors.goodinfo_collector import build_financial_summary_from_db
 
     _empty = {"stock_id": stock_id, "has_data": False}
 
     try:
-        _engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+        _engine = create_engine(
+            f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}
+        )
         _Session = sessionmaker(bind=_engine)
         _session = _Session()
         try:
-            return build_financial_summary_from_db(stock_id, _session, as_of_date=as_of_date)
+            return build_financial_summary_from_db(
+                stock_id, _session, as_of_date=as_of_date
+            )
         finally:
             _session.close()
     except Exception as e:
         logger.debug(f"DB summary failed for {stock_id}: {e}")
         return _empty
+
+
+# ── 統一介面 ──────────────────────────────────────────────────
+
+
+class FinancialCollector:
+    """
+    統一 Collector 介面（BaseCollector 協議）。
+
+    財務資料以個股為單位蒐集，collect() 接受 stock_id 參數。
+    """
+
+    name = "financial"
+
+    def collect(self, trade_date=None, *, stock_id: str, **kwargs) -> dict:
+        """回傳 build_financial_summary 的 fin_summary dict。"""
+        return build_financial_summary(stock_id, as_of_date=trade_date)
+
+    def validate(self, data: dict) -> tuple:
+        if not isinstance(data, dict):
+            return False, "financial data is not a dict"
+        if not data.get("has_data", False):
+            return False, "has_data=False — insufficient financial data"
+        return True, "ok"
+
+    def parse(self, data: dict) -> pd.DataFrame:
+        """將 fin_summary dict 攤平為單列 DataFrame，方便記錄。"""
+        return pd.DataFrame([data])
+
+    def save(self, df: pd.DataFrame, session) -> int:
+        # 財務摘要已由各個 fetch_* 函數各自寫入專屬 table；
+        # 此處為相容介面，不重複寫入。
+        return 0
+
+    def run(
+        self, trade_date=None, session=None, *, stock_id: str, **kwargs
+    ) -> CollectResult:
+        try:
+            data = self.collect(trade_date, stock_id=stock_id)
+        except Exception as e:
+            return CollectResult.error(f"collect failed: {e}", source=self.name)
+        ok, msg = self.validate(data)
+        if not ok:
+            logger.debug(f"[{self.name}] {stock_id} validate: {msg}")
+            return CollectResult.warning(msg, source=self.name)
+        return CollectResult.success(1, source=self.name)

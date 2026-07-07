@@ -8,8 +8,6 @@ URL：StockBzPerformance.asp?STOCK_ID={stock_id}
 
 import logging
 import re
-import time
-import random
 from typing import Optional
 
 import requests
@@ -67,7 +65,9 @@ def fetch_annual_performance(stock_id: str) -> list:
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
         resp.raise_for_status()
-        html = resp.content.decode("utf-8", errors="replace")  # 強制 UTF-8，避免 requests 誤判 ISO-8859-1
+        html = resp.content.decode(
+            "utf-8", errors="replace"
+        )  # 強制 UTF-8，避免 requests 誤判 ISO-8859-1
     except Exception as e:
         logger.warning(f"[goodinfo] {stock_id} 請求失敗：{e}")
         return []
@@ -126,15 +126,15 @@ def fetch_annual_performance(stock_id: str) -> list:
         # c[0]=年度  c[7]=營收  c[12]=毛利率  c[13]=營益率  c[15]=淨利率
         # c[16]=ROE  c[17]=ROA  c[18]=EPS
         record = {
-            "year":         year,
-            "eps":          _parse_num(c[18]),
-            "roe":          _parse_num(c[16]),
-            "roa":          _parse_num(c[17]),
+            "year": year,
+            "eps": _parse_num(c[18]),
+            "roe": _parse_num(c[16]),
+            "roa": _parse_num(c[17]),
             "gross_margin": _parse_num(c[12]),
-            "op_margin":    _parse_num(c[13]),
-            "net_margin":   _parse_num(c[15]),
-            "per":          current_per if latest_year else None,
-            "pbr":          current_pbr if latest_year else None,
+            "op_margin": _parse_num(c[13]),
+            "net_margin": _parse_num(c[15]),
+            "per": current_per if latest_year else None,
+            "pbr": current_pbr if latest_year else None,
         }
         latest_year = False
 
@@ -156,17 +156,26 @@ def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> 
     呼叫前需確認 import_financials.py 已執行過，DB 有資料。
     """
     import numpy as np
+
     from src.database import FinancialQuarter
 
     _empty = {
-        "stock_id": stock_id, "has_data": False,
-        "eps_ttm": None, "eps_5y": [], "eps_trend": "unknown",
-        "roe_avg": None, "roe_5y": [],
+        "stock_id": stock_id,
+        "has_data": False,
+        "eps_ttm": None,
+        "eps_5y": [],
+        "eps_trend": "unknown",
+        "roe_avg": None,
+        "roe_5y": [],
         "roa_avg": None,
         "gross_margin_avg": None,
-        "debt_ratio": None, "free_cash_flow": None, "current_ratio": None,
-        "per": None, "pbr": None,
-        "revenue_trend": "unknown", "revenue_yoy_avg": None,
+        "debt_ratio": None,
+        "free_cash_flow": None,
+        "current_ratio": None,
+        "per": None,
+        "pbr": None,
+        "revenue_trend": "unknown",
+        "revenue_yoy_avg": None,
     }
 
     q = session.query(FinancialQuarter).filter_by(stock_id=stock_id, quarter=0)
@@ -174,7 +183,12 @@ def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> 
         # 年報申報期限：當年度（Y）年報最晚於 Y+1 年 4 月 1 日公告
         # 只使用截至 as_of_date 已可公開的年度資料
         from datetime import date as _date
-        d = as_of_date if isinstance(as_of_date, _date) else _date.fromisoformat(str(as_of_date))
+
+        d = (
+            as_of_date
+            if isinstance(as_of_date, _date)
+            else _date.fromisoformat(str(as_of_date))
+        )
         # 年報截止日為 Y+1 年 3 月 31 日
         # 4 月後才能用去年（Y-1）年報；3 月前只能用前年（Y-2）
         max_available_year = (d.year - 2) if d.month < 4 else (d.year - 1)
@@ -209,20 +223,20 @@ def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> 
     roe_asc = [r.roe for r in reversed(rows)]
 
     return {
-        "stock_id":         stock_id,
-        "has_data":         True,
-        "eps_ttm":          rows[0].eps,
-        "eps_5y":           eps_asc[-5:],
-        "eps_trend":        _trend(eps_asc),
-        "roe_avg":          _avg([r.roe for r in rows[:5]]),
-        "roe_5y":           roe_asc[-5:],
-        "roa_avg":          _avg([r.roa for r in rows[:5]]),
+        "stock_id": stock_id,
+        "has_data": True,
+        "eps_ttm": rows[0].eps,
+        "eps_5y": eps_asc[-5:],
+        "eps_trend": _trend(eps_asc),
+        "roe_avg": _avg([r.roe for r in rows[:5]]),
+        "roe_5y": roe_asc[-5:],
+        "roa_avg": _avg([r.roa for r in rows[:5]]),
         "gross_margin_avg": _avg([r.gross_margin for r in rows[:5]]),
-        "debt_ratio":       rows[0].debt_ratio,
-        "free_cash_flow":   rows[0].free_cash_flow,
-        "current_ratio":    rows[0].current_ratio,
-        "per":              rows[0].per,
-        "pbr":              rows[0].pbr,
-        "revenue_trend":    "unknown",
-        "revenue_yoy_avg":  None,
+        "debt_ratio": rows[0].debt_ratio,
+        "free_cash_flow": rows[0].free_cash_flow,
+        "current_ratio": rows[0].current_ratio,
+        "per": rows[0].per,
+        "pbr": rows[0].pbr,
+        "revenue_trend": "unknown",
+        "revenue_yoy_avg": None,
     }

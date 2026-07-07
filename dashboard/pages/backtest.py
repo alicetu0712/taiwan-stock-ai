@@ -1,202 +1,51 @@
 """
 pages/backtest.py — 模型驗證頁（回測 + Monte Carlo 隨機基準 + Alpha 分析）
-"""
-import logging
-from datetime import date
 
+業務邏輯委託 src.services.BacktestService；此模組只負責 Streamlit 快取與 UI。
+"""
+
+import logging
 import pandas as pd
 import streamlit as st
 
-logger = logging.getLogger(__name__)
+from src.services.backtest_service import ROUND_TRIP_COST, BacktestService  # noqa: F401
 
-ROUND_TRIP_COST = 0.585  # 買進+賣出合計交易成本（%）
+logger = logging.getLogger(__name__)
 
 
 @st.cache_data(ttl=1800)
 def compute_backtest() -> pd.DataFrame:
     """計算所有歷史推薦的 5/20/60 日報酬，及對比 0050、0056 的 Alpha。"""
-    try:
-        from collections import defaultdict
-        from src.database import get_session, Recommendation, DailyPrice
-        s = get_session()
-        recs = s.query(Recommendation).order_by(Recommendation.date).all()
-        all_ids = {r.stock_id for r in recs} | {"0050", "0056"}
-        all_prices_q = (s.query(DailyPrice)
-                        .filter(DailyPrice.stock_id.in_(all_ids))
-                        .order_by(DailyPrice.stock_id, DailyPrice.date).all())
-        s.close()
-
-        price_map = defaultdict(list)
-        for p in all_prices_q:
-            price_map[p.stock_id].append((p.date, p.close))
-
-        def _ret_at(plist, ref_date, n_trading_days):
-            after = [(d, c) for d, c in plist if d >= ref_date and c]
-            if not after:
-                return None, None
-            entry = after[0][1]
-            if len(after) > n_trading_days:
-                exit_c = after[n_trading_days][1]
-                return round((exit_c - entry) / entry * 100, 2), entry
-            return None, entry
-
-        last_rec_date: dict = {}
-        deduped_recs = []
-        for r in sorted(recs, key=lambda x: x.date):
-            prev = last_rec_date.get(r.stock_id)
-            if prev is None:
-                deduped_recs.append(r)
-                last_rec_date[r.stock_id] = r.date
-            else:
-                sp_chk = price_map.get(r.stock_id, [])
-                tdays = sum(1 for d, _ in sp_chk if prev < d <= r.date)
-                if tdays >= 20:
-                    deduped_recs.append(r)
-                    last_rec_date[r.stock_id] = r.date
-
-        today_dt = date.today()
-        rows = []
-        for r in deduped_recs:
-            sp = price_map.get(r.stock_id, [])
-            if not sp:
-                continue
-            s20, entry = _ret_at(sp, r.date, 20)
-            s60, _     = _ret_at(sp, r.date, 60)
-
-            data_flag = None
-            if s20 is None and entry is not None and (today_dt - r.date).days > 35:
-                after_rec = [(d, c) for d, c in sp if d > r.date and c]
-                if after_rec:
-                    s20 = round((after_rec[-1][1] - entry) / entry * 100 - ROUND_TRIP_COST, 2)
-                    data_flag = "⚠️ 停牌"
-                else:
-                    s20 = round(-100.0 - ROUND_TRIP_COST, 2)
-                    data_flag = "❌ 下市"
-
-            if s20 is not None and data_flag is None:
-                s20 = round(s20 - ROUND_TRIP_COST, 2)
-            if s60 is not None:
-                s60 = round(s60 - ROUND_TRIP_COST, 2)
-            b0050_20, _ = _ret_at(price_map.get("0050", []), r.date, 20)
-            b0050_60, _ = _ret_at(price_map.get("0050", []), r.date, 60)
-            b0056_20, _ = _ret_at(price_map.get("0056", []), r.date, 20)
-            b0056_60, _ = _ret_at(price_map.get("0056", []), r.date, 60)
-            if b0050_20 is not None: b0050_20 = round(b0050_20 - ROUND_TRIP_COST, 2)
-            if b0050_60 is not None: b0050_60 = round(b0050_60 - ROUND_TRIP_COST, 2)
-            if b0056_20 is not None: b0056_20 = round(b0056_20 - ROUND_TRIP_COST, 2)
-            if b0056_60 is not None: b0056_60 = round(b0056_60 - ROUND_TRIP_COST, 2)
-
-            def _a(s, b): return round(s - b, 2) if s is not None and b is not None else None
-
-            rows.append({
-                "date": r.date, "stock_id": r.stock_id,
-                "confidence": r.confidence, "entry": entry,
-                "ret_20d": s20, "ret_60d": s60,
-                "b0050_20": b0050_20, "b0056_20": b0056_20,
-                "b0050_60": b0050_60, "b0056_60": b0056_60,
-                "a0050_20": _a(s20, b0050_20), "a0056_20": _a(s20, b0056_20),
-                "a0050_60": _a(s60, b0050_60), "a0056_60": _a(s60, b0056_60),
-                "data_flag": data_flag,
-            })
-        return pd.DataFrame(rows)
-    except Exception as e:
-        logger.exception(f"compute_backtest failed: {e}")
-        return pd.DataFrame()
+    return BacktestService.compute_backtest_data()
 
 
 @st.cache_data(ttl=3600)
 def compute_random_baseline(n_sim: int = 1000) -> dict:
     """Monte Carlo：對每筆推薦日期隨機抽一支，重複 n_sim 次，返回隨機選股均報酬的分布。"""
-    try:
-        import random as _rnd
-        import bisect as _bs
-        from collections import defaultdict
-        from src.database import get_session, Recommendation, DailyPrice, AnalysisResult as _AR
-        s = get_session()
-        recs = s.query(Recommendation).order_by(Recommendation.date).all()
-        ar_rows = s.query(_AR.date, _AR.stock_id).all()
-        ar_stock_ids = {ar_sid for _, ar_sid in ar_rows}
-        all_ids = {r.stock_id for r in recs} | {"0050", "0056"} | ar_stock_ids
-        all_prices_q = (s.query(DailyPrice)
-                        .filter(DailyPrice.stock_id.in_(all_ids))
-                        .order_by(DailyPrice.stock_id, DailyPrice.date).all())
-        s.close()
-        price_map = defaultdict(list)
-        for p in all_prices_q:
-            price_map[p.stock_id].append((p.date, p.close))
-
-        def _ret20(plist, ref_date):
-            after = [(d, c) for d, c in plist if d >= ref_date and c]
-            if len(after) <= 20:
-                return None
-            return (after[20][1] - after[0][1]) / after[0][1] * 100
-
-        _last: dict = {}
-        deduped = []
-        for r in sorted(recs, key=lambda x: x.date):
-            prev = _last.get(r.stock_id)
-            if prev is None:
-                deduped.append(r); _last[r.stock_id] = r.date
-            else:
-                tdays = sum(1 for d, _ in price_map.get(r.stock_id, []) if prev < d <= r.date)
-                if tdays >= 20:
-                    deduped.append(r); _last[r.stock_id] = r.date
-
-        dates_idx = {sid: sorted(d for d, _ in plist) for sid, plist in price_map.items()}
-
-        def _tdays(sid, d1, d2):
-            dl = dates_idx.get(sid, [])
-            return _bs.bisect_right(dl, d2) - _bs.bisect_right(dl, d1)
-
-        analyzed_by_date: dict = defaultdict(set)
-        for ar_date, ar_sid in ar_rows:
-            analyzed_by_date[ar_date].add(ar_sid)
-
-        pool_per_rec = []
-        for r in deduped:
-            day_pool = analyzed_by_date.get(r.date, set())
-            alts = [sid for sid in day_pool if sid != r.stock_id and price_map.get(sid)]
-            if not alts:
-                alts = [sid for sid in all_ids if sid != r.stock_id and price_map.get(sid)]
-            pool_per_rec.append((r.date, alts))
-
-        _rng = _rnd.Random(42)
-        sim_means = []
-        for _ in range(n_sim):
-            sim_rets = []
-            last_pick: dict = {}
-            for ref_date, alts in pool_per_rec:
-                if not alts:
-                    continue
-                eligible = [s for s in alts if
-                            last_pick.get(s) is None or _tdays(s, last_pick[s], ref_date) >= 20]
-                sid = _rng.choice(eligible if eligible else alts)
-                last_pick[sid] = ref_date
-                ret = _ret20(price_map[sid], ref_date)
-                if ret is not None:
-                    sim_rets.append(ret - ROUND_TRIP_COST)
-            if sim_rets:
-                sim_means.append(sum(sim_rets) / len(sim_rets))
-        return {"sim_means": sim_means, "n_sim": n_sim}
-    except Exception as e:
-        logger.exception(f"compute_random_baseline failed: {e}")
-        return {}
+    return BacktestService.compute_baseline(n_sim=n_sim)
 
 
 def _calc_stats(ret: pd.Series, alpha: pd.Series, hold_days: int) -> dict:
-    r = ret.dropna(); a = alpha.dropna()
+    r = ret.dropna()
+    a = alpha.dropna()
     if len(r) < 5:
         return {}
     from scipy import stats as _sc
+
     t, p = _sc.ttest_1samp(a, 0)
     cum = (1 + r / 100).cumprod()
     mdd = ((cum - cum.cummax()) / cum.cummax() * 100).min()
     return {
-        "n": len(r), "mean_ret": r.mean(),
-        "mean_alpha": a.mean(), "win_alpha": (a > 0).mean() * 100,
+        "n": len(r),
+        "mean_ret": r.mean(),
+        "mean_alpha": a.mean(),
+        "win_alpha": (a > 0).mean() * 100,
         "ir": a.mean() / a.std() if a.std() > 0 else 0,
         "sharpe": r.mean() / r.std() * (252 / hold_days) ** 0.5 if r.std() > 0 else 0,
-        "t": t, "p": p, "sig": p < 0.05, "mdd": mdd,
+        "t": t,
+        "p": p,
+        "sig": p < 0.05,
+        "mdd": mdd,
     }
 
 
@@ -218,16 +67,19 @@ def _model_confidence(st_dict: dict) -> tuple:
     score += 3 if alpha > 2 else 2 if alpha > 0.5 else 1 if alpha > 0 else 0
     score += 3 if ir > 0.5 else 2 if ir > 0.2 else 1 if ir > 0 else 0
     stars = max(1, min(5, round(score / 2.5 + 0.5)))
-    descs = {1: "效力存疑，請持續累積樣本",
-             2: "初步跡象，尚無統計支撐",
-             3: "尚可，需跨越更多市場環境",
-             4: "良好，具初步超額報酬能力",
-             5: "優秀，Alpha 統計顯著"}
+    descs = {
+        1: "效力存疑，請持續累積樣本",
+        2: "初步跡象，尚無統計支撐",
+        3: "尚可，需跨越更多市場環境",
+        4: "良好，具初步超額報酬能力",
+        5: "優秀，Alpha 統計顯著",
+    }
     return stars, "★" * stars + "☆" * (5 - stars), descs[stars]
 
 
 def page_backtest() -> None:
     import altair as alt
+
     st.markdown('<div class="section-title">🔬 模型驗證</div>', unsafe_allow_html=True)
 
     df = compute_backtest()
@@ -235,39 +87,44 @@ def page_backtest() -> None:
         st.info("尚無足夠歷史資料，請先執行分析並同步。")
         return
 
-    n_flagged    = df["data_flag"].notna().sum() if "data_flag" in df.columns else 0
+    n_flagged = df["data_flag"].notna().sum() if "data_flag" in df.columns else 0
     sub = df.dropna(subset=["ret_20d", "b0050_20"]).sort_values("date").copy()
     if sub.empty:
         st.info("尚無足夠價格資料（需同步後等待回測窗口完成）。")
         return
 
-    st20    = _calc_stats(sub["ret_20d"], sub["a0050_20"].dropna(), 20)
+    st20 = _calc_stats(sub["ret_20d"], sub["a0050_20"].dropna(), 20)
     model_mean = sub["ret_20d"].mean()
-    bench_mean = sub["b0050_20"].mean()
     alpha_mean = sub["a0050_20"].mean()
-    win_bench  = (sub["a0050_20"] > 0).mean() * 100
-    beta       = _calc_beta(sub["ret_20d"], sub["b0050_20"])
-    p_val      = st20["p"]      if st20 else None
-    ir         = st20["ir"]     if st20 else None
-    sharpe     = st20["sharpe"] if st20 else None
-    mdd        = st20["mdd"]    if st20 else None
-    n_samp     = st20["n"]      if st20 else len(sub)
+    win_bench = (sub["a0050_20"] > 0).mean() * 100
+    beta = _calc_beta(sub["ret_20d"], sub["b0050_20"])
+    p_val = st20["p"] if st20 else None
+    ir = st20["ir"] if st20 else None
+    sharpe = st20["sharpe"] if st20 else None
+    mdd = st20["mdd"] if st20 else None
+    n_samp = st20["n"] if st20 else len(sub)
     conf_stars, conf_str, conf_desc = _model_confidence(st20)
 
     if p_val is not None:
-        if p_val < 0.05:   verdict, verdict_color = "✅ 有統計顯著的超額報酬（p < 0.05）", "#00c851"
-        elif p_val < 0.15: verdict, verdict_color = "⚠️ 初步跡象但尚不顯著（p < 0.15）", "#ffbb33"
-        else:              verdict, verdict_color = "❌ 目前沒有足夠證據顯示模型優於大盤", "#ff4444"
+        if p_val < 0.05:
+            verdict, verdict_color = "✅ 有統計顯著的超額報酬（p < 0.05）", "#00c851"
+        elif p_val < 0.15:
+            verdict, verdict_color = "⚠️ 初步跡象但尚不顯著（p < 0.15）", "#ffbb33"
+        else:
+            verdict, verdict_color = "❌ 目前沒有足夠證據顯示模型優於大盤", "#ff4444"
     else:
         verdict, verdict_color = "—", "#888"
 
     if n_samp < 30:
-        st.error(f"⚠️ 樣本數僅 {n_samp} 筆（建議至少 30 筆），統計結論可靠性低，請勿過度解讀 p 值與 Alpha。")
+        st.error(
+            f"⚠️ 樣本數僅 {n_samp} 筆（建議至少 30 筆），統計結論可靠性低，請勿過度解讀 p 值與 Alpha。"
+        )
     elif n_samp < 60:
         st.warning(f"⚠️ 樣本數 {n_samp} 筆，建議累積至 60+ 筆後統計結論才較穩定。")
 
     conf_color = ["#ff4444", "#ff4444", "#ffbb33", "#ffbb33", "#00c851"][conf_stars - 1]
-    st.markdown(f"""
+    st.markdown(
+        f"""
 <div style="background:#1a1a2e;border:1px solid #333;border-radius:12px;padding:16px 20px;margin-bottom:12px">
   <div style="display:flex;align-items:center;gap:12px">
     <div style="font-size:1.5rem;color:{conf_color}">{conf_str}</div>
@@ -276,13 +133,16 @@ def page_backtest() -> None:
       <div style="font-size:0.85rem;color:{conf_color};font-weight:600">{conf_desc}</div>
     </div>
   </div>
-</div>""", unsafe_allow_html=True)
+</div>""",
+        unsafe_allow_html=True,
+    )
 
     def _m(label, val, color="#fff"):
         return f'<div style="background:#111;border-radius:8px;padding:10px 12px"><div style="font-size:0.68rem;color:#888">{label}</div><div style="font-size:1.1rem;font-weight:700;color:{color}">{val}</div></div>'
 
     ac = "#00c851" if alpha_mean >= 0 else "#ff4444"
-    st.markdown(f"""
+    st.markdown(
+        f"""
 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
   {_m("樣本數（冷卻後）", f"{n_samp} 筆")}
   {_m("20日均報酬（淨）", f"{model_mean:+.2f}%", "#667eea")}
@@ -293,9 +153,12 @@ def page_backtest() -> None:
   {_m("p 值", f"{p_val:.3f}" if p_val is not None else "—")}
   {_m("勝率 vs 0050", f"{win_bench:.0f}%")}
   {_m("推薦序列 MDD", f"{mdd:.1f}%" if mdd is not None else "—")}
-</div>""", unsafe_allow_html=True)
+</div>""",
+        unsafe_allow_html=True,
+    )
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
 <div style="background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:12px 16px;margin-bottom:16px">
   <div style="color:{verdict_color};font-size:0.95rem;font-weight:600">{verdict}</div>
   <div style="color:#888;font-size:0.75rem;margin-top:6px">
@@ -305,10 +168,14 @@ def page_backtest() -> None:
     {"⚠️ 本回測含 " + str(n_flagged) + " 筆停牌/下市紀錄（停牌用最後成交價、下市用 -100%），不靜默刪除以保留完整損益。 · " if n_flagged > 0 else ""}
     ⚠️ 倖存者偏差：分析池僅含現存且有完整價格資料的股票，歷史上已下市標的無法納入，可能使績效偏高。
   </div>
-</div>""", unsafe_allow_html=True)
+</div>""",
+        unsafe_allow_html=True,
+    )
 
     st.markdown("#### 🎲 隨機選股基準（Monte Carlo 1000 次模擬）")
-    st.caption("在相同日期隨機從當天 AnalysisResult 股票池中選一支（排除實際推薦股，限有價格資料者），重複 1000 次，比較模型是否有識別能力。")
+    st.caption(
+        "在相同日期隨機從當天 AnalysisResult 股票池中選一支（排除實際推薦股，限有價格資料者），重複 1000 次，比較模型是否有識別能力。"
+    )
 
     with st.spinner("計算中…"):
         mc = compute_random_baseline(1000)
@@ -320,97 +187,188 @@ def page_backtest() -> None:
 
         c1, c2, c3 = st.columns(3)
         c1.metric("模型 20日均報酬（淨）", f"{model_mean:+.2f}%")
-        c2.metric("隨機選股均報酬", f"{rand_mean:+.2f}%",
-                  f"{'模型領先' if model_mean > rand_mean else '模型落後'} {abs(model_mean - rand_mean):.2f}%",
-                  delta_color="normal" if model_mean > rand_mean else "inverse")
-        c3.metric("模型位於隨機分布", f"第 {percentile:.0f} 百分位",
-                  "✅ 有識別能力" if percentile >= 75 else "⚠️ 尚未顯著優於隨機")
+        c2.metric(
+            "隨機選股均報酬",
+            f"{rand_mean:+.2f}%",
+            f"{'模型領先' if model_mean > rand_mean else '模型落後'} {abs(model_mean - rand_mean):.2f}%",
+            delta_color="normal" if model_mean > rand_mean else "inverse",
+        )
+        c3.metric(
+            "模型位於隨機分布",
+            f"第 {percentile:.0f} 百分位",
+            "✅ 有識別能力" if percentile >= 75 else "⚠️ 尚未顯著優於隨機",
+        )
 
         mc_df = pd.DataFrame({"mean_ret": sim_means, "type": ["隨機"] * len(sim_means)})
-        hist = (alt.Chart(mc_df).mark_bar(opacity=0.7, color="#667eea")
-                .encode(x=alt.X("mean_ret:Q", bin=alt.Bin(maxbins=40), title="模擬平均報酬 (%)"),
-                        y=alt.Y("count()", title="次數"))
-                .properties(height=220))
-        model_line = alt.Chart(pd.DataFrame({"x": [model_mean]})).mark_rule(
-            color="#ff8800", strokeWidth=2.5
-        ).encode(x="x:Q")
-        model_label = alt.Chart(pd.DataFrame({"x": [model_mean], "y": [len(sim_means) // 8],
-                                               "text": [f"模型 {model_mean:+.2f}%"]})).mark_text(
-            color="#ff8800", fontSize=11, align="left", dx=6
-        ).encode(x="x:Q", y="y:Q", text="text:N")
+        hist = (
+            alt.Chart(mc_df)
+            .mark_bar(opacity=0.7, color="#667eea")
+            .encode(
+                x=alt.X(
+                    "mean_ret:Q", bin=alt.Bin(maxbins=40), title="模擬平均報酬 (%)"
+                ),
+                y=alt.Y("count()", title="次數"),
+            )
+            .properties(height=220)
+        )
+        model_line = (
+            alt.Chart(pd.DataFrame({"x": [model_mean]}))
+            .mark_rule(color="#ff8800", strokeWidth=2.5)
+            .encode(x="x:Q")
+        )
+        model_label = (
+            alt.Chart(
+                pd.DataFrame(
+                    {
+                        "x": [model_mean],
+                        "y": [len(sim_means) // 8],
+                        "text": [f"模型 {model_mean:+.2f}%"],
+                    }
+                )
+            )
+            .mark_text(color="#ff8800", fontSize=11, align="left", dx=6)
+            .encode(x="x:Q", y="y:Q", text="text:N")
+        )
         st.altair_chart(hist + model_line + model_label, use_container_width=True)
 
     st.markdown("---")
     st.markdown("#### 推薦序列累積報酬（各筆 20 日報酬連乘）")
-    st.caption("⚠️ 此為推薦序列績效，非真實投資組合報酬。同期推薦多檔或持倉重疊時，累積曲線可能高估或低估實際績效。")
-    cum_s   = ((1 + sub["ret_20d"]  / 100).cumprod() * 100 - 100).tolist()
-    cum_50  = ((1 + sub["b0050_20"] / 100).cumprod() * 100 - 100).tolist()
+    st.caption(
+        "⚠️ 此為推薦序列績效，非真實投資組合報酬。同期推薦多檔或持倉重疊時，累積曲線可能高估或低估實際績效。"
+    )
+    cum_s = ((1 + sub["ret_20d"] / 100).cumprod() * 100 - 100).tolist()
+    cum_50 = ((1 + sub["b0050_20"] / 100).cumprod() * 100 - 100).tolist()
     sub56 = sub.dropna(subset=["b0056_20"])
-    cum_56  = ((1 + sub56["b0056_20"] / 100).cumprod() * 100 - 100).tolist() if not sub56.empty else []
+    cum_56 = (
+        ((1 + sub56["b0056_20"] / 100).cumprod() * 100 - 100).tolist()
+        if not sub56.empty
+        else []
+    )
 
     curve_data = (
-        [{"trade_no": i+1, "cum": v, "type": "策略"}        for i, v in enumerate(cum_s)]
-      + [{"trade_no": i+1, "cum": v, "type": "0050"}         for i, v in enumerate(cum_50)]
-      + ([{"trade_no": i+1, "cum": v, "type": "0056（高息）"} for i, v in enumerate(cum_56)] if cum_56 else [])
+        [{"trade_no": i + 1, "cum": v, "type": "策略"} for i, v in enumerate(cum_s)]
+        + [{"trade_no": i + 1, "cum": v, "type": "0050"} for i, v in enumerate(cum_50)]
+        + (
+            [
+                {"trade_no": i + 1, "cum": v, "type": "0056（高息）"}
+                for i, v in enumerate(cum_56)
+            ]
+            if cum_56
+            else []
+        )
     )
     curve_df = pd.DataFrame(curve_data)
-    line = (alt.Chart(curve_df).mark_line()
-            .encode(
-                x=alt.X("trade_no:Q", title="推薦筆數"),
-                y=alt.Y("cum:Q", title="累積報酬 (%)"),
-                color=alt.Color("type:N", scale=alt.Scale(
+    line = (
+        alt.Chart(curve_df)
+        .mark_line()
+        .encode(
+            x=alt.X("trade_no:Q", title="推薦筆數"),
+            y=alt.Y("cum:Q", title="累積報酬 (%)"),
+            color=alt.Color(
+                "type:N",
+                scale=alt.Scale(
                     domain=["策略", "0050", "0056（高息）"],
-                    range=["#667eea", "#aaaaaa", "#ffbb33"])),
-                tooltip=["trade_no:Q", "type:N", alt.Tooltip("cum:Q", format=".1f")],
-            ).properties(height=260))
-    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#444", strokeDash=[4, 4]).encode(y="y:Q")
+                    range=["#667eea", "#aaaaaa", "#ffbb33"],
+                ),
+            ),
+            tooltip=["trade_no:Q", "type:N", alt.Tooltip("cum:Q", format=".1f")],
+        )
+        .properties(height=260)
+    )
+    zero = (
+        alt.Chart(pd.DataFrame({"y": [0]}))
+        .mark_rule(color="#444", strokeDash=[4, 4])
+        .encode(y="y:Q")
+    )
     st.altair_chart(line + zero, use_container_width=True)
 
     st.markdown("#### 各基準完整統計（20 日）")
     tbl = []
-    for bench_label, ak, bk in [("vs 0050", "a0050_20", "b0050_20"), ("vs 0056", "a0056_20", "b0056_20")]:
+    for bench_label, ak, bk in [
+        ("vs 0050", "a0050_20", "b0050_20"),
+        ("vs 0056", "a0056_20", "b0056_20"),
+    ]:
         valid = sub.dropna(subset=["ret_20d", bk])
         st_d = _calc_stats(valid["ret_20d"], valid[ak], 20)
         if not st_d:
             continue
-        tbl.append({
-            "基準": bench_label, "樣本": st_d["n"],
-            "模型均報酬": f"{st_d['mean_ret']:+.2f}%",
-            "均 Alpha": f"{st_d['mean_alpha']:+.2f}%",
-            "勝率 vs 基準": f"{st_d['win_alpha']:.0f}%",
-            "IR": f"{st_d['ir']:.2f}",
-            "t 值": f"{st_d['t']:.2f}",
-            "p 值": f"{st_d['p']:.3f}",
-            "顯著": "✅" if st_d["sig"] else "⚠️",
-            "推薦序列 MDD": f"{st_d['mdd']:.1f}%",
-        })
+        tbl.append(
+            {
+                "基準": bench_label,
+                "樣本": st_d["n"],
+                "模型均報酬": f"{st_d['mean_ret']:+.2f}%",
+                "均 Alpha": f"{st_d['mean_alpha']:+.2f}%",
+                "勝率 vs 基準": f"{st_d['win_alpha']:.0f}%",
+                "IR": f"{st_d['ir']:.2f}",
+                "t 值": f"{st_d['t']:.2f}",
+                "p 值": f"{st_d['p']:.3f}",
+                "顯著": "✅" if st_d["sig"] else "⚠️",
+                "推薦序列 MDD": f"{st_d['mdd']:.1f}%",
+            }
+        )
     if tbl:
         st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
 
     st.markdown("#### 逐筆 Alpha vs 0050（20 日）")
     bar_df = sub.copy()
     bar_df["label"] = bar_df["date"].astype(str) + " " + bar_df["stock_id"]
-    bar_df["color"] = bar_df["a0050_20"].apply(lambda x: "#00c851" if (x or 0) >= 0 else "#ff4444")
-    bar = (alt.Chart(bar_df.dropna(subset=["a0050_20"])).mark_bar()
-           .encode(
-               x=alt.X("label:N", sort=None,
-                        axis=alt.Axis(labelAngle=-60, labelLimit=60, labelFontSize=8)),
-               y=alt.Y("a0050_20:Q", title="Alpha (%)"),
-               color=alt.Color("color:N", scale=None),
-               tooltip=["date:T", "stock_id:N",
-                        alt.Tooltip("ret_20d:Q",  format=".2f", title="策略%"),
-                        alt.Tooltip("b0050_20:Q", format=".2f", title="0050%"),
-                        alt.Tooltip("a0050_20:Q", format=".2f", title="Alpha%")],
-           ).properties(height=240))
-    zero2 = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#888", strokeDash=[4, 4]).encode(y="y:Q")
+    bar_df["color"] = bar_df["a0050_20"].apply(
+        lambda x: "#00c851" if (x or 0) >= 0 else "#ff4444"
+    )
+    bar = (
+        alt.Chart(bar_df.dropna(subset=["a0050_20"]))
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "label:N",
+                sort=None,
+                axis=alt.Axis(labelAngle=-60, labelLimit=60, labelFontSize=8),
+            ),
+            y=alt.Y("a0050_20:Q", title="Alpha (%)"),
+            color=alt.Color("color:N", scale=None),
+            tooltip=[
+                "date:T",
+                "stock_id:N",
+                alt.Tooltip("ret_20d:Q", format=".2f", title="策略%"),
+                alt.Tooltip("b0050_20:Q", format=".2f", title="0050%"),
+                alt.Tooltip("a0050_20:Q", format=".2f", title="Alpha%"),
+            ],
+        )
+        .properties(height=240)
+    )
+    zero2 = (
+        alt.Chart(pd.DataFrame({"y": [0]}))
+        .mark_rule(color="#888", strokeDash=[4, 4])
+        .encode(y="y:Q")
+    )
     st.altair_chart(bar + zero2, use_container_width=True)
 
     with st.expander("📋 推薦明細", expanded=False):
-        cols = ["date", "stock_id", "confidence", "entry", "ret_20d", "b0050_20", "a0050_20", "b0056_20", "a0056_20"]
+        cols = [
+            "date",
+            "stock_id",
+            "confidence",
+            "entry",
+            "ret_20d",
+            "b0050_20",
+            "a0050_20",
+            "b0056_20",
+            "a0056_20",
+        ]
         if "data_flag" in df.columns:
             cols.append("data_flag")
         show = df[cols].copy()
-        col_names = ["日期", "股票", "信心", "進場價", "20日%", "0050%", "Alpha_0050", "0056%", "Alpha_0056"]
+        col_names = [
+            "日期",
+            "股票",
+            "信心",
+            "進場價",
+            "20日%",
+            "0050%",
+            "Alpha_0050",
+            "0056%",
+            "Alpha_0056",
+        ]
         if "data_flag" in df.columns:
             col_names.append("備注")
         show.columns = col_names
@@ -419,7 +377,14 @@ def page_backtest() -> None:
         def _c(v):
             if pd.isna(v):
                 return "color:#888"
-            return "color:#00c851;font-weight:600" if v > 0 else "color:#ff4444;font-weight:600"
+            return (
+                "color:#00c851;font-weight:600"
+                if v > 0
+                else "color:#ff4444;font-weight:600"
+            )
 
-        st.dataframe(show.style.map(_c, subset=["20日%", "Alpha_0050", "Alpha_0056"]),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(
+            show.style.map(_c, subset=["20日%", "Alpha_0050", "Alpha_0056"]),
+            use_container_width=True,
+            hide_index=True,
+        )

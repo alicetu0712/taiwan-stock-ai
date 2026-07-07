@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import List, Optional, Tuple
 
-from config import SCORE_WEIGHTS, RECOMMENDATION_LEVELS, RECOMMENDATION_RULES
+from config import RECOMMENDATION_LEVELS, RECOMMENDATION_RULES, SCORE_WEIGHTS
 
 logger = logging.getLogger(__name__)
 
@@ -26,33 +26,34 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StockRecommendation:
     """單一股票推薦結果"""
-    stock_id:           str
-    name:               str = ""
-    date:               Optional[date] = None
+
+    stock_id: str
+    name: str = ""
+    date: Optional[date] = None
     # 各模組分數
-    quality_score:      float = 0.0    # 基本面（0-100）
-    timing_score:       float = 0.0    # 技術面（0-100）
-    behavior_score:     float = 0.0    # 市場行為（0-100）
-    intelligence_score: float = 0.0    # 市場情報（0-100）
-    risk_score:         float = 100.0  # 風險（0-100，越高越安全）
-    total_score:        float = 0.0    # 綜合評分（0-100）
+    quality_score: float = 0.0  # 基本面（0-100）
+    timing_score: float = 0.0  # 技術面（0-100）
+    behavior_score: float = 0.0  # 市場行為（0-100）
+    intelligence_score: float = 0.0  # 市場情報（0-100）
+    risk_score: float = 100.0  # 風險（0-100，越高越安全）
+    total_score: float = 0.0  # 綜合評分（0-100）
     # 推薦等級與信心
-    rec_level:          str = "D"       # A+/A/B/C/D
-    stars:              str = "★☆☆☆☆"
-    confidence:         float = 0.0    # 信心分數（0-100%）
+    rec_level: str = "D"  # A+/A/B/C/D
+    stars: str = "★☆☆☆☆"
+    confidence: float = 0.0  # 信心分數（0-100%）
     # Explainable AI
-    summary:            str = ""        # 一句話推薦摘要
-    advantages:         List[str] = field(default_factory=list)
-    risks:              List[str] = field(default_factory=list)
-    watch_points:       List[str] = field(default_factory=list)
-    ai_conclusion:      str = ""        # AI CIO 結論
+    summary: str = ""  # 一句話推薦摘要
+    advantages: List[str] = field(default_factory=list)
+    risks: List[str] = field(default_factory=list)
+    watch_points: List[str] = field(default_factory=list)
+    ai_conclusion: str = ""  # AI CIO 結論
     # 附加資訊
-    quality_grade:      str = "D"
-    close:              Optional[float] = None
-    volume:             Optional[float] = None
-    market:             str = ""
-    industry:           str = ""
-    skip_reason:        str = ""        # 若無推薦，說明原因
+    quality_grade: str = "D"
+    close: Optional[float] = None
+    volume: Optional[float] = None
+    market: str = ""
+    industry: str = ""
+    skip_reason: str = ""  # 若無推薦，說明原因
 
 
 class DecisionEngine:
@@ -65,23 +66,23 @@ class DecisionEngine:
 
     def __init__(self, weights: dict = None, rules: dict = None):
         self.weights = weights or SCORE_WEIGHTS
-        self.rules   = rules   or RECOMMENDATION_RULES
+        self.rules = rules or RECOMMENDATION_RULES
 
     def evaluate(
         self,
-        stock_id:           str,
-        quality_result    = None,
-        technical_result  = None,
-        behavior_result   = None,
-        risk_result       = None,
+        stock_id: str,
+        quality_result=None,
+        technical_result=None,
+        behavior_result=None,
+        risk_result=None,
         intelligence_score: float = 60.0,
         has_real_intelligence: bool = False,
-        name:             str = "",
-        close:            Optional[float] = None,
-        volume:           Optional[float] = None,
-        market:           str = "",
-        industry:         str = "",
-        trade_date:       Optional[date] = None,
+        name: str = "",
+        close: Optional[float] = None,
+        volume: Optional[float] = None,
+        market: str = "",
+        industry: str = "",
+        trade_date: Optional[date] = None,
     ) -> StockRecommendation:
         """
         整合所有分析結果，計算綜合評分並決定推薦等級。
@@ -98,17 +99,17 @@ class DecisionEngine:
         )
 
         # 提取各模組分數
-        q_score = quality_result.quality_score  if quality_result  else 0.0
+        q_score = quality_result.quality_score if quality_result else 0.0
         t_score = technical_result.timing_score if technical_result else 0.0
         b_score = behavior_result.behavior_score if behavior_result else 50.0
-        r_score = risk_result.risk_score         if risk_result     else 100.0
+        r_score = risk_result.risk_score if risk_result else 100.0
         has_chip = behavior_result.has_real_chip_data if behavior_result else False
 
-        rec.quality_score  = q_score
-        rec.timing_score   = t_score
+        rec.quality_score = q_score
+        rec.timing_score = t_score
         rec.behavior_score = b_score
-        rec.risk_score     = r_score
-        rec.quality_grade  = quality_result.quality_grade if quality_result else "D"
+        rec.risk_score = r_score
+        rec.quality_grade = quality_result.quality_grade if quality_result else "D"
 
         # ── 計算綜合評分（Dynamic Weighting：quality/behavior 缺失時重分配權重）──
         w = dict(self.weights)
@@ -116,21 +117,25 @@ class DecisionEngine:
             # 把 quality 的 40% 等比例分給 timing / behavior / intelligence
             non_q_sum = w["timing"] + w["behavior"] + w["intelligence"]
             extra = w["quality"]
-            w["timing"]       += extra * (w["timing"]       / non_q_sum)
-            w["behavior"]     += extra * (w["behavior"]     / non_q_sum)
+            w["timing"] += extra * (w["timing"] / non_q_sum)
+            w["behavior"] += extra * (w["behavior"] / non_q_sum)
             w["intelligence"] += extra * (w["intelligence"] / non_q_sum)
             w["quality"] = 0.0
         if not has_chip:
             # 無真實籌碼資料：把 behavior 20% 分給 timing/intelligence
             non_b_sum = w["timing"] + w["intelligence"]
             extra = w["behavior"]
-            w["timing"]       += extra * (w["timing"]       / non_b_sum)
+            w["timing"] += extra * (w["timing"] / non_b_sum)
             w["intelligence"] += extra * (w["intelligence"] / non_b_sum)
             w["behavior"] = 0.0
             b_score = 0.0  # 不納入計算
         if not has_real_intelligence:
             # 無真實新聞/情報資料：把 intelligence 10% 等比例分給 quality/timing/behavior
-            active = {k: v for k, v in w.items() if k != "intelligence" and k != "risk" and v > 0}
+            active = {
+                k: v
+                for k, v in w.items()
+                if k != "intelligence" and k != "risk" and v > 0
+            }
             active_sum = sum(active.values())
             if active_sum > 0:
                 extra = w["intelligence"]
@@ -139,15 +144,15 @@ class DecisionEngine:
             w["intelligence"] = 0.0
 
         base_score = (
-            q_score     * w["quality"]    +
-            t_score     * w["timing"]     +
-            b_score     * w["behavior"]   +
-            intelligence_score * w["intelligence"]
+            q_score * w["quality"]
+            + t_score * w["timing"]
+            + b_score * w["behavior"]
+            + intelligence_score * w["intelligence"]
         )
         # 風險扣分（risk_score 越低代表風險越高，對 total 造成扣分）
         risk_penalty = (100 - r_score) * w["risk"]
-        total_score  = base_score - risk_penalty
-        total_score  = round(max(0.0, min(100.0, total_score)), 1)
+        total_score = base_score - risk_penalty
+        total_score = round(max(0.0, min(100.0, total_score)), 1)
         rec.total_score = total_score
 
         # ── 推薦等級 ──────────────────────────────────────────
@@ -160,7 +165,7 @@ class DecisionEngine:
 
         # ── Explainable AI（收集加分/扣分因素）────────────────
         advantages = []
-        risks      = []
+        risks = []
 
         if quality_result:
             advantages.extend(quality_result.factors_plus[:3])
@@ -171,7 +176,11 @@ class DecisionEngine:
                 advantages.append("均線多頭排列，中期趨勢健康")
             if technical_result.volume_signal == "price_up_vol_up":
                 advantages.append("量價俱揚，買盤積極")
-            if technical_result.three_major if hasattr(technical_result, "three_major") else False:
+            if (
+                technical_result.three_major
+                if hasattr(technical_result, "three_major")
+                else False
+            ):
                 advantages.append("三大法人同步買超")
             risks.extend(technical_result.risk_signals[:2])
 
@@ -182,10 +191,12 @@ class DecisionEngine:
         if risk_result:
             risks.extend(risk_result.risk_factors[:3])
 
-        rec.advantages   = list(dict.fromkeys(advantages))[:5]  # 去重，最多5條
-        rec.risks        = list(dict.fromkeys(risks))[:5]
-        rec.watch_points = self._build_watch_points(quality_result, technical_result, trade_date)
-        rec.summary      = self._build_summary(rec)
+        rec.advantages = list(dict.fromkeys(advantages))[:5]  # 去重，最多5條
+        rec.risks = list(dict.fromkeys(risks))[:5]
+        rec.watch_points = self._build_watch_points(
+            quality_result, technical_result, trade_date
+        )
+        rec.summary = self._build_summary(rec)
         rec.ai_conclusion = self._build_conclusion(rec)
 
         logger.debug(
@@ -206,8 +217,8 @@ class DecisionEngine:
         從候選名單中選出 Top N。
         若無符合條件者，回傳空列表並附說明。
         """
-        max_n     = max_n or self.rules["max_daily_recs"]
-        min_conf  = self.rules["min_confidence"]
+        max_n = max_n or self.rules["max_daily_recs"]
+        min_conf = self.rules["min_confidence"]
         min_score = self.rules["min_total_score"]
 
         # 三段式市場方向控制
@@ -216,7 +227,9 @@ class DecisionEngine:
             allowed_levels = ("A+", "A")
             max_n = 1
             min_score = max(min_score, 72.0)
-            logger.info(f"[Decision] 空頭模式：僅接受 A/A+，門檻 {min_score}，最多 1 檔")
+            logger.info(
+                f"[Decision] 空頭模式：僅接受 A/A+，門檻 {min_score}，最多 1 檔"
+            )
         elif caution_mode:
             max_n = min(max_n, 2)
             min_score = max(min_score, 68.0)
@@ -224,7 +237,8 @@ class DecisionEngine:
 
         # 篩選符合最低標準的候選
         qualified = [
-            r for r in candidates
+            r
+            for r in candidates
             if r.confidence >= min_conf
             and r.total_score >= min_score
             and r.rec_level in allowed_levels
@@ -277,7 +291,7 @@ class DecisionEngine:
 
         # 資料完整性扣分
         if quality_result is None or not quality_result.has_sufficient_data:
-            confidence -= 20   # 缺少基本面資料
+            confidence -= 20  # 缺少基本面資料
         if technical_result is None or technical_result.timing_score == 0:
             confidence -= 15
         if behavior_result is None:
@@ -288,9 +302,9 @@ class DecisionEngine:
             q_good = quality_result.quality_score >= 70
             t_good = technical_result.timing_score >= 60
             if q_good and not t_good:
-                confidence -= 10   # 基本面好但技術面不佳
+                confidence -= 10  # 基本面好但技術面不佳
             elif not q_good and t_good:
-                confidence -= 15   # 只有技術面好，不符合「先基本面」原則
+                confidence -= 15  # 只有技術面好，不符合「先基本面」原則
 
         # 風險高時降低信心
         if risk_result:
@@ -305,10 +319,10 @@ class DecisionEngine:
         """一句話推薦摘要。"""
         level_desc = {
             "A+": "基本面與技術面均優秀，強烈建議深入研究",
-            "A":  "公司體質良好，值得持續追蹤",
-            "B":  "基本面不錯，等待更佳進場時機",
-            "C":  "目前條件不夠理想，建議觀望",
-            "D":  "不建議研究",
+            "A": "公司體質良好，值得持續追蹤",
+            "B": "基本面不錯，等待更佳進場時機",
+            "C": "目前條件不夠理想，建議觀望",
+            "D": "不建議研究",
         }
         return level_desc.get(rec.rec_level, "")
 
@@ -317,7 +331,9 @@ class DecisionEngine:
         parts = []
 
         if rec.quality_score >= 75:
-            parts.append(f"公司品質評分 {rec.quality_score:.0f} 分（{rec.quality_grade} 級），基本面優秀")
+            parts.append(
+                f"公司品質評分 {rec.quality_score:.0f} 分（{rec.quality_grade} 級），基本面優秀"
+            )
         elif rec.quality_score >= 60:
             parts.append(f"公司品質評分 {rec.quality_score:.0f} 分，基本面尚可")
         else:
@@ -334,7 +350,9 @@ class DecisionEngine:
             parts.append(f"主要風險：{'；'.join(rec.risks[:2])}")
 
         if rec.confidence < 70:
-            parts.append(f"本次分析信心分數 {rec.confidence:.0f}%，建議持續觀察後再評估")
+            parts.append(
+                f"本次分析信心分數 {rec.confidence:.0f}%，建議持續觀察後再評估"
+            )
 
         return "。".join(parts) + "。"
 

@@ -10,13 +10,22 @@ price_collector.py — 每日股價資料蒐集
 
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
 import pandas as pd
 import requests
 
-from config import HTTP_HEADERS, HTTP_RETRY, HTTP_TIMEOUT, TWSE_API, TPEX_API, EXCLUDE_KEYWORDS
+from src.collectors.base import BaseCollector
+
+from config import (
+    EXCLUDE_KEYWORDS,
+    HTTP_HEADERS,
+    HTTP_RETRY,
+    HTTP_TIMEOUT,
+    TPEX_API,
+    TWSE_API,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +33,16 @@ logger = logging.getLogger(__name__)
 def _get(url: str, timeout: int = HTTP_TIMEOUT) -> Optional[list]:
     for attempt in range(HTTP_RETRY):
         try:
-            resp = requests.get(url, headers=HTTP_HEADERS, timeout=timeout, verify=False)
+            resp = requests.get(
+                url, headers=HTTP_HEADERS, timeout=timeout, verify=False
+            )
             resp.raise_for_status()
             data = resp.json()
             return data
         except Exception as e:
             logger.warning(f"[Attempt {attempt+1}] GET {url} failed: {e}")
             if attempt < HTTP_RETRY - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
     return None
 
 
@@ -75,27 +86,29 @@ def fetch_twse_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
         try:
             if _api_date is None:
                 _api_date = _parse_roc_date(row.get("Date", ""))
-            records.append({
-                "stock_id":   sid,
-                "name":       name,
-                "market":     "TWSE",
-                "date":       trade_date or _api_date or date.today(),
-                "open":       _to_float(row.get("OpeningPrice")),
-                "high":       _to_float(row.get("HighestPrice")),
-                "low":        _to_float(row.get("LowestPrice")),
-                "close":      _to_float(row.get("ClosingPrice")),
-                "change_pct": _to_float(row.get("ChangePercent")),
-                "volume":     _to_float(row.get("TradeVolume")),   # 千股
-                "amount":     _to_float(row.get("TradeValue")),    # 元 → 轉百萬
-            })
+            records.append(
+                {
+                    "stock_id": sid,
+                    "name": name,
+                    "market": "TWSE",
+                    "date": trade_date or _api_date or date.today(),
+                    "open": _to_float(row.get("OpeningPrice")),
+                    "high": _to_float(row.get("HighestPrice")),
+                    "low": _to_float(row.get("LowestPrice")),
+                    "close": _to_float(row.get("ClosingPrice")),
+                    "change_pct": _to_float(row.get("ChangePercent")),
+                    "volume": _to_float(row.get("TradeVolume")),  # 千股
+                    "amount": _to_float(row.get("TradeValue")),  # 元 → 轉百萬
+                }
+            )
         except Exception as e:
-            logger.debug(f"TWSE row parse skip ({row.get('Code','')}): {e}")
+            logger.debug(f"TWSE row parse skip ({row.get('Code', '')}): {e}")
             continue
 
     df = pd.DataFrame(records)
     if not df.empty and "amount" in df.columns:
-        df["amount"] = df["amount"] / 1_000_000   # 轉換為百萬元
-        df["volume"] = df["volume"] / 1_000        # 轉換為千股
+        df["amount"] = df["amount"] / 1_000_000  # 轉換為百萬元
+        df["volume"] = df["volume"] / 1_000  # 轉換為千股
     logger.info(f"TWSE: {len(df)} stocks fetched.")
     return df
 
@@ -118,21 +131,25 @@ def fetch_tpex_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
         try:
             if _api_date_tpex is None:
                 _api_date_tpex = _parse_roc_date(row.get("Date", ""))
-            records.append({
-                "stock_id":   sid,
-                "name":       name,
-                "market":     "TPEx",
-                "date":       trade_date or _api_date_tpex or date.today(),
-                "open":       _to_float(row.get("Open")),
-                "high":       _to_float(row.get("High")),
-                "low":        _to_float(row.get("Low")),
-                "close":      _to_float(row.get("Close")),
-                "change_pct": _to_float(row.get("Change")),
-                "volume":     _to_float(row.get("TradeVolume")),
-                "amount":     _to_float(row.get("TradeValue")),
-            })
+            records.append(
+                {
+                    "stock_id": sid,
+                    "name": name,
+                    "market": "TPEx",
+                    "date": trade_date or _api_date_tpex or date.today(),
+                    "open": _to_float(row.get("Open")),
+                    "high": _to_float(row.get("High")),
+                    "low": _to_float(row.get("Low")),
+                    "close": _to_float(row.get("Close")),
+                    "change_pct": _to_float(row.get("Change")),
+                    "volume": _to_float(row.get("TradeVolume")),
+                    "amount": _to_float(row.get("TradeValue")),
+                }
+            )
         except Exception as e:
-            logger.debug(f"TPEx row parse skip ({row.get('SecuritiesCompanyCode','')}): {e}")
+            logger.debug(
+                f"TPEx row parse skip ({row.get('SecuritiesCompanyCode', '')}): {e}"
+            )
             continue
 
     df = pd.DataFrame(records)
@@ -145,11 +162,16 @@ def fetch_tpex_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
 
 def _fetch_yahoo_one(ticker: str, target_date: date) -> Optional[dict]:
     """用 Yahoo Finance chart API 抓單一股票當日 OHLCV。不依賴 yfinance 套件。"""
-    import calendar
-    day_start = int(datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0).timestamp())
-    day_end   = day_start + 86400
-    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-           f"?period1={day_start}&period2={day_end}&interval=1d")
+    day_start = int(
+        datetime(
+            target_date.year, target_date.month, target_date.day, 0, 0, 0
+        ).timestamp()
+    )
+    day_end = day_start + 86400
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+        f"?period1={day_start}&period2={day_end}&interval=1d"
+    )
     headers = {**HTTP_HEADERS, "Accept": "application/json"}
     try:
         resp = requests.get(url, headers=headers, timeout=10, verify=False)
@@ -159,7 +181,6 @@ def _fetch_yahoo_one(ticker: str, target_date: date) -> Optional[dict]:
         result = j.get("chart", {}).get("result")
         if not result:
             return None
-        meta = result[0].get("meta", {})
         indicators = result[0].get("indicators", {})
         q = indicators.get("quote", [{}])[0]
         adjclose_list = indicators.get("adjclose", [{}])
@@ -168,14 +189,16 @@ def _fetch_yahoo_one(ticker: str, target_date: date) -> Optional[dict]:
         if not timestamps or not q.get("close"):
             return None
         idx = 0  # 只取第一筆（當日）
-        close = (adjclose[idx] if adjclose and idx < len(adjclose) else None) or q["close"][idx]
+        close = (adjclose[idx] if adjclose and idx < len(adjclose) else None) or q[
+            "close"
+        ][idx]
         if not close:
             return None
         return {
-            "open":   q.get("open",   [None])[idx],
-            "high":   q.get("high",   [None])[idx],
-            "low":    q.get("low",    [None])[idx],
-            "close":  close,
+            "open": q.get("open", [None])[idx],
+            "high": q.get("high", [None])[idx],
+            "low": q.get("low", [None])[idx],
+            "close": close,
             "volume": q.get("volume", [None])[idx],
         }
     except Exception:
@@ -189,10 +212,14 @@ def fetch_yfinance_daily(stale_df: pd.DataFrame, target_date: date) -> pd.DataFr
     """
     # 取得需要補抓的 stock_id 清單（AnalysisResult + benchmarks）
     try:
-        from src.database import get_session
         from sqlalchemy import text
+
+        from src.database import get_session
+
         s = get_session()
-        result = s.execute(text("SELECT DISTINCT stock_id FROM analysis_results")).fetchall()
+        result = s.execute(
+            text("SELECT DISTINCT stock_id FROM analysis_results")
+        ).fetchall()
         s.close()
         tracked_ids = {r[0] for r in result} | {"0050", "0056"}
     except Exception as e:
@@ -200,8 +227,10 @@ def fetch_yfinance_daily(stale_df: pd.DataFrame, target_date: date) -> pd.DataFr
         tracked_ids = None
 
     # 用 stale_df 建立 stock_id → market 對應
-    sid_to_market = {str(row["stock_id"]): str(row.get("market", "TWSE"))
-                     for _, row in stale_df.iterrows()}
+    sid_to_market = {
+        str(row["stock_id"]): str(row.get("market", "TWSE"))
+        for _, row in stale_df.iterrows()
+    }
 
     suffix_map = {"TWSE": ".TW", "TPEx": ".TWO"}
     rows_info = []
@@ -217,18 +246,24 @@ def fetch_yfinance_daily(stale_df: pd.DataFrame, target_date: date) -> pd.DataFr
     for sid, market, ticker in rows_info:
         data = _fetch_yahoo_one(ticker, target_date)
         if data and data.get("close") and data["close"] > 0:
-            records.append({
-                "stock_id":   sid,
-                "market":     market,
-                "date":       target_date,
-                "open":       _to_float(data.get("open")),
-                "high":       _to_float(data.get("high")),
-                "low":        _to_float(data.get("low")),
-                "close":      _to_float(data["close"]),
-                "volume":     _to_float(data.get("volume", 0)) / 1000 if data.get("volume") else None,
-                "amount":     None,
-                "change_pct": None,
-            })
+            records.append(
+                {
+                    "stock_id": sid,
+                    "market": market,
+                    "date": target_date,
+                    "open": _to_float(data.get("open")),
+                    "high": _to_float(data.get("high")),
+                    "low": _to_float(data.get("low")),
+                    "close": _to_float(data["close"]),
+                    "volume": (
+                        _to_float(data.get("volume", 0)) / 1000
+                        if data.get("volume")
+                        else None
+                    ),
+                    "amount": None,
+                    "change_pct": None,
+                }
+            )
             ok += 1
         else:
             fail += 1
@@ -258,7 +293,9 @@ def fetch_all_prices(trade_date: Optional[date] = None) -> pd.DataFrame:
         if hasattr(api_date, "date"):
             api_date = api_date.date()
         if api_date < today:
-            logger.info(f"TWSE/TPEx API 仍回傳 {api_date}（今日 {today}），啟用 yfinance 備援…")
+            logger.info(
+                f"TWSE/TPEx API 仍回傳 {api_date}（今日 {today}），啟用 yfinance 備援…"
+            )
             yf_df = fetch_yfinance_daily(all_df, today)
             if not yf_df.empty:
                 yf_date = yf_df["date"].iloc[0]
@@ -286,9 +323,11 @@ def fetch_stock_info() -> dict:
         if not sid:
             continue
         capital_raw = _to_float(str(row.get("實收資本額", "")).replace(",", ""))
-        shares_raw  = _to_float(str(row.get("已發行普通股數或TDR原股發行股數", "")).replace(",", ""))
+        shares_raw = _to_float(
+            str(row.get("已發行普通股數或TDR原股發行股數", "")).replace(",", "")
+        )
         result[sid] = {
-            "capital_b":           round(capital_raw / 1e8, 2) if capital_raw else None,
+            "capital_b": round(capital_raw / 1e8, 2) if capital_raw else None,
             "outstanding_shares_k": round(shares_raw / 1000, 0) if shares_raw else None,
         }
     return result
@@ -301,16 +340,20 @@ def fetch_market_summary() -> dict:
         return {}
     try:
         row = data[0]
-        taiex  = _to_float(row.get("TAIEX"))
+        taiex = _to_float(row.get("TAIEX"))
         change = _to_float(row.get("Change"))
-        tv     = _to_float(row.get("TradeValue"))
+        tv = _to_float(row.get("TradeValue"))
         if taiex:
-            pct = round(change / (taiex - change) * 100, 2) if change and (taiex - change) != 0 else None
+            pct = (
+                round(change / (taiex - change) * 100, 2)
+                if change and (taiex - change) != 0
+                else None
+            )
             return {
-                "index_name":       "加權指數",
-                "index_close":      taiex,
+                "index_name": "加權指數",
+                "index_close": taiex,
                 "index_change_pct": pct,
-                "total_amount_b":   round(tv / 1e9, 1) if tv else 0,
+                "total_amount_b": round(tv / 1e9, 1) if tv else 0,
             }
     except Exception as e:
         logger.warning(f"market_summary parse error: {e}")
@@ -326,6 +369,7 @@ def fetch_price_history_finmind(
     """用 FinMind 取得個股歷史股價（用於回測 / 初始化）。"""
     try:
         from FinMind.data import DataLoader
+
         dl = DataLoader()
         if token:
             dl.login_by_token(api_token=token)
@@ -336,14 +380,33 @@ def fetch_price_history_finmind(
         )
         if df.empty:
             return pd.DataFrame()
-        df = df.rename(columns={
-            "date": "date", "open": "open", "max": "high",
-            "min": "low", "close": "close", "Trading_Volume": "volume",
-            "Trading_money": "amount", "spread": "change_pct",
-        })
+        df = df.rename(
+            columns={
+                "date": "date",
+                "open": "open",
+                "max": "high",
+                "min": "low",
+                "close": "close",
+                "Trading_Volume": "volume",
+                "Trading_money": "amount",
+                "spread": "change_pct",
+            }
+        )
         df["stock_id"] = stock_id
         df["date"] = pd.to_datetime(df["date"]).dt.date
-        return df[["stock_id", "date", "open", "high", "low", "close", "volume", "amount", "change_pct"]]
+        return df[
+            [
+                "stock_id",
+                "date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "amount",
+                "change_pct",
+            ]
+        ]
     except Exception as e:
         logger.warning(f"FinMind price history failed ({stock_id}): {e}")
         return pd.DataFrame()
@@ -359,3 +422,66 @@ def _to_float(val) -> Optional[float]:
         return float(s)
     except (ValueError, TypeError):
         return None
+
+
+# ── 統一介面 ──────────────────────────────────────────────────
+
+
+class PriceCollector(BaseCollector):
+    """統一 Collector 介面。run() 回傳 CollectResult。"""
+
+    name = "price"
+
+    def collect(self, trade_date: Optional[date] = None, **kwargs) -> pd.DataFrame:
+        return fetch_all_prices(trade_date)
+
+    def validate(self, data: pd.DataFrame) -> tuple:
+        if data is None or data.empty:
+            return False, "price data is empty"
+        required = {"stock_id", "close"}
+        missing = required - set(data.columns)
+        if missing:
+            return False, f"missing columns: {missing}"
+        valid_rows = data["close"].notna().sum()
+        if valid_rows == 0:
+            return False, "no valid close prices"
+        return True, "ok"
+
+    def parse(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        df["stock_id"] = df["stock_id"].astype(str).str.strip()
+        for col in ("open", "high", "low", "close", "volume", "amount", "change_pct"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+
+    def save(self, df: pd.DataFrame, session) -> int:
+        from src.database import DailyPrice
+
+        trade_date = df["date"].iloc[0] if "date" in df.columns else date.today()
+        n = 0
+        for _, row in df.iterrows():
+            exists = (
+                session.query(DailyPrice)
+                .filter_by(stock_id=row["stock_id"], date=trade_date)
+                .first()
+            )
+            if not exists:
+                session.add(
+                    DailyPrice(
+                        stock_id=row["stock_id"],
+                        date=trade_date,
+                        open=row.get("open"),
+                        high=row.get("high"),
+                        low=row.get("low"),
+                        close=row.get("close"),
+                        volume=row.get("volume"),
+                        amount=row.get("amount"),
+                        change_pct=row.get("change_pct"),
+                    )
+                )
+                n += 1
+        session.commit()
+        return n
+
+    # run() 繼承自 BaseCollector — 回傳 CollectResult

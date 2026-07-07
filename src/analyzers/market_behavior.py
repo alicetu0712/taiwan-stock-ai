@@ -10,7 +10,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -19,17 +18,18 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MarketBehaviorResult:
     """市場行為分析結果"""
-    stock_id:           str
-    behavior_score:     float = 0.0    # 0-100
-    has_real_chip_data: bool  = False  # 是否有真實籌碼資料（False=無資料，給中性分）
-    foreign_signal:     str   = "neutral"   # bullish / bearish / neutral
-    trust_signal:       str   = "neutral"
-    dealer_signal:      str   = "neutral"
-    three_major:        bool  = False    # 三大法人同步買超
-    margin_signal:      str   = "neutral"   # healthy / risky
-    factors_plus:       List[str] = field(default_factory=list)
-    factors_minus:      List[str] = field(default_factory=list)
-    summary:            str   = ""
+
+    stock_id: str
+    behavior_score: float = 0.0  # 0-100
+    has_real_chip_data: bool = False  # 是否有真實籌碼資料（False=無資料，給中性分）
+    foreign_signal: str = "neutral"  # bullish / bearish / neutral
+    trust_signal: str = "neutral"
+    dealer_signal: str = "neutral"
+    three_major: bool = False  # 三大法人同步買超
+    margin_signal: str = "neutral"  # healthy / risky
+    factors_plus: List[str] = field(default_factory=list)
+    factors_minus: List[str] = field(default_factory=list)
+    summary: str = ""
 
 
 class MarketBehaviorAnalyzer:
@@ -41,9 +41,9 @@ class MarketBehaviorAnalyzer:
 
     WEIGHTS = {
         "foreign": 35,
-        "trust":   30,
-        "dealer":  15,
-        "margin":  20,
+        "trust": 30,
+        "dealer": 15,
+        "margin": 20,
     }
 
     def analyze(
@@ -57,17 +57,16 @@ class MarketBehaviorAnalyzer:
 
         if chip_history is None or chip_history.empty:
             result.summary = "無籌碼資料，跳過市場行為分析。"
-            result.behavior_score = 50.0   # 給中性分數
+            result.behavior_score = 50.0  # 給中性分數
             return result
 
         chip = chip_history.sort_values("date").reset_index(drop=True)
-        score     = 0.0
+        score = 0.0
         plus, minus = [], []
 
         # ── 外資分析（最高 35 分）────────────────────────────
         foreign_score, f_sig, f_plus, f_minus = self._analyze_institutional(
-            chip, "foreign_net", label="外資",
-            max_score=self.WEIGHTS["foreign"]
+            chip, "foreign_net", label="外資", max_score=self.WEIGHTS["foreign"]
         )
         score += foreign_score
         result.foreign_signal = f_sig
@@ -76,8 +75,7 @@ class MarketBehaviorAnalyzer:
 
         # ── 投信分析（最高 30 分）────────────────────────────
         trust_score, t_sig, t_plus, t_minus = self._analyze_institutional(
-            chip, "trust_net", label="投信",
-            max_score=self.WEIGHTS["trust"]
+            chip, "trust_net", label="投信", max_score=self.WEIGHTS["trust"]
         )
         score += trust_score
         result.trust_signal = t_sig
@@ -86,8 +84,7 @@ class MarketBehaviorAnalyzer:
 
         # ── 自營商分析（最高 15 分）──────────────────────────
         dealer_score, d_sig, d_plus, d_minus = self._analyze_institutional(
-            chip, "dealer_net", label="自營商",
-            max_score=self.WEIGHTS["dealer"]
+            chip, "dealer_net", label="自營商", max_score=self.WEIGHTS["dealer"]
         )
         score += dealer_score
         result.dealer_signal = d_sig
@@ -110,13 +107,13 @@ class MarketBehaviorAnalyzer:
             plus.extend(m_plus)
             minus.extend(m_minus)
         else:
-            score += 10   # 無融資資料，給中性分數
+            score += 10  # 無融資資料，給中性分數
 
-        result.behavior_score     = round(max(0.0, min(100.0, score)), 1)
+        result.behavior_score = round(max(0.0, min(100.0, score)), 1)
         result.has_real_chip_data = True
-        result.factors_plus   = plus
-        result.factors_minus  = minus
-        result.summary        = self._build_summary(result)
+        result.factors_plus = plus
+        result.factors_minus = minus
+        result.summary = self._build_summary(result)
 
         logger.debug(f"{stock_id}: Behavior Score={result.behavior_score:.1f}")
         return result
@@ -138,8 +135,8 @@ class MarketBehaviorAnalyzer:
             return max_score * 0.5, "neutral", plus, minus
 
         # 過去 3/5/20 日
-        n3  = chip[col].tail(3).sum()
-        n5  = chip[col].tail(5).sum()
+        n3 = chip[col].tail(3).sum()
+        n5 = chip[col].tail(5).sum()
         n20 = chip[col].tail(20).sum()
 
         # 判斷連續買超天數
@@ -163,7 +160,7 @@ class MarketBehaviorAnalyzer:
             score = 0.0
             minus.append(f"{label}持續賣超")
         else:
-            score = max_score * 0.3   # 中性
+            score = max_score * 0.3  # 中性
 
         # 連續買超天數加分
         if consec_buy >= 5:
@@ -204,7 +201,7 @@ class MarketBehaviorAnalyzer:
         chip: pd.DataFrame,
     ):
         """融資分析（最高 20 分）"""
-        score = 10.0   # 中性起點
+        score = 10.0  # 中性起點
         plus, minus = [], []
 
         if "margin_balance" not in margin.columns:
@@ -239,7 +236,11 @@ class MarketBehaviorAnalyzer:
         # 融券回補（可能軋空）
         if "short_balance" in margin.columns and len(mg) >= 3:
             short_recent = mg["short_balance"].tail(3).mean()
-            short_prev   = mg["short_balance"].iloc[:-3].tail(5).mean() if len(mg) >= 8 else short_recent
+            short_prev = (
+                mg["short_balance"].iloc[:-3].tail(5).mean()
+                if len(mg) >= 8
+                else short_recent
+            )
             if short_recent < short_prev * 0.8 and short_recent > 1000:
                 plus.append("融券回補，可能形成軋空行情")
                 score += 3
@@ -275,14 +276,22 @@ def analyze_market_sentiment(
     if all_prices.empty:
         return {"sentiment": "Neutral", "summary": "無市場資料。"}
 
-    day_data = all_prices[all_prices["date"] == trade_date] if "date" in all_prices.columns else all_prices
+    day_data = (
+        all_prices[all_prices["date"] == trade_date]
+        if "date" in all_prices.columns
+        else all_prices
+    )
     if day_data.empty:
         day_data = all_prices
 
-    up_count    = (day_data["change_pct"] > 0).sum() if "change_pct" in day_data.columns else 0
-    down_count  = (day_data["change_pct"] < 0).sum() if "change_pct" in day_data.columns else 0
+    up_count = (
+        (day_data["change_pct"] > 0).sum() if "change_pct" in day_data.columns else 0
+    )
+    down_count = (
+        (day_data["change_pct"] < 0).sum() if "change_pct" in day_data.columns else 0
+    )
     total_count = len(day_data)
-    up_ratio    = up_count / total_count if total_count > 0 else 0
+    up_ratio = up_count / total_count if total_count > 0 else 0
 
     if up_ratio >= 0.6:
         sentiment = "Bullish"
@@ -295,10 +304,10 @@ def analyze_market_sentiment(
         desc = f"今日上漲 {up_count} 家，下跌 {down_count} 家，市場中性"
 
     return {
-        "sentiment":   sentiment,
-        "up_count":    int(up_count),
-        "down_count":  int(down_count),
+        "sentiment": sentiment,
+        "up_count": int(up_count),
+        "down_count": int(down_count),
         "total_count": int(total_count),
-        "up_ratio":    round(float(up_ratio), 3),
-        "summary":     desc,
+        "up_ratio": round(float(up_ratio), 3),
+        "summary": desc,
     }

@@ -14,9 +14,9 @@ dashboard/app.py — Responsive Research Dashboard (thin router)
 DB 啟動邏輯位於 dashboard/db.py
 """
 
-import sys
-import os
 import logging
+import os
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # 載入 .env（本機開發）；Streamlit Cloud 用 st.secrets
 try:
     from dotenv import load_dotenv
+
     load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 except ImportError:
     pass
@@ -32,15 +33,16 @@ except ImportError:
 # Streamlit secrets → 環境變數（雲端部署）
 try:
     import streamlit as _st
+
     if hasattr(_st, "secrets") and "NEON_URL" in _st.secrets:
         os.environ.setdefault("NEON_URL", _st.secrets["NEON_URL"])
 except Exception:
     pass
 
-import streamlit as st
+import streamlit as st  # noqa: E402
 
 # DB bootstrap（必須在所有 page import 之前）
-import dashboard.db  # noqa: F401 — registers src.database in sys.modules
+import dashboard.db  # noqa: F401,E402 — registers src.database in sys.modules
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +55,8 @@ st.set_page_config(
 )
 
 # ── 響應式 CSS ────────────────────────────────────────────────
-st.markdown("""
+st.markdown(
+    """
 <style>
 * { box-sizing: border-box; }
 html, body, [class*="css"] {
@@ -225,39 +228,48 @@ html, body, [class*="css"] {
 
 .disclaimer { text-align: center; font-size: 0.65rem; color: #bbb; padding: 8px; margin-top: 16px; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ── 主程式 ────────────────────────────────────────────────────
 
+
 def main() -> None:
-    from dashboard.pages.overview  import page_today
-    from dashboard.pages.reports   import page_search, page_history
-    from dashboard.pages.position  import page_positions
-    from dashboard.pages.backtest  import page_backtest
+    from dashboard.pages.backtest import page_backtest
+    from dashboard.pages.data_health import page_data_health
+    from dashboard.pages.guide import page_guide, page_settings
     from dashboard.pages.my_trades import page_my_trades
-    from dashboard.pages.guide     import page_guide, page_settings
+    from dashboard.pages.overview import page_today
+    from dashboard.pages.position import page_positions
+    from dashboard.pages.reports import page_history, page_search
 
     if "selected_date" not in st.session_state:
         st.session_state["selected_date"] = date.today()
     sel_date = st.session_state["selected_date"]
 
     with st.sidebar:
-        st.markdown("""
+        st.markdown(
+            """
         <div style="text-align:center; padding:20px 0 24px 0">
           <div style="font-size:2.5rem">📈</div>
           <div style="font-size:1rem; font-weight:800; color:#1a1a2e; margin-top:6px">台股 AI 研究平台</div>
           <div style="font-size:0.7rem; color:#999; margin-top:3px">v6.8</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
         st.caption(f"查看日期：{sel_date}")
         if st.button("🔄 重新整理資料", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         st.markdown("---")
         try:
-            from src.database import get_session, DailyPrice, Recommendation
             from sqlalchemy import func
+
+            from src.database import DailyPrice, Recommendation, get_session
+
             s = get_session()
             cnt = s.query(func.count(DailyPrice.id)).scalar()
             newest = s.query(func.max(DailyPrice.date)).scalar()
@@ -265,27 +277,47 @@ def main() -> None:
             s.close()
             if cnt > 0:
                 st.metric("股價資料", f"{cnt:,} 筆")
-                if newest:    st.caption(f"最新：{newest}")
-                if first_rec: st.caption(f"研究起始：{first_rec}")
+                if newest:
+                    st.caption(f"最新：{newest}")
+                if first_rec:
+                    st.caption(f"研究起始：{first_rec}")
             else:
                 st.caption("股價資料存於本機\n需在家中執行分析")
         except Exception as e:
             logger.debug(f"guide page stock info query failed: {e}")
         st.markdown("---")
-        st.markdown("""
+        st.markdown(
+            """
         <div style="font-size:0.65rem; color:#aaa; text-align:center; line-height:1.6">
           本工具為 AI 研究輔助<br>所有內容不構成投資建議
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
-    st.markdown("""
+    st.markdown(
+        """
     <div class="top-bar">
       <h1>📈 台股 AI 研究平台</h1>
       <p>v6.8 · 研究輔助工具 · 不構成投資建議</p>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-    tabs = st.tabs(["📊今日", "🔍個股", "📋歷史", "📈模型持倉", "🔬模型驗證", "💼我的交易", "📖說明", "⚙️設定"])
+    tabs = st.tabs(
+        [
+            "📊今日",
+            "🔍個股",
+            "📋歷史",
+            "📈模型持倉",
+            "🔬模型驗證",
+            "💼我的交易",
+            "🩺資料健康",
+            "📖說明",
+            "⚙️設定",
+        ]
+    )
 
     with tabs[0]:
         page_today(sel_date)
@@ -300,12 +332,16 @@ def main() -> None:
     with tabs[5]:
         page_my_trades()
     with tabs[6]:
-        page_guide()
+        page_data_health()
     with tabs[7]:
+        page_guide()
+    with tabs[8]:
         page_settings(sel_date)
 
-    st.markdown('<div class="disclaimer">本工具為 AI 研究輔助，所有內容不構成投資建議，投資人應自行評估風險</div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="disclaimer">本工具為 AI 研究輔助，所有內容不構成投資建議，投資人應自行評估風險</div>',
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":

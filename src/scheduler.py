@@ -13,12 +13,12 @@ scheduler.py — 每日自動排程（PRD Chapter 2.2）
 
 import logging
 import sys
-from datetime import date, datetime
+from datetime import date
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from config import SCHEDULE, LOGS_DIR
+from config import LOGS_DIR, SCHEDULE
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,8 @@ def is_trading_day(d: date = None) -> bool:
         return False
     try:
         import pandas_market_calendars as mcal
-        cal   = mcal.get_calendar("XTAI")
+
+        cal = mcal.get_calendar("XTAI")
         sched = cal.schedule(
             start_date=d.strftime("%Y-%m-%d"),
             end_date=d.strftime("%Y-%m-%d"),
@@ -50,11 +51,12 @@ def run_daily_pipeline(trade_date: date = None, force: bool = False):
         return
 
     logger.info(f"{'='*60}")
-    logger.info(f"AI Taiwan Equity Research Platform — 每日分析啟動")
+    logger.info("AI Taiwan Equity Research Platform — 每日分析啟動")
     logger.info(f"分析日期：{trade_date}")
     logger.info(f"{'='*60}")
 
     from main import run_pipeline
+
     try:
         run_pipeline(trade_date=trade_date)
     except Exception as e:
@@ -73,10 +75,10 @@ def start_scheduler():
 
     h, m = _parse_time(SCHEDULE["run_analysis"])
     scheduler.add_job(
-        func    = run_daily_pipeline,
-        trigger = CronTrigger(hour=h, minute=m, timezone="Asia/Taipei"),
-        id      = "daily_analysis",
-        name    = "Daily Stock Analysis",
+        func=run_daily_pipeline,
+        trigger=CronTrigger(hour=h, minute=m, timezone="Asia/Taipei"),
+        id="daily_analysis",
+        name="Daily Stock Analysis",
         replace_existing=True,
     )
 
@@ -97,9 +99,8 @@ if __name__ == "__main__":
         handlers=[
             logging.StreamHandler(sys.stdout),
             logging.FileHandler(
-                LOGS_DIR / f"scheduler_{date.today().isoformat()}.log",
-                encoding="utf-8"
+                LOGS_DIR / f"scheduler_{date.today().isoformat()}.log", encoding="utf-8"
             ),
-        ]
+        ],
     )
     start_scheduler()

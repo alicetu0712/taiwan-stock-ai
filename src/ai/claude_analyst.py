@@ -12,9 +12,8 @@ claude_analyst.py — Claude AI 整合（Explainable AI，PRD Chapter 4.8）
 """
 
 import logging
-from typing import Optional
 
-from config import ANTHROPIC_API_KEY, AI_CONFIG
+from config import AI_CONFIG, ANTHROPIC_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +40,24 @@ class ClaudeAnalyst:
         if ANTHROPIC_API_KEY:
             try:
                 import anthropic
+
                 self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                 logger.info("Claude API initialized successfully.")
             except ImportError:
-                logger.warning("anthropic package not installed. Run: pip install anthropic")
+                logger.warning(
+                    "anthropic package not installed. Run: pip install anthropic"
+                )
             except Exception as e:
                 logger.warning(f"Claude API initialization failed: {e}")
         else:
-            logger.warning("ANTHROPIC_API_KEY not set. AI explanations will use rule-based fallback.")
+            logger.warning(
+                "ANTHROPIC_API_KEY not set. AI explanations will use rule-based fallback."
+            )
 
     def generate_price_targets(
         self,
-        rec,              # StockRecommendation
-        daily_returns: list = None,   # 歷史日報酬率
+        rec,  # StockRecommendation
+        daily_returns: list = None,  # 歷史日報酬率
     ) -> dict:
         """
         為推薦股票生成 AI 動態停損價與目標價。
@@ -67,6 +71,7 @@ class ClaudeAnalyst:
         vol_str = ""
         if daily_returns and len(daily_returns) >= 20:
             import numpy as np
+
             sig = float(np.std(daily_returns)) * 100
             vol_str = f"近 {len(daily_returns)} 日日均波動：{sig:.2f}%（年化約 {sig * (252**0.5):.1f}%）"
 
@@ -104,11 +109,11 @@ RATIONALE: [一句話說明依據]
 
         try:
             response = self.client.messages.create(
-                model      = AI_CONFIG["model"],
-                max_tokens = 200,
-                temperature= 0.2,
-                system     = self.SYSTEM_PROMPT,
-                messages   = [{"role": "user", "content": prompt}],
+                model=AI_CONFIG["model"],
+                max_tokens=200,
+                temperature=0.2,
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
             )
             return self._parse_price_targets(response.content[0].text, rec, close)
         except Exception as e:
@@ -117,9 +122,10 @@ RATIONALE: [一句話說明依據]
 
     def _parse_price_targets(self, text: str, rec, close: float) -> dict:
         import re
-        target_pct   = None
-        sl_pct       = None
-        rationale    = ""
+
+        target_pct = None
+        sl_pct = None
+        rationale = ""
 
         for line in text.strip().split("\n"):
             m = re.match(r"TARGET_PCT:\s*([\d.]+)", line)
@@ -137,32 +143,34 @@ RATIONALE: [一句話說明依據]
 
         # 確保停損為負值
         sl_pct = -abs(sl_pct)
-        target_price    = round(close * (1 + target_pct / 100), 2)
+        target_price = round(close * (1 + target_pct / 100), 2)
         stop_loss_price = round(close * (1 + sl_pct / 100), 2)
         return {
-            "target_price":    target_price,
+            "target_price": target_price,
             "stop_loss_price": stop_loss_price,
-            "target_pct":      round(target_pct, 1),
-            "stop_loss_pct":   round(sl_pct, 1),
-            "rationale":       rationale,
+            "target_pct": round(target_pct, 1),
+            "stop_loss_pct": round(sl_pct, 1),
+            "rationale": rationale,
         }
 
     def _rule_based_price_targets(self, rec) -> dict:
         """無 API 或解析失敗時的規則式備案。"""
-        close = getattr(rec, "close", None) or getattr(rec, "close_price", None) or 100.0
+        close = (
+            getattr(rec, "close", None) or getattr(rec, "close_price", None) or 100.0
+        )
         level_map = {"A+": (25.0, -8.0), "A": (15.0, -8.0), "B": (10.0, -7.0)}
         target_pct, sl_pct = level_map.get(rec.rec_level, (10.0, -7.0))
         return {
-            "target_price":    round(close * (1 + target_pct / 100), 2),
+            "target_price": round(close * (1 + target_pct / 100), 2),
             "stop_loss_price": round(close * (1 + sl_pct / 100), 2),
-            "target_pct":      target_pct,
-            "stop_loss_pct":   sl_pct,
-            "rationale":       f"依 {rec.rec_level} 等級規則設定目標 +{target_pct}% / 停損 {sl_pct}%",
+            "target_pct": target_pct,
+            "stop_loss_pct": sl_pct,
+            "rationale": f"依 {rec.rec_level} 等級規則設定目標 +{target_pct}% / 停損 {sl_pct}%",
         }
 
     def generate_research_report(
         self,
-        rec,   # StockRecommendation
+        rec,  # StockRecommendation
     ) -> dict:
         """
         為單一推薦股票生成完整研究報告文字。
@@ -174,11 +182,11 @@ RATIONALE: [一句話說明依據]
         prompt = self._build_prompt(rec)
         try:
             response = self.client.messages.create(
-                model      = AI_CONFIG["model"],
-                max_tokens = AI_CONFIG["max_tokens"],
-                temperature= AI_CONFIG["temperature"],
-                system     = self.SYSTEM_PROMPT,
-                messages   = [{"role": "user", "content": prompt}],
+                model=AI_CONFIG["model"],
+                max_tokens=AI_CONFIG["max_tokens"],
+                temperature=AI_CONFIG["temperature"],
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
             )
             text = response.content[0].text
             return self._parse_response(text, rec)
@@ -215,11 +223,11 @@ RATIONALE: [一句話說明依據]
 
         try:
             response = self.client.messages.create(
-                model      = AI_CONFIG["model"],
-                max_tokens = 500,
-                temperature= 0.3,
-                system     = self.SYSTEM_PROMPT,
-                messages   = [{"role": "user", "content": prompt}],
+                model=AI_CONFIG["model"],
+                max_tokens=500,
+                temperature=0.3,
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
             )
             return response.content[0].text
         except Exception as e:
@@ -244,11 +252,11 @@ RATIONALE: [一句話說明依據]
 
         try:
             response = self.client.messages.create(
-                model      = AI_CONFIG["model"],
-                max_tokens = 200,
-                temperature= 0.3,
-                system     = self.SYSTEM_PROMPT,
-                messages   = [{"role": "user", "content": prompt}],
+                model=AI_CONFIG["model"],
+                max_tokens=200,
+                temperature=0.3,
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
             )
             return response.content[0].text
         except Exception as e:
@@ -259,24 +267,28 @@ RATIONALE: [一句話說明依據]
 
     def _build_prompt(self, rec) -> str:
         """建立 Claude prompt。"""
-        adv_str   = "\n".join(f"  • {a}" for a in rec.advantages) or "  （無明顯優勢資料）"
-        risk_str  = "\n".join(f"  • {r}" for r in rec.risks)     or "  （無明顯風險資料）"
-        watch_str = "\n".join(f"  • {w}" for w in rec.watch_points) or "  （無特別觀察重點）"
+        adv_str = (
+            "\n".join(f"  • {a}" for a in rec.advantages) or "  （無明顯優勢資料）"
+        )
+        risk_str = "\n".join(f"  • {r}" for r in rec.risks) or "  （無明顯風險資料）"
+        watch_str = (
+            "\n".join(f"  • {w}" for w in rec.watch_points) or "  （無特別觀察重點）"
+        )
 
         has_quality = rec.quality_score > 0
         quality_context = (
             f"公司品質評分（Company Quality）：{rec.quality_score:.0f}/100（{rec.quality_grade} 級）"
-            if has_quality else
-            "公司品質評分：無財務資料（系統採動態加權，本次評分依據技術面與籌碼面）"
+            if has_quality
+            else "公司品質評分：無財務資料（系統採動態加權，本次評分依據技術面與籌碼面）"
         )
 
         fundamental_instruction = (
             "【基本面說明】\n根據品質評分說明公司體質（2-3句）。禁止虛構任何財務數字（EPS、ROE、營收等），僅根據提供的評分與優劣勢作說明。"
-            if has_quality else
-            "【基本面說明】\n目前無財務資料，請如實說明「本次進入研究名單的依據為技術面與籌碼面表現，財務基本面資料待補充」（1-2句）。禁止捏造任何財務數字。"
+            if has_quality
+            else "【基本面說明】\n目前無財務資料，請如實說明「本次進入研究名單的依據為技術面與籌碼面表現，財務基本面資料待補充」（1-2句）。禁止捏造任何財務數字。"
         )
 
-        close_price = getattr(rec, 'close_price', None) or getattr(rec, 'close', None)
+        close_price = getattr(rec, "close_price", None) or getattr(rec, "close", None)
         price_line = f"當日收盤價：{close_price:.2f} 元" if close_price else ""
 
         return f"""請為以下台灣股票生成專業的投資研究報告：
@@ -331,19 +343,19 @@ RATIONALE: [一句話說明依據]
     def _parse_response(self, text: str, rec) -> dict:
         """解析 Claude 回應，提取各段落。"""
         result = {
-            "ai_summary":     "",
+            "ai_summary": "",
             "fundamental_ai": "",
-            "technical_ai":   "",
-            "risks_ai":       "",
-            "conclusion_ai":  text,   # 預設整段
+            "technical_ai": "",
+            "risks_ai": "",
+            "conclusion_ai": text,  # 預設整段
         }
 
         sections = {
-            "【推薦摘要】":   "ai_summary",
+            "【推薦摘要】": "ai_summary",
             "【基本面說明】": "fundamental_ai",
             "【技術面說明】": "technical_ai",
-            "【主要風險】":   "risks_ai",
-            "【AI 結論】":    "conclusion_ai",
+            "【主要風險】": "risks_ai",
+            "【AI 結論】": "conclusion_ai",
         }
 
         current_key = None
@@ -372,18 +384,18 @@ RATIONALE: [一句話說明依據]
         """無 Claude API 時的規則式文字生成（備案）。"""
         quality_desc = {
             "A+": "公司體質非常優秀，長期競爭力強，是值得深入研究的優質標的。",
-            "A":  "公司基本面良好，獲利能力穩定，具備長期投資價值。",
-            "B":  "公司體質尚可，基本面指標在可接受範圍。",
-            "C":  "公司體質普通，基本面有部分待改善之處。",
-            "D":  "公司體質較弱，基本面指標偏低。",
+            "A": "公司基本面良好，獲利能力穩定，具備長期投資價值。",
+            "B": "公司體質尚可，基本面指標在可接受範圍。",
+            "C": "公司體質普通，基本面有部分待改善之處。",
+            "D": "公司體質較弱，基本面指標偏低。",
         }
 
         return {
-            "ai_summary":     rec.summary,
+            "ai_summary": rec.summary,
             "fundamental_ai": quality_desc.get(rec.quality_grade, ""),
-            "technical_ai":   self._format_technical_ai(rec),
-            "risks_ai":       "\n".join(f"• {r}" for r in rec.risks[:3]),
-            "conclusion_ai":  rec.ai_conclusion,
+            "technical_ai": self._format_technical_ai(rec),
+            "risks_ai": "\n".join(f"• {r}" for r in rec.risks[:3]),
+            "conclusion_ai": rec.ai_conclusion,
         }
 
     def _format_technical_ai(self, rec) -> str:
@@ -403,7 +415,9 @@ RATIONALE: [一句話說明依據]
         n_qualified: int,
         fail_reasons: list,
     ) -> str:
-        reasons = "、".join(fail_reasons[:3]) if fail_reasons else "基本面或技術面條件不足"
+        reasons = (
+            "、".join(fail_reasons[:3]) if fail_reasons else "基本面或技術面條件不足"
+        )
         return (
             f"今日共分析 {n_analyzed} 檔股票，其中 {n_qualified} 檔通過初步篩選，"
             f"但最終無標的達到本策略最低研究標準。"
@@ -413,10 +427,12 @@ RATIONALE: [一句話說明依據]
 
     def _rule_based_market_summary(self, market_data: dict) -> str:
         sentiment = market_data.get("sentiment", "Neutral")
-        index     = market_data.get("index_close", "N/A")
-        pct       = market_data.get("index_change_pct", "N/A")
-        amt       = market_data.get("total_amount_b", "N/A")
-        sentiment_desc = {"Bullish": "偏多", "Bearish": "偏空", "Neutral": "中性"}.get(sentiment, "中性")
+        index = market_data.get("index_close", "N/A")
+        pct = market_data.get("index_change_pct", "N/A")
+        amt = market_data.get("total_amount_b", "N/A")
+        sentiment_desc = {"Bullish": "偏多", "Bearish": "偏空", "Neutral": "中性"}.get(
+            sentiment, "中性"
+        )
         return (
             f"今日加權指數收 {index} 點，漲跌幅 {pct}%，"
             f"大盤成交金額 {amt} 億元，市場情緒{sentiment_desc}。"

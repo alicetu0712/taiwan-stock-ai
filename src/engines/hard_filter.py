@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
-from config import HARD_FILTER, EXCLUDE_KEYWORDS
+from config import EXCLUDE_KEYWORDS, HARD_FILTER
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +21,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FilterResult:
     """篩選結果"""
-    stock_id:    str
-    passed:      bool
+
+    stock_id: str
+    passed: bool
     fail_reason: str = ""
-    checks:      dict = field(default_factory=dict)
+    checks: dict = field(default_factory=dict)
 
 
 class HardFilter:
@@ -46,21 +47,21 @@ class HardFilter:
 
     def filter_stock(
         self,
-        stock_id:     str,
+        stock_id: str,
         listing_date: Optional[date] = None,
-        market_cap_b: Optional[float] = None,   # 億元
-        capital_b:    Optional[float] = None,    # 億元
-        avg_daily_amt_m: Optional[float] = None, # 百萬元
-        eps_ttm:      Optional[float] = None,
-        roe_avg:      Optional[float] = None,    # %
-        roa_avg:      Optional[float] = None,    # %
-        debt_ratio:   Optional[float] = None,    # %
-        eps_trend:    str = "unknown",
+        market_cap_b: Optional[float] = None,  # 億元
+        capital_b: Optional[float] = None,  # 億元
+        avg_daily_amt_m: Optional[float] = None,  # 百萬元
+        eps_ttm: Optional[float] = None,
+        roe_avg: Optional[float] = None,  # %
+        roa_avg: Optional[float] = None,  # %
+        debt_ratio: Optional[float] = None,  # %
+        eps_trend: str = "unknown",
         revenue_trend: str = "unknown",
-        is_full_cash_delivery: bool = False,     # 全額交割股
-        has_major_violation: bool = False,       # 重大違法
-        name:         str = "",
-        industry:     str = "",
+        is_full_cash_delivery: bool = False,  # 全額交割股
+        has_major_violation: bool = False,  # 重大違法
+        name: str = "",
+        industry: str = "",
     ) -> FilterResult:
         """
         對單一股票執行硬性篩選。
@@ -86,61 +87,98 @@ class HardFilter:
             ok = years >= self.cfg["min_listing_years"]
             checks["listing_years"] = (ok, f"{years:.1f} 年")
             if not ok:
-                return FilterResult(stock_id, False, f"上市未滿 {self.cfg['min_listing_years']} 年（{years:.1f}年）", checks)
+                return FilterResult(
+                    stock_id,
+                    False,
+                    f"上市未滿 {self.cfg['min_listing_years']} 年（{years:.1f}年）",
+                    checks,
+                )
 
         # 市值
         if market_cap_b is not None:
             ok = market_cap_b >= self.cfg["min_market_cap_b"]
             checks["market_cap"] = (ok, f"{market_cap_b:.1f} 億")
             if not ok:
-                return FilterResult(stock_id, False, f"市值不足（{market_cap_b:.1f} 億 < {self.cfg['min_market_cap_b']} 億）", checks)
+                return FilterResult(
+                    stock_id,
+                    False,
+                    f"市值不足（{market_cap_b:.1f} 億 < {self.cfg['min_market_cap_b']} 億）",
+                    checks,
+                )
 
         # 資本額
         if capital_b is not None:
             ok = capital_b >= self.cfg["min_capital_b"]
             checks["capital"] = (ok, f"{capital_b:.1f} 億")
             if not ok:
-                return FilterResult(stock_id, False, f"資本額不足（{capital_b:.1f} 億 < {self.cfg['min_capital_b']} 億）", checks)
+                return FilterResult(
+                    stock_id,
+                    False,
+                    f"資本額不足（{capital_b:.1f} 億 < {self.cfg['min_capital_b']} 億）",
+                    checks,
+                )
 
         # 平均日成交金額
         if avg_daily_amt_m is not None:
             ok = avg_daily_amt_m >= self.cfg["min_avg_daily_amt_m"]
             checks["avg_daily_amt"] = (ok, f"{avg_daily_amt_m:.1f}M")
             if not ok:
-                return FilterResult(stock_id, False, f"流動性不足（日均成交 {avg_daily_amt_m:.1f}M < {self.cfg['min_avg_daily_amt_m']}M）", checks)
+                return FilterResult(
+                    stock_id,
+                    False,
+                    f"流動性不足（日均成交 {avg_daily_amt_m:.1f}M < {self.cfg['min_avg_daily_amt_m']}M）",
+                    checks,
+                )
 
         # ── 產業別閾值（金融業結構性負債高、ROA 較低，採放寬標準）──────
         is_finance = any(kw in (industry + name) for kw in self._FINANCE_KEYWORDS)
-        min_roe       = 8.0  if is_finance else self.cfg["min_roe"]
-        min_roa       = 0.5  if is_finance else self.cfg["min_roa"]
-        max_debt      = 95.0 if is_finance else self.cfg["max_debt_ratio"]
+        min_roe = 8.0 if is_finance else self.cfg["min_roe"]
+        min_roa = 0.5 if is_finance else self.cfg["min_roa"]
+        max_debt = 95.0 if is_finance else self.cfg["max_debt_ratio"]
 
         # ── 財務條件 ──────────────────────────────────────────
         if eps_ttm is not None:
             ok = eps_ttm > self.cfg["min_ttm_eps"]
             checks["eps_ttm"] = (ok, f"TTM EPS={eps_ttm:.2f}")
             if not ok:
-                return FilterResult(stock_id, False, f"TTM EPS ≤ 0（虧損，EPS={eps_ttm:.2f}）", checks)
+                return FilterResult(
+                    stock_id, False, f"TTM EPS ≤ 0（虧損，EPS={eps_ttm:.2f}）", checks
+                )
 
         if roe_avg is not None:
             ok = roe_avg >= min_roe
             checks["roe"] = (ok, f"ROE={roe_avg:.1f}%")
             if not ok:
                 label = "（金融業）" if is_finance else ""
-                return FilterResult(stock_id, False, f"ROE 不足{label}（{roe_avg:.1f}% < {min_roe}%）", checks)
+                return FilterResult(
+                    stock_id,
+                    False,
+                    f"ROE 不足{label}（{roe_avg:.1f}% < {min_roe}%）",
+                    checks,
+                )
 
         if roa_avg is not None:
             ok = roa_avg >= min_roa
             checks["roa"] = (ok, f"ROA={roa_avg:.1f}%")
             if not ok:
                 label = "（金融業）" if is_finance else ""
-                return FilterResult(stock_id, False, f"ROA 不足{label}（{roa_avg:.1f}% < {min_roa}%）", checks)
+                return FilterResult(
+                    stock_id,
+                    False,
+                    f"ROA 不足{label}（{roa_avg:.1f}% < {min_roa}%）",
+                    checks,
+                )
 
         if debt_ratio is not None:
             ok = debt_ratio <= max_debt
             checks["debt_ratio"] = (ok, f"負債比={debt_ratio:.1f}%")
             if not ok:
-                return FilterResult(stock_id, False, f"負債比過高（{debt_ratio:.1f}% > {max_debt}%）", checks)
+                return FilterResult(
+                    stock_id,
+                    False,
+                    f"負債比過高（{debt_ratio:.1f}% > {max_debt}%）",
+                    checks,
+                )
 
         # ── 成長趨勢 ──────────────────────────────────────────
         if eps_trend == "down":
@@ -154,10 +192,10 @@ class HardFilter:
 
 
 def run_hard_filter(
-    price_df:    pd.DataFrame,
-    stock_info:  dict,    # {stock_id: {market_cap_b, capital_b, listing_date, ...}}
-    fin_summary: dict,    # {stock_id: financial_summary dict}
-    config:      dict = None,
+    price_df: pd.DataFrame,
+    stock_info: dict,  # {stock_id: {market_cap_b, capital_b, listing_date, ...}}
+    fin_summary: dict,  # {stock_id: financial_summary dict}
+    config: dict = None,
 ) -> Tuple[List[str], List[FilterResult]]:
     """
     批次執行硬性篩選。
@@ -181,26 +219,28 @@ def run_hard_filter(
     total = len(price_df["stock_id"].unique()) if "stock_id" in price_df.columns else 0
     logger.info(f"Running Hard Filter on {total} stocks...")
 
-    stocks_to_filter = price_df["stock_id"].unique() if "stock_id" in price_df.columns else []
+    stocks_to_filter = (
+        price_df["stock_id"].unique() if "stock_id" in price_df.columns else []
+    )
 
     for sid in stocks_to_filter:
         info = stock_info.get(sid, {})
-        fin  = fin_summary.get(sid, {})
+        fin = fin_summary.get(sid, {})
 
         r = hf.filter_stock(
-            stock_id     = sid,
-            name         = info.get("name", ""),
-            industry     = info.get("industry", ""),
-            listing_date = info.get("listing_date"),
-            market_cap_b = info.get("market_cap_b"),
-            capital_b    = info.get("capital_b"),
-            avg_daily_amt_m = avg_amt.get(sid),
-            eps_ttm      = fin.get("eps_ttm"),
-            roe_avg      = fin.get("roe_avg"),
-            roa_avg      = fin.get("roa_avg"),
-            debt_ratio   = fin.get("debt_ratio"),
-            eps_trend    = fin.get("eps_trend", "unknown"),
-            revenue_trend = fin.get("revenue_trend", "unknown"),
+            stock_id=sid,
+            name=info.get("name", ""),
+            industry=info.get("industry", ""),
+            listing_date=info.get("listing_date"),
+            market_cap_b=info.get("market_cap_b"),
+            capital_b=info.get("capital_b"),
+            avg_daily_amt_m=avg_amt.get(sid),
+            eps_ttm=fin.get("eps_ttm"),
+            roe_avg=fin.get("roe_avg"),
+            roa_avg=fin.get("roa_avg"),
+            debt_ratio=fin.get("debt_ratio"),
+            eps_trend=fin.get("eps_trend", "unknown"),
+            revenue_trend=fin.get("revenue_trend", "unknown"),
         )
         all_results.append(r)
         if r.passed:
