@@ -343,38 +343,17 @@ def load_stock_names() -> dict:
 
 @st.cache_data(ttl=300)
 def load_stock_prices() -> dict:
-    """從 TWSE 抓即時收盤價，快取 5 分鐘。回傳 {stock_id: close_price}"""
+    """讀取 DB 最新一日收盤價。回傳 {stock_id: close_price}"""
     prices = {}
     try:
-        import requests
-        r = requests.get(
-            "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-            timeout=10, headers={"Accept": "application/json"}
-        )
-        if r.ok:
-            for item in r.json():
-                sid = item.get("Code", "").strip()
-                close = item.get("ClosingPrice", "")
-                try:
-                    prices[sid] = float(str(close).replace(",", ""))
-                except (ValueError, TypeError):
-                    pass
-    except Exception:
-        pass
-    try:
-        import requests
-        r = requests.get(
-            "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-            timeout=10, verify=False
-        )
-        if r.ok:
-            for item in r.json():
-                sid = str(item.get("SecuritiesCompanyCode", "")).strip()
-                close = item.get("Close", "")
-                try:
-                    prices[sid] = float(str(close).replace(",", ""))
-                except (ValueError, TypeError):
-                    pass
+        from src.database import get_session, DailyPrice
+        from sqlalchemy import func
+        s = get_session()
+        latest_date = s.query(func.max(DailyPrice.date)).scalar()
+        if latest_date:
+            rows = s.query(DailyPrice.stock_id, DailyPrice.close).filter_by(date=latest_date).all()
+            prices = {sid: close for sid, close in rows if close}
+        s.close()
     except Exception:
         pass
     return prices

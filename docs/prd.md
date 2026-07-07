@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.8.13（2026-07-07）
+當前版本：v6.8.14（2026-07-07）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -3993,6 +3993,11 @@ Chapter 19 完
     - 2345（智邦）：2645 → 2455
     - 0050：108.25 → 106.20
   - 後續：TWSE OpenAPI 更新後再補全部市場 7/7 資料
+✅ load_stock_prices 改從 DB 讀取（v6.8.14）：
+  - 問題：load_stock_prices() 直接打 TWSE OpenAPI，TWSE 更新慢時
+    dashboard 現價顯示仍是前一日（2345 仍顯示 2645）
+  - 修正：改從 DB 讀取最新日期的收盤價（不依賴 TWSE API 即時性）
+  - 效果：Yahoo 備援資料入庫後，dashboard 現價立即反映正確數字
 
 ---
 
