@@ -1066,6 +1066,9 @@ def page_positions():
 
             cash_pct = max(0.0, 100.0 - total_alloc)
 
+            if total_alloc > 100:
+                st.warning(f"⚠️ 建議倉位合計 {total_alloc:.0f}%，超過 100%。模型推薦過度分散或資金不足，以下損益數字為正規化後的比例，需人工取捨。")
+
             st.markdown("#### 📊 目前配置總覽")
             r1c1, r1c2 = st.columns(2)
             r1c1.metric("持倉支數", f"{n_pos} 支",
@@ -1238,11 +1241,13 @@ def compute_random_baseline(n_sim: int = 1000) -> dict:
         from src.database import get_session, Recommendation, DailyPrice, AnalysisResult as _AR
         s = get_session()
         recs = s.query(Recommendation).order_by(Recommendation.date).all()
-        all_ids = {r.stock_id for r in recs} | {"0050", "0056"}
+        ar_rows = s.query(_AR.date, _AR.stock_id).all()
+        # 擴展價格查詢：包含所有曾被分析過的股票，建立真正的分析池基準
+        ar_stock_ids = {ar_sid for _, ar_sid in ar_rows}
+        all_ids = {r.stock_id for r in recs} | {"0050", "0056"} | ar_stock_ids
         all_prices_q = (s.query(DailyPrice)
                         .filter(DailyPrice.stock_id.in_(all_ids))
                         .order_by(DailyPrice.stock_id, DailyPrice.date).all())
-        ar_rows = s.query(_AR.date, _AR.stock_id).all()
         s.close()
         price_map = defaultdict(list)
         for p in all_prices_q:
@@ -1405,7 +1410,8 @@ def page_backtest():
     st.markdown("---")
 
     # ── 策略 vs 0050 vs 0056 累積報酬曲線 ─────────────────────
-    st.markdown("#### 累積報酬曲線（20 日窗口，等權）")
+    st.markdown("#### 推薦序列累積報酬（各筆 20 日報酬連乘）")
+    st.caption("⚠️ 此為推薦序列績效，非真實投資組合報酬。同期推薦多檔或持倉重疊時，累積曲線可能高估或低估實際績效。")
     trade_no = list(range(1, len(sub) + 1))
     cum_s   = ((1 + sub["ret_20d"]  / 100).cumprod() * 100 - 100).tolist()
     cum_50  = ((1 + sub["b0050_20"] / 100).cumprod() * 100 - 100).tolist()
