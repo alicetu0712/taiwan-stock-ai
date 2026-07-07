@@ -1031,7 +1031,8 @@ def _monte_carlo_chart(pos: dict, prices: list = None):
 
 
 def page_positions():
-    st.markdown('<div class="section-title">📈 持倉追蹤</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">📈 模型持倉追蹤（模擬）</div>', unsafe_allow_html=True)
+    st.caption("此區為依據模型推薦與歷史資料建立的模擬追蹤紀錄，並不代表使用者實際下單。實際交易請以「我的實際交易紀錄」為準。")
 
     tab_active, tab_closed = st.tabs(["🟢 持倉中", "📋 歷史紀錄"])
 
@@ -1828,7 +1829,7 @@ def _render_trade_mc(trade, current_price, n_sim=500, days=20):
 
 
 def page_my_trades():
-    st.markdown('<div class="section-title">💼 我的交易紀錄</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">💼 我的實際交易紀錄</div>', unsafe_allow_html=True)
     stock_prices = load_stock_prices()
 
     # ── 新增交易 ──────────────────────────────────────────────
@@ -2071,7 +2072,7 @@ def main():
     """, unsafe_allow_html=True)
 
     # Tab 導航（電腦版是橫向底線樣式，手機版是圓角膠囊樣式）
-    tabs = st.tabs(["📊今日", "🔍個股", "📋歷史", "📈持倉", "🔬模型驗證", "💼我的交易", "📖說明", "⚙️設定"])
+    tabs = st.tabs(["📊今日", "🔍個股", "📋歷史", "📈模型持倉", "🔬模型驗證", "💼我的交易", "📖說明", "⚙️設定"])
 
     with tabs[0]:
         page_today(sel_date)
