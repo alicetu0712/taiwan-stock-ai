@@ -33,10 +33,22 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config import REPORTS_DIR
-from src.database import (
-    get_session, UserTrade, DailyPrice, Recommendation,
-    AnalysisResult, PositionMonitor, Stock,
-)
+
+# Force-load src.database from absolute path — bypasses sys.modules cache and CWD issues
+import importlib.util as _ilu
+_db_path = Path(__file__).resolve().parent.parent / "src" / "database.py"
+_db_spec = _ilu.spec_from_file_location("src.database", str(_db_path))
+_db_mod  = _ilu.module_from_spec(_db_spec)
+sys.modules["src.database"] = _db_mod
+_db_spec.loader.exec_module(_db_mod)
+
+get_session    = _db_mod.get_session
+UserTrade      = _db_mod.UserTrade
+DailyPrice     = _db_mod.DailyPrice
+Recommendation = _db_mod.Recommendation
+AnalysisResult = _db_mod.AnalysisResult
+PositionMonitor = _db_mod.PositionMonitor
+Stock          = _db_mod.Stock
 
 
 # ── 頁面設定 ──────────────────────────────────────────────────
