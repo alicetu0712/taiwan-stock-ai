@@ -53,7 +53,7 @@ Stock          = _db_mod.Stock
 
 # ── 頁面設定 ──────────────────────────────────────────────────
 st.set_page_config(
-    page_title="台股 AI 研究平台 v6.0",
+    page_title="台股 AI 研究平台 v6.8",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -668,7 +668,7 @@ def page_today(selected_date: date):
           <div style="font-size:0.75rem; opacity:0.7; margin-top:4px">漲 {mkt.get('up','—')} / 跌 {mkt.get('down','—')}</div>
         </div>
       </div>
-      <div class="market-meta">{selected_date} · AI Taiwan Equity Research v6.0</div>
+      <div class="market-meta">{selected_date} · AI Taiwan Equity Research v6.8</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1945,7 +1945,7 @@ def main():
         <div style="text-align:center; padding:20px 0 24px 0">
           <div style="font-size:2.5rem">📈</div>
           <div style="font-size:1rem; font-weight:800; color:#1a1a2e; margin-top:6px">台股 AI 研究平台</div>
-          <div style="font-size:0.7rem; color:#999; margin-top:3px">v6.0</div>
+          <div style="font-size:0.7rem; color:#999; margin-top:3px">v6.8</div>
         </div>
         """, unsafe_allow_html=True)
         st.caption(f"查看日期：{sel_date}")
@@ -1981,7 +1981,7 @@ def main():
     st.markdown("""
     <div class="top-bar">
       <h1>📈 台股 AI 研究平台</h1>
-      <p>v6.0 · 研究輔助工具 · 不構成投資建議</p>
+      <p>v6.8 · 研究輔助工具 · 不構成投資建議</p>
     </div>
     """, unsafe_allow_html=True)
 
