@@ -3862,7 +3862,7 @@ Chapter 19｜Position Management（持倉管理系統）
 
 Chapter 19 完
 
-當前版本：v6.8.4（2026-07-07）
+當前版本：v6.8.5（2026-07-07）
 ✅ 財務資料串接完成（EPS / ROE / ROA 多年歷史，MOPS + goodinfo 雙源）
 ✅ 硬性篩選完整運作（ROE ≥ 15%、ROA ≥ 8%；金融業放寬版；市值/資本額每日更新）
 ✅ 三段式市場方向過濾（多頭/謹慎/空頭，依 0050 偏離 MA60 漸進調整）
@@ -3934,6 +3934,13 @@ Chapter 19 完
   - MC 隨機基準說明文字修正：明確說明股票池為「AnalysisResult 且有價格資料」，
     非全體分析股票（受 price_map 範圍限制）
   - compute_backtest / compute_random_baseline：except 改為 logger.exception，不再靜默失敗
+✅ 回測 / 持倉顯示修正（v6.8.5）：
+  - MC 隨機基準真正修正：price query 擴展為「所有 AnalysisResult 股票 ∪ 曾推薦股票 ∪ 0050/0056」，
+    stock pool 不再受限於歷史推薦集合，基準比較更公平
+  - 累積報酬曲線標題改為「推薦序列累積報酬（各筆 20 日報酬連乘）」，
+    加說明：同期多檔推薦或持倉重疊時此數字非真實投資組合報酬
+  - 持倉配置總覽：total_alloc > 100% 時顯示 warning，明示數字為正規化後比例，需人工取捨
+  - 補充確認：_ret_at 20 日報酬已於 v6.8.2 改為第 20 個交易日（index 法），非日曆天
 
 ---
 
