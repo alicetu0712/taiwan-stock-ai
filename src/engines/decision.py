@@ -18,7 +18,13 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import List, Optional, Tuple
 
-from config import RECOMMENDATION_LEVELS, RECOMMENDATION_RULES, SCORE_WEIGHTS
+from config import (
+    AFFORDABILITY,
+    RECOMMENDATION_LEVELS,
+    RECOMMENDATION_RULES,
+    SCORE_WEIGHTS,
+    WATCH_LIST_RULES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +60,9 @@ class StockRecommendation:
     market: str = ""
     industry: str = ""
     skip_reason: str = ""  # 若無推薦，說明原因
+    # 橫斷面排名與分級（當日相對表現）
+    percentile: float = 0.0  # 當日 percentile（0-100，越高代表當日相對越強）
+    tier: str = "none"  # "recommend"（正式推薦）/ "watch"（觀察）/ "none"（不推薦）
 
 
 class DecisionEngine:
@@ -219,35 +228,42 @@ class DecisionEngine:
         """
         max_n = max_n or self.rules["max_daily_recs"]
         min_conf = self.rules["min_confidence"]
-        min_score = self.rules["min_total_score"]
 
-        # 三段式市場方向控制
+        # 三段式市場方向控制：
+        # 只調整「可接受等級 / 推薦檔數 / 信心要求」，不再另外疊加一個分數門檻。
+        # 個股品質由 rec_level 單一把關（rec_level 已內含 RECOMMENDATION_LEVELS 的分數標準），
+        # 避免「rec_level>=B」與「total_score>=65」重複判斷。
         allowed_levels = ("A+", "A", "B")
         if bear_mode:
             allowed_levels = ("A+", "A")
             max_n = 1
-            min_score = max(min_score, 72.0)
+            min_conf = max(min_conf, 75.0)
             logger.info(
-                f"[Decision] 空頭模式：僅接受 A/A+，門檻 {min_score}，最多 1 檔"
+                f"[Decision] 空頭模式：僅接受 A/A+，信心≥{min_conf:.0f}%，最多 1 檔"
             )
         elif caution_mode:
             max_n = min(max_n, 2)
-            min_score = max(min_score, 68.0)
-            logger.info(f"[Decision] 謹慎模式：門檻 {min_score}，最多 {max_n} 檔")
+            min_conf = max(min_conf, 75.0)
+            logger.info(
+                f"[Decision] 謹慎模式：接受 A+/A/B，信心≥{min_conf:.0f}%，最多 {max_n} 檔"
+            )
+        else:
+            logger.info(
+                f"[Decision] 多頭模式：接受 A+/A/B，信心≥{min_conf:.0f}%，最多 {max_n} 檔"
+            )
 
-        # 篩選符合最低標準的候選
+        # 篩選符合最低標準的候選（品質看 rec_level，信心看 confidence）
         qualified = [
             r
             for r in candidates
-            if r.confidence >= min_conf
-            and r.total_score >= min_score
-            and r.rec_level in allowed_levels
+            if r.confidence >= min_conf and r.rec_level in allowed_levels
         ]
 
         if not qualified:
             reason = (
                 f"今日沒有符合本研究策略的股票。"
-                f"（所有分析股票中，無符合最低信心門檻 {min_conf}% 且綜合評分 ≥ {min_score} 分的標的）"
+                f"（所有分析股票中，無同時滿足 信心≥{min_conf:.0f}% "
+                f"與 等級 {'/'.join(allowed_levels)} 的標的）"
             )
             return [], reason
 
@@ -266,6 +282,101 @@ class DecisionEngine:
                 break
         reason = f"今日共有 {len(qualified)} 檔符合條件，推薦其中評分最高的 {len(top_n)} 檔（同產業上限 {max_per_industry} 支）。"
         return top_n, reason
+
+    def assign_percentiles(
+        self, candidates: List[StockRecommendation]
+    ) -> List[StockRecommendation]:
+        """
+        為當日所有候選股計算橫斷面 percentile（依 total_score 排名）。
+
+        percentile = 分數不高於本檔的候選比例 × 100（0-100，越高代表當日相對越強）。
+        會直接寫入每檔的 .percentile 欄位並回傳同一份 list。
+        """
+        n = len(candidates)
+        if n == 0:
+            return candidates
+        if n == 1:
+            candidates[0].percentile = 100.0
+            return candidates
+        # 依分數升冪排名，計算每檔的 percentile rank
+        ordered = sorted(candidates, key=lambda r: r.total_score)
+        for i, r in enumerate(ordered):
+            # i 檔分數 <= 本檔（含自己）；用 (低於本檔的數量)/(n-1) 標準化到 0-100
+            below = sum(1 for x in ordered if x.total_score < r.total_score)
+            r.percentile = round(below / (n - 1) * 100, 1)
+        return candidates
+
+    def select_watchlist(
+        self,
+        candidates: List[StockRecommendation],
+        exclude_ids: Optional[set] = None,
+    ) -> List[StockRecommendation]:
+        """
+        選出「觀察名單」：未達正式推薦、但為當日相對最強的一群。
+
+        採雙軌條件（見 config.WATCH_LIST_RULES）：
+          - 絕對底線：total_score >= min_score
+          - 相對排名：percentile >= top_percentile（當日前 X%）
+          - 信心：confidence >= min_confidence
+        會先呼叫 assign_percentiles，並將入選者 tier 設為 "watch"。
+        """
+        exclude_ids = exclude_ids or set()
+        self.assign_percentiles(candidates)
+
+        rules = WATCH_LIST_RULES
+        watch = [
+            r
+            for r in candidates
+            if r.stock_id not in exclude_ids
+            and r.total_score >= rules["min_score"]
+            and r.percentile >= rules["top_percentile"]
+            and r.confidence >= rules["min_confidence"]
+        ]
+        watch.sort(key=lambda r: r.total_score, reverse=True)
+        watch = watch[: rules["max_watch"]]
+        for r in watch:
+            r.tier = "watch"
+        return watch
+
+    def select_affordable(
+        self,
+        candidates: List[StockRecommendation],
+        max_price: Optional[float] = None,
+        max_lot_cost: Optional[float] = None,
+    ) -> List[StockRecommendation]:
+        """
+        可負擔性榜（預算榜）：在「評分之後」額外篩出資金可負擔的最佳標的。
+
+        重要：股票評分本身完全不看股價，此處不對任何股票加減分；
+        高價股只是不出現在這張榜，而非被扣分。
+
+        條件（見 config.AFFORDABILITY，可由參數覆寫）：
+          - 股價 <= max_price
+          - 單張成本（股價 × 每張股數）<= max_lot_cost
+          - total_score >= min_score（品質底線，避免列出便宜但體質差的股票）
+        依 total_score 由高到低排序，取前 max_list 檔。
+        """
+        cfg = AFFORDABILITY
+        max_price = cfg["max_price"] if max_price is None else max_price
+        max_lot_cost = cfg["max_lot_cost"] if max_lot_cost is None else max_lot_cost
+        shares = cfg["shares_per_lot"]
+        min_score = cfg["min_score"]
+
+        affordable = []
+        for r in candidates:
+            price = r.close
+            if price is None or price <= 0:
+                continue
+            if max_price is not None and price > max_price:
+                continue
+            if max_lot_cost is not None and price * shares > max_lot_cost:
+                continue
+            if r.total_score < min_score:
+                continue
+            affordable.append(r)
+
+        affordable.sort(key=lambda r: r.total_score, reverse=True)
+        return affordable[: cfg["max_list"]]
 
     # ── 私有方法 ──────────────────────────────────────────────
 

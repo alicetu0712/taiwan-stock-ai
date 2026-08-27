@@ -30,20 +30,21 @@ class FilterResult:
 
 class HardFilter:
     """
-    硬性篩選引擎。
+    硬性篩選引擎（僅排除「明顯不適合」者，作為基礎資格關卡）。
 
-    篩選條件（依 PRD Chapter 4.3）：
-    公司基本條件：上市年數、市值、資本額、日成交金額
-    財務條件：EPS > 0、ROE ≥ 15%、ROA ≥ 8%、負債比 ≤ 60%
-    成長條件：近 3-5 年趨勢
-    排除條件：全額交割、財務異常等
+    保留的淘汰條件：
+      公司基本條件：上市年數、市值、資本額、日成交金額（流動性）
+      財務底線：EPS > 0（必須獲利）
+      排除條件：全額交割、重大違法、ETF/權證等非個股標的
+
+    改交由「評分引擎」漸層處理（不再於此懸崖式淘汰）：
+      ROE / ROA / 負債比 / 毛利率 / EPS 成長 / 營收成長 …
+      → 由 QUALITY_CONFIG 與 FundamentalAnalyzer 依高低給分，
+        避免「ROE 14.9% 淘汰、15.0% 入選」的 cliff effect。
     """
 
     def __init__(self, config: dict = None):
         self.cfg = config or HARD_FILTER
-
-    # 金融業關鍵字（銀行、保險、證券、金控負債比結構性偏高，ROA 較低）
-    _FINANCE_KEYWORDS = ("銀行", "保險", "證券", "金控", "票券", "金融", "壽險", "產險")
 
     def filter_stock(
         self,
@@ -130,13 +131,7 @@ class HardFilter:
                     checks,
                 )
 
-        # ── 產業別閾值（金融業結構性負債高、ROA 較低，採放寬標準）──────
-        is_finance = any(kw in (industry + name) for kw in self._FINANCE_KEYWORDS)
-        min_roe = 8.0 if is_finance else self.cfg["min_roe"]
-        min_roa = 0.5 if is_finance else self.cfg["min_roa"]
-        max_debt = 95.0 if is_finance else self.cfg["max_debt_ratio"]
-
-        # ── 財務條件 ──────────────────────────────────────────
+        # ── 財務基本資格（只保留「明顯不適合」的底線：必須獲利）──────
         if eps_ttm is not None:
             ok = eps_ttm > self.cfg["min_ttm_eps"]
             checks["eps_ttm"] = (ok, f"TTM EPS={eps_ttm:.2f}")
@@ -145,49 +140,25 @@ class HardFilter:
                     stock_id, False, f"TTM EPS ≤ 0（虧損，EPS={eps_ttm:.2f}）", checks
                 )
 
+        # ── ROE / ROA / 負債比 / 成長趨勢：改由評分引擎漸層計分 ──────
+        #    （見 QUALITY_CONFIG 與 FundamentalAnalyzer）
+        #    hard filter 不再以此「懸崖式淘汰」，僅記錄數值供參考，
+        #    讓 ROE 14.9% 與 15.0% 不再一刀兩斷，而是分數上的細微差異。
         if roe_avg is not None:
-            ok = roe_avg >= min_roe
-            checks["roe"] = (ok, f"ROE={roe_avg:.1f}%")
-            if not ok:
-                label = "（金融業）" if is_finance else ""
-                return FilterResult(
-                    stock_id,
-                    False,
-                    f"ROE 不足{label}（{roe_avg:.1f}% < {min_roe}%）",
-                    checks,
-                )
-
+            checks["roe"] = (roe_avg >= 15.0, f"ROE={roe_avg:.1f}%")
         if roa_avg is not None:
-            ok = roa_avg >= min_roa
-            checks["roa"] = (ok, f"ROA={roa_avg:.1f}%")
-            if not ok:
-                label = "（金融業）" if is_finance else ""
-                return FilterResult(
-                    stock_id,
-                    False,
-                    f"ROA 不足{label}（{roa_avg:.1f}% < {min_roa}%）",
-                    checks,
-                )
-
+            checks["roa"] = (roa_avg >= 8.0, f"ROA={roa_avg:.1f}%")
         if debt_ratio is not None:
-            ok = debt_ratio <= max_debt
-            checks["debt_ratio"] = (ok, f"負債比={debt_ratio:.1f}%")
-            if not ok:
-                return FilterResult(
-                    stock_id,
-                    False,
-                    f"負債比過高（{debt_ratio:.1f}% > {max_debt}%）",
-                    checks,
-                )
+            checks["debt_ratio"] = (debt_ratio <= 60.0, f"負債比={debt_ratio:.1f}%")
+        if eps_trend != "unknown":
+            checks["eps_trend"] = (eps_trend != "down", f"EPS 趨勢={eps_trend}")
+        if revenue_trend != "unknown":
+            checks["revenue_trend"] = (
+                revenue_trend != "down",
+                f"營收趨勢={revenue_trend}",
+            )
 
-        # ── 成長趨勢 ──────────────────────────────────────────
-        if eps_trend == "down":
-            return FilterResult(stock_id, False, "EPS 近期持續衰退", checks)
-
-        if revenue_trend == "down":
-            return FilterResult(stock_id, False, "營收近期持續衰退", checks)
-
-        # ✅ 通過全部篩選
+        # ✅ 通過基本資格篩選（品質高低交由後續評分引擎區分）
         return FilterResult(stock_id, True, "", checks)
 
 

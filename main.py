@@ -496,6 +496,35 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             candidates, bear_mode=bear_mode, caution_mode=caution_mode
         )
 
+        # 標記正式推薦的分級，並計算「觀察名單」（未達正式推薦但當日相對最強者）
+        for rec in top_recs:
+            rec.tier = "recommend"
+        rec_ids = {r.stock_id for r in top_recs}
+        watch_recs = decision.select_watchlist(candidates, exclude_ids=rec_ids)
+        if watch_recs:
+            wl = "、".join(
+                f"{r.stock_id} {r.total_score:.1f}分(強度贏過當日{r.percentile:.0f}%)"
+                for r in watch_recs
+            )
+            logger.info(f"[Step 8] 觀察名單 {len(watch_recs)} 檔：{wl}")
+        else:
+            logger.info("[Step 8] 觀察名單：無（今日無達觀察標準的標的）")
+
+        # 可負擔性榜（預算榜）：評分不看股價，僅在評分後另篩資金可負擔的最佳標的
+        affordable_recs = decision.select_affordable(candidates)
+        if affordable_recs:
+            al = "、".join(
+                f"{r.stock_id} {r.close:.0f}元/{r.total_score:.1f}分"
+                for r in affordable_recs
+            )
+            from config import AFFORDABILITY as _AFF
+            logger.info(
+                f"[Step 8] 可負擔性榜（單股≤{_AFF['max_price']:.0f}元）"
+                f"{len(affordable_recs)} 檔：{al}"
+            )
+        else:
+            logger.info("[Step 8] 可負擔性榜：無（預算內無達品質底線的標的）")
+
         # ── Step 9: Claude AI 報告生成 ───────────────────────
         logger.info("[Step 9] Generating AI explanations...")
         ai_reports = {}
@@ -598,6 +627,29 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
 
         # ── Step 10: 產生報告 ────────────────────────────────
         logger.info("[Step 10] Generating daily report...")
+        watch_list_data = [
+            {
+                "stock_id": r.stock_id,
+                "name": r.name,
+                "reason": (
+                    f"綜合 {r.total_score:.1f} 分 · 強度贏過當日 {r.percentile:.0f}% 個股 · "
+                    f"{r.rec_level} 級 · 信心 {r.confidence:.0f}%（未達正式推薦門檻）"
+                ),
+            }
+            for r in watch_recs
+        ]
+        _lot_shares = 1000
+        affordable_list_data = [
+            {
+                "stock_id": r.stock_id,
+                "name": r.name,
+                "price": f"{r.close:.1f}",
+                "lot_cost": f"{r.close * _lot_shares:,.0f}",
+                "total_score": f"{r.total_score:.1f}",
+                "rec_level": r.rec_level,
+            }
+            for r in affordable_recs
+        ]
         result = reporter.generate_daily_report(
             trade_date      = trade_date,
             recommendations = top_recs,
@@ -607,6 +659,8 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             market_ai_text  = market_ai_text,
             n_analyzed      = n_analyzed,
             n_qualified     = n_qualified,
+            watch_list      = watch_list_data,
+            affordable_list = affordable_list_data,
         )
 
         # ── 完成 ─────────────────────────────────────────────

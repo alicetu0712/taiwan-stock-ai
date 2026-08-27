@@ -44,6 +44,7 @@ class ReportGenerator:
         n_qualified: int,
         watch_list: list = None,
         upcoming_events: list = None,
+        affordable_list: list = None,
         strategy_version: str = "v6.0",
     ) -> dict:
         """
@@ -61,6 +62,7 @@ class ReportGenerator:
             n_qualified=n_qualified,
             watch_list=watch_list or [],
             upcoming_events=upcoming_events or [],
+            affordable_list=affordable_list or [],
             strategy_version=strategy_version,
         )
 
@@ -120,7 +122,9 @@ class ReportGenerator:
         watch_list,
         upcoming_events,
         strategy_version,
+        affordable_list=None,
     ) -> str:
+        affordable_list = affordable_list or []
         lines = []
 
         # ── 標題 ──────────────────────────────────────────────
@@ -209,6 +213,25 @@ class ReportGenerator:
             for w in watch_list[:10]:
                 lines.append(
                     f"| {w.get('stock_id', '')} | {w.get('name', '')} | {w.get('reason', '')} |"
+                )
+            lines.extend(["", "---", ""])
+
+        # ── ④-2 可負擔性榜（預算榜）─────────────────────────
+        if affordable_list:
+            lines.append("## ④-2 可負擔性榜（預算內最佳標的）")
+            lines.append("")
+            lines.append(
+                "> 此榜僅依「股價可負擔性」額外篩選，評分過程完全不因股價高低加減分；"
+                "高價績優股不會被扣分，只是不列於此榜。"
+            )
+            lines.append("")
+            lines.append("| 代號 | 公司名稱 | 股價 | 單張成本 | 綜合評分 | 等級 |")
+            lines.append("| ---- | -------- | ---- | -------- | -------- | ---- |")
+            for a in affordable_list:
+                lines.append(
+                    f"| {a.get('stock_id', '')} | {a.get('name', '')} | "
+                    f"{a.get('price', '')} | {a.get('lot_cost', '')} | "
+                    f"{a.get('total_score', '')} | {a.get('rec_level', '')} |"
                 )
             lines.extend(["", "---", ""])
 

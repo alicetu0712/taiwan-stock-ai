@@ -70,7 +70,8 @@ TPEX_API = {
 # ── 新聞 RSS ──────────────────────────────────────────────────
 NEWS_RSS_FEEDS = [
     "https://tw.stock.yahoo.com/rss",
-    "https://www.moneydj.com/rss/news.aspx",
+    # MoneyDJ RSS 已失效（主機 SSL/連線失敗），暫時移除
+    # "https://www.moneydj.com/rss/news.aspx",
 ]
 
 # ── 技術分析參數 ──────────────────────────────────────────────
@@ -99,17 +100,20 @@ SCORE_WEIGHTS = {
 }
 
 # ── 硬性篩選條件（Hard Filter）────────────────────────────────
+# 只保留「基礎資格」與「明顯不適合」的底線；品質高低（ROE/ROA/負債/成長）
+# 一律改由評分引擎（QUALITY_CONFIG + FundamentalAnalyzer）漸層計分。
 HARD_FILTER = {
     "min_listing_years": 3,  # 上市年數 >= 3
-    "min_market_cap_b": 10.0,  # 市值 >= 100億（單位：億）
-    "min_capital_b": 2.0,  # 資本額 >= 20億（單位：億）
-    "min_avg_daily_amt_m": 100.0,  # 平均日成交金額 >= 1億（單位：百萬）
-    "min_ttm_eps": 0.0,  # TTM EPS > 0
-    "min_roe": 15.0,  # ROE >= 15%
-    "min_roa": 8.0,  # ROA >= 8%
-    "max_debt_ratio": 60.0,  # 負債比率 <= 60%
-    "revenue_trend_years": 3,  # 至少 3 年營收趨勢
-    "eps_trend_years": 3,  # 至少 3 年 EPS 趨勢
+    "min_market_cap_b": 10.0,  # 市值 >= 10億（單位：億）
+    "min_capital_b": 2.0,  # 資本額 >= 2億（單位：億）
+    "min_avg_daily_amt_m": 100.0,  # 平均日成交金額 >= 1億（單位：百萬，流動性底線）
+    "min_ttm_eps": 0.0,  # TTM EPS > 0（必須獲利，唯一保留的財務底線）
+    # ↓↓ 以下已停用於 hard filter，改由評分引擎漸層處理，避免懸崖式淘汰 ↓↓
+    # "min_roe": 15.0,          # ROE：改由 QUALITY_CONFIG 計分
+    # "min_roa": 8.0,           # ROA：改由 QUALITY_CONFIG 計分
+    # "max_debt_ratio": 60.0,   # 負債比：改由 QUALITY_CONFIG 計分
+    # "revenue_trend_years": 3, # 營收趨勢：改由評分引擎處理（不再直接淘汰）
+    # "eps_trend_years": 3,     # EPS 趨勢：改由評分引擎處理（不再直接淘汰）
 }
 
 # ── Company Quality 評分參數 ──────────────────────────────────
@@ -152,8 +156,32 @@ RECOMMENDATION_LEVELS = {
 RECOMMENDATION_RULES = {
     "max_daily_recs": 3,  # 每日最多推薦 3 檔
     "min_confidence": 70.0,  # 最低信心分數（%）
-    "min_quality_grade": "B",  # 最低品質等級
-    "min_total_score": 65.0,  # 最低綜合評分
+    "min_quality_grade": "B",  # 最低品質等級（品質關卡的單一真相來源）
+    # 註：min_total_score 已停用。品質門檻改由 rec_level（RECOMMENDATION_LEVELS）
+    #     單一把關，避免與等級判斷重複。B 級 = 總分 ≥ 65（見 RECOMMENDATION_LEVELS）。
+    # "min_total_score": 65.0,
+}
+
+# ── 觀察名單規則（未達正式推薦，但為當日相對最強的一群）──────────
+# 目的：即使沒有正式推薦，也能顯示「今日最接近條件」的標的，
+#       而非只顯示「今日無推薦」。採「絕對品質底線 + 相對排名」雙軌。
+WATCH_LIST_RULES = {
+    "min_score": 50.0,  # 絕對底線：總分至少 50 才可能入觀察名單
+    "top_percentile": 90.0,  # 相對排名：當日 percentile ≥ 90（前 10%）
+    "min_confidence": 60.0,  # 觀察名單的信心要求（低於正式推薦的 70%）
+    "max_watch": 5,  # 觀察名單最多顯示檔數
+}
+
+# ── 可負擔性榜（預算榜）規則 ──────────────────────────────────
+# 原則：股票「評分」完全不看股價（不因股價高低加減分）；
+#       此處只在「評分之後」，額外篩出資金可負擔的最佳標的另立一榜。
+#       高價績優股不會被扣分，只是不出現在你的「可負擔榜」。
+AFFORDABILITY = {
+    "max_price": 300.0,  # 單股股價上限（元）；None = 不限
+    "max_lot_cost": None,  # 單張成本上限（元 = 股價 × 每張股數）；None = 不限
+    "shares_per_lot": 1000,  # 台股每張 = 1000 股
+    "min_score": 50.0,  # 可負擔榜的品質底線（避免列出便宜但爛的股票）
+    "max_list": 5,  # 可負擔榜最多顯示檔數
 }
 
 # ── 排程時間 ──────────────────────────────────────────────────

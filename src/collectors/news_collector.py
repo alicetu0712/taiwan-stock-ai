@@ -35,11 +35,21 @@ MOPS_HEADERS = {
 
 
 def fetch_rss_news(max_per_feed: int = 50) -> List[dict]:
-    """抓取 RSS 財經新聞。"""
+    """抓取 RSS 財經新聞。
+
+    以 requests（自帶 certifi 憑證）抓取內容後再交給 feedparser 解析，
+    避免 feedparser 直接用 urllib 抓取時的 SSL 憑證驗證失敗問題。
+    """
     articles = []
     for feed_url in NEWS_RSS_FEEDS:
         try:
-            feed = feedparser.parse(feed_url)
+            resp = requests.get(feed_url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+            if resp.status_code != 200:
+                logger.warning(
+                    f"RSS feed HTTP {resp.status_code} ({feed_url})"
+                )
+                continue
+            feed = feedparser.parse(resp.content)
             for entry in feed.entries[:max_per_feed]:
                 title = entry.get("title", "")
                 summary = entry.get("summary", "")
