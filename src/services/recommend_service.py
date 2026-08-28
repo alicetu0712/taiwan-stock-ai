@@ -115,6 +115,7 @@ class RecommendService:
         """回傳最近 N 天的推薦記錄（flat list of dicts）。"""
         try:
             import json
+
             from sqlalchemy import select
 
             from src.database import Recommendation, get_session

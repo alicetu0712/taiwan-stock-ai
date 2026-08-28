@@ -17,9 +17,8 @@ import feedparser
 import pandas as pd
 import requests
 
-from src.core.result import CollectResult
-
 from config import HTTP_HEADERS, HTTP_TIMEOUT, NEWS_RSS_FEEDS
+from src.core.result import CollectResult
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +44,7 @@ def fetch_rss_news(max_per_feed: int = 50) -> List[dict]:
         try:
             resp = requests.get(feed_url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
             if resp.status_code != 200:
-                logger.warning(
-                    f"RSS feed HTTP {resp.status_code} ({feed_url})"
-                )
+                logger.warning(f"RSS feed HTTP {resp.status_code} ({feed_url})")
                 continue
             feed = feedparser.parse(resp.content)
             for entry in feed.entries[:max_per_feed]:

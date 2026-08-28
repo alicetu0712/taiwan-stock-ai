@@ -13,8 +13,6 @@ from typing import Optional
 import pandas as pd
 import requests
 
-from src.collectors.base import BaseCollector
-
 from config import (
     FINMIND_TOKEN,
     HTTP_HEADERS,
@@ -23,6 +21,7 @@ from config import (
     TPEX_API,
     TWSE_API,
 )
+from src.collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
 
