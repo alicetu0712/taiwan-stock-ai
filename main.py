@@ -96,6 +96,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
 
     n_analyzed   = 0
     n_qualified  = 0
+    n_universe   = 0   # 全市場取得股價數（Step 1 完成後）
     recommendations = []
     fail_reasons    = []
 
@@ -134,6 +135,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             logger.error(f"股價資料驗證失敗：{price_msg}")
             _save_execution_log(session, trade_date, start_time, "failed", 0, 0, 0, price_msg)
             return None
+        n_universe = len(price_df["stock_id"].unique())
 
         # ── Step 1b: 把今日股價存入 DailyPrice 表（僅非回補模式）──
         if not dry_run and not is_backfill:
@@ -461,6 +463,10 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             )
             candidates.append(rec)
 
+        # ── Step 7b: 分數動能 + 冷卻期標記 ──────────────────────
+        _enrich_score_changes(session, trade_date, candidates)
+        _check_cooldown(session, trade_date, candidates)
+
         # ── Step 8: 大盤方向判斷 + 選出 Top N ──────────────────
         logger.info("[Step 8] Selecting top recommendations...")
 
@@ -500,6 +506,18 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
         for rec in top_recs:
             rec.tier = "recommend"
         rec_ids = {r.stock_id for r in top_recs}
+
+        # New Opportunities（分數動能榜）
+        opp_recs = decision.select_opportunities(candidates, exclude_ids=rec_ids)
+        if opp_recs:
+            opp_str = "、".join(
+                f"{r.stock_id} {r.total_score:.1f}分(5D:{r.score_change_5d:+.1f})"
+                for r in opp_recs
+            )
+            logger.info(f"[Step 8] New Opportunities {len(opp_recs)} 檔：{opp_str}")
+        else:
+            logger.info("[Step 8] New Opportunities：無（無符合動能條件的非冷卻標的）")
+
         watch_recs = decision.select_watchlist(candidates, exclude_ids=rec_ids)
         if watch_recs:
             wl = "、".join(
@@ -542,7 +560,19 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             no_rec_reason = no_rec_ai or no_rec_reason
 
         # ── 持久化推薦與分析結果至資料庫 ─────────────────────────
-        _save_recommendations(session, trade_date, top_recs, candidates, ai_reports, market_sentiment)
+        _save_recommendations(session, trade_date, top_recs, candidates, ai_reports, market_sentiment, opp_recs=opp_recs, watch_recs=watch_recs)
+
+        # ── Pipeline 漏斗統計 ──────────────────────────────────
+        _save_pipeline_funnel(
+            session      = session,
+            trade_date   = trade_date,
+            universe     = n_universe,
+            with_price   = n_analyzed,
+            hf_pass      = n_qualified,
+            candidates   = candidates,
+            recommended  = len(top_recs),
+            fail_reasons = fail_reasons,
+        )
 
         # ── Step 9b: 持倉管理 ────────────────────────────────
         logger.info("[Step 9b] Position management...")
@@ -791,7 +821,7 @@ def _sample_institutional(trade_date: date, stock_ids):
     return df
 
 
-def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment):
+def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment, opp_recs=None, watch_recs=None):
     """將推薦、分析結果、Decision Journal 持久化至資料庫。"""
     import json
     try:
@@ -805,29 +835,37 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
             ).first()
             if not existing:
                 ar = AnalysisResult(
-                    stock_id           = rec.stock_id,
-                    date               = trade_date,
-                    quality_score      = rec.quality_score,
-                    quality_grade      = rec.quality_grade,
-                    timing_score       = rec.timing_score,
-                    behavior_score     = rec.behavior_score,
-                    intelligence_score = rec.intelligence_score,
-                    risk_score         = rec.risk_score,
-                    total_score        = rec.total_score,
-                    confidence         = rec.confidence,
-                    rec_level          = rec.rec_level,
+                    stock_id             = rec.stock_id,
+                    date                 = trade_date,
+                    quality_score        = rec.quality_score,
+                    quality_grade        = rec.quality_grade,
+                    timing_score         = rec.timing_score,
+                    behavior_score       = rec.behavior_score,
+                    intelligence_score   = rec.intelligence_score,
+                    risk_score           = rec.risk_score,
+                    total_score          = rec.total_score,
+                    confidence           = rec.confidence,
+                    rec_level            = rec.rec_level,
+                    score_change_5d    = rec.score_change_5d,
+                    score_change_10d   = rec.score_change_10d,
+                    timing_change_5d   = rec.timing_change_5d,
+                    behavior_change_5d = rec.behavior_change_5d,
                 )
                 session.add(ar)
             else:
-                existing.quality_score      = rec.quality_score
-                existing.quality_grade      = rec.quality_grade
-                existing.timing_score       = rec.timing_score
-                existing.behavior_score     = rec.behavior_score
-                existing.intelligence_score = rec.intelligence_score
-                existing.risk_score         = rec.risk_score
-                existing.total_score        = rec.total_score
-                existing.confidence         = rec.confidence
-                existing.rec_level          = rec.rec_level
+                existing.quality_score       = rec.quality_score
+                existing.quality_grade       = rec.quality_grade
+                existing.timing_score        = rec.timing_score
+                existing.behavior_score      = rec.behavior_score
+                existing.intelligence_score  = rec.intelligence_score
+                existing.risk_score          = rec.risk_score
+                existing.total_score         = rec.total_score
+                existing.confidence          = rec.confidence
+                existing.rec_level           = rec.rec_level
+                existing.score_change_5d    = rec.score_change_5d
+                existing.score_change_10d   = rec.score_change_10d
+                existing.timing_change_5d   = rec.timing_change_5d
+                existing.behavior_change_5d = rec.behavior_change_5d
 
         # ── 儲存推薦紀錄（今日 Top N）────────────────────────
         top_ids = {r.stock_id for r in top_recs}
@@ -839,19 +877,27 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
             ).first()
             if not existing:
                 r = Recommendation(
-                    date             = trade_date,
-                    stock_id         = rec.stock_id,
-                    rec_level        = rec.rec_level,
-                    confidence       = rec.confidence,
-                    summary          = ai.get("ai_summary", rec.summary),
-                    advantages       = json.dumps(rec.advantages, ensure_ascii=False),
-                    risks            = json.dumps(rec.risks, ensure_ascii=False),
-                    watch_points     = json.dumps(rec.watch_points, ensure_ascii=False),
-                    ai_conclusion    = ai.get("conclusion_ai", ""),
-                    strategy_version = "v6.0",
+                    date              = trade_date,
+                    stock_id          = rec.stock_id,
+                    stock_name        = rec.name,
+                    rec_level         = rec.rec_level,
+                    confidence        = rec.confidence,
+                    summary           = ai.get("ai_summary", rec.summary),
+                    advantages        = json.dumps(rec.advantages, ensure_ascii=False),
+                    risks             = json.dumps(rec.risks, ensure_ascii=False),
+                    watch_points      = json.dumps(rec.watch_points, ensure_ascii=False),
+                    ai_conclusion     = ai.get("conclusion_ai", ""),
+                    strategy_version  = "v6.0",
+                    total_score       = rec.total_score,
+                    timing_score      = rec.timing_score,
+                    behavior_score    = rec.behavior_score,
+                    score_change_5d   = rec.score_change_5d,
+                    score_change_10d  = rec.score_change_10d,
+                    tier              = "recommend",
                 )
                 session.add(r)
             else:
+                existing.stock_name       = rec.name
                 existing.rec_level        = rec.rec_level
                 existing.confidence       = rec.confidence
                 existing.summary          = ai.get("ai_summary", rec.summary)
@@ -860,6 +906,62 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                 existing.watch_points     = json.dumps(rec.watch_points, ensure_ascii=False)
                 existing.ai_conclusion    = ai.get("conclusion_ai", "")
                 existing.strategy_version = "v6.0"
+                existing.total_score      = rec.total_score
+                existing.timing_score     = rec.timing_score
+                existing.behavior_score   = rec.behavior_score
+                existing.score_change_5d  = rec.score_change_5d
+                existing.score_change_10d = rec.score_change_10d
+                existing.tier             = "recommend"
+
+        # ── 儲存 Opportunity 追蹤記錄 ────────────────────────
+        for rec in (opp_recs or []):
+            existing = session.query(Recommendation).filter_by(
+                stock_id=rec.stock_id, date=trade_date, tier="opportunity"
+            ).first()
+            if not existing:
+                session.add(Recommendation(
+                    date             = trade_date,
+                    stock_id         = rec.stock_id,
+                    stock_name       = rec.name,
+                    rec_level        = rec.rec_level,
+                    confidence       = rec.confidence,
+                    summary          = rec.summary,
+                    advantages       = json.dumps(rec.advantages, ensure_ascii=False),
+                    risks            = json.dumps(rec.risks, ensure_ascii=False),
+                    watch_points     = json.dumps(rec.watch_points, ensure_ascii=False),
+                    strategy_version = "v6.0",
+                    total_score      = rec.total_score,
+                    timing_score     = rec.timing_score,
+                    behavior_score   = rec.behavior_score,
+                    score_change_5d  = rec.score_change_5d,
+                    score_change_10d = rec.score_change_10d,
+                    tier             = "opportunity",
+                ))
+
+        # ── 儲存 Watch List（當日相對最強的觀察標的）──────────
+        for rec in (watch_recs or []):
+            existing = session.query(Recommendation).filter_by(
+                stock_id=rec.stock_id, date=trade_date, tier="watch"
+            ).first()
+            if not existing:
+                session.add(Recommendation(
+                    date             = trade_date,
+                    stock_id         = rec.stock_id,
+                    stock_name       = rec.name,
+                    rec_level        = rec.rec_level,
+                    confidence       = rec.confidence,
+                    summary          = rec.summary,
+                    advantages       = json.dumps(rec.advantages, ensure_ascii=False),
+                    risks            = json.dumps(rec.risks, ensure_ascii=False),
+                    watch_points     = json.dumps(rec.watch_points, ensure_ascii=False),
+                    strategy_version = "v6.0",
+                    total_score      = rec.total_score,
+                    timing_score     = rec.timing_score,
+                    behavior_score   = rec.behavior_score,
+                    score_change_5d  = rec.score_change_5d,
+                    score_change_10d = rec.score_change_10d,
+                    tier             = "watch",
+                ))
 
         # ── 更新 Decision Journal ─────────────────────────────
         market_env_desc = f"市場情緒：{market_sentiment.get('sentiment', 'Neutral')}"
@@ -938,6 +1040,176 @@ def _save_execution_log(
         session.commit()
     except Exception as e:
         logger.debug(f"ExecutionLog save failed: {e}")
+
+
+def _enrich_score_changes(session, trade_date: date, candidates: list) -> None:
+    """為每個 candidate 填入 5D/10D 分數變化（查歷史 AnalysisResult）。"""
+    try:
+        from src.database import AnalysisResult
+
+        # 找最近 12 個有分析結果的交易日（排除今天）
+        past_dates = [
+            r.date
+            for r in session.query(AnalysisResult.date)
+            .filter(AnalysisResult.date < trade_date)
+            .group_by(AnalysisResult.date)
+            .order_by(AnalysisResult.date.desc())
+            .limit(12)
+            .all()
+        ]
+
+        date_5d  = past_dates[4]  if len(past_dates) >= 5  else None
+        date_10d = past_dates[9]  if len(past_dates) >= 10 else None
+
+        stock_ids = [c.stock_id for c in candidates]
+
+        def _batch_query(target_date):
+            if target_date is None:
+                return {}
+            rows = session.query(AnalysisResult).filter(
+                AnalysisResult.date == target_date,
+                AnalysisResult.stock_id.in_(stock_ids),
+            ).all()
+            return {r.stock_id: r for r in rows}
+
+        hist_5d  = _batch_query(date_5d)
+        hist_10d = _batch_query(date_10d)
+
+        enriched = 0
+        for c in candidates:
+            r5 = hist_5d.get(c.stock_id)
+            if r5:
+                c.score_change_5d    = round(c.total_score    - (r5.total_score    or 0), 1)
+                c.timing_change_5d   = round(c.timing_score   - (r5.timing_score   or 0), 1)
+                c.behavior_change_5d = round(c.behavior_score - (r5.behavior_score or 0), 1)
+                enriched += 1
+            r10 = hist_10d.get(c.stock_id)
+            if r10:
+                c.score_change_10d = round(c.total_score - (r10.total_score or 0), 1)
+
+        logger.info(f"[ScoreChange] 完成：{enriched}/{len(candidates)} 支有 5D 歷史可比較（5D={date_5d}, 10D={date_10d}）")
+    except Exception as e:
+        logger.warning(f"_enrich_score_changes 失敗：{e}")
+
+
+def _check_cooldown(session, trade_date: date, candidates: list, cooldown_days: int = 10) -> None:
+    """標記冷卻期（近 10 交易日推薦過的股票），並判斷 breakout exception。"""
+    try:
+        from datetime import timedelta
+        from src.database import Recommendation
+
+        # 近 20 曆日內的推薦記錄（確保涵蓋 10 個交易日）
+        since = trade_date - timedelta(days=20)
+        recent_recs = session.query(
+            Recommendation.stock_id,
+            Recommendation.date,
+            Recommendation.total_score,
+            Recommendation.timing_score,
+            Recommendation.behavior_score,
+        ).filter(
+            Recommendation.date >= since,
+            Recommendation.date < trade_date,
+        ).order_by(Recommendation.date.desc()).all()
+
+        # 每支股票最近一次推薦
+        last_rec: dict = {}
+        for r in recent_recs:
+            if r.stock_id not in last_rec:
+                last_rec[r.stock_id] = r
+
+        # 找到各交易日，計算「幾個交易日前」
+        all_rec_dates = sorted(set(r.date for r in recent_recs), reverse=True)
+
+        def _trading_days_ago(d: date) -> int:
+            return sum(1 for x in all_rec_dates if x >= d) if d else 999
+
+        for c in candidates:
+            lr = last_rec.get(c.stock_id)
+            if lr is None:
+                c.days_since_rec = None
+                c.on_cooldown = False
+                continue
+
+            days_ago = _trading_days_ago(lr.date)
+            c.days_since_rec = days_ago
+
+            if days_ago > cooldown_days:
+                c.on_cooldown = False
+                continue
+
+            c.on_cooldown = True
+
+            # Breakout exception（任一條件滿足則解除冷卻）
+            score_jump   = (c.total_score   - (lr.total_score   or 0)) >= 5
+            tech_jump    = (c.timing_score  - (lr.timing_score  or 0)) >= 10
+            chip_jump    = (c.behavior_score - (lr.behavior_score or 0)) >= 10
+            if score_jump or tech_jump or chip_jump:
+                c.cooldown_override = True
+                logger.debug(
+                    f"[Cooldown] {c.stock_id} breakout exception: "
+                    f"score+{c.total_score - lr.total_score:.1f} "
+                    f"tech+{c.timing_score - lr.timing_score:.1f} "
+                    f"chip+{c.behavior_score - lr.behavior_score:.1f}"
+                )
+
+        n_cd = sum(1 for c in candidates if c.on_cooldown and not c.cooldown_override)
+        n_ex = sum(1 for c in candidates if c.cooldown_override)
+        logger.info(f"[Cooldown] 冷卻中：{n_cd} 支，breakout exception：{n_ex} 支")
+    except Exception as e:
+        logger.warning(f"_check_cooldown 失敗：{e}")
+
+
+def _save_pipeline_funnel(
+    session,
+    trade_date,
+    universe: int,
+    with_price: int,
+    hf_pass: int,
+    candidates: list,
+    recommended: int,
+    fail_reasons: list,
+):
+    """儲存每日 pipeline 漏斗統計。"""
+    try:
+        from collections import Counter
+        from src.database import PipelineFunnel
+
+        scored_55 = sum(1 for r in candidates if r.total_score >= 55)
+        scored_65 = sum(1 for r in candidates if r.total_score >= 65)
+
+        top3 = Counter(fail_reasons).most_common(3)
+        reasons = [(r, c) for r, c in top3]
+        while len(reasons) < 3:
+            reasons.append(("", 0))
+
+        existing = session.query(PipelineFunnel).filter_by(date=trade_date).first()
+        if existing:
+            session.delete(existing)
+            session.flush()
+
+        funnel = PipelineFunnel(
+            date             = trade_date,
+            universe         = universe,
+            with_price       = with_price,
+            hard_filter_pass = hf_pass,
+            deep_analyzed    = len(candidates),
+            scored_55plus    = scored_55,
+            scored_65plus    = scored_65,
+            recommended      = recommended,
+            fail_top1_reason = reasons[0][0],
+            fail_top1_count  = reasons[0][1],
+            fail_top2_reason = reasons[1][0],
+            fail_top2_count  = reasons[1][1],
+            fail_top3_reason = reasons[2][0],
+            fail_top3_count  = reasons[2][1],
+        )
+        session.add(funnel)
+        session.commit()
+        logger.info(
+            f"[Pipeline] 漏斗：{universe}→{with_price}→{hf_pass}→{scored_55}(≥55)→{scored_65}(≥65)→{recommended}(推薦)"
+        )
+    except Exception as e:
+        logger.debug(f"PipelineFunnel save failed: {e}")
 
 
 def _get_earnings_risk_events(trade_date: date) -> list:

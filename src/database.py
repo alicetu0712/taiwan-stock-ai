@@ -158,6 +158,11 @@ class AnalysisResult(Base):
     total_score = Column(Float)  # 綜合評分（0-100）
     confidence = Column(Float)  # 信心分數（%）
     rec_level = Column(String(5))  # A+/A/B/C/D
+    # 分數動能（每日填入，供回測 / IC 診斷使用）
+    score_change_5d = Column(Float)
+    score_change_10d = Column(Float)
+    timing_change_5d = Column(Float)    # timing_score 今日 − 5D 前
+    behavior_change_5d = Column(Float)  # behavior_score 今日 − 5D 前
 
 
 class Recommendation(Base):
@@ -175,6 +180,16 @@ class Recommendation(Base):
     risks = Column(Text)  # 主要風險（JSON）
     watch_points = Column(Text)  # 觀察重點（JSON）
     ai_conclusion = Column(Text)  # AI 結論
+    # 評分快照（供 cooldown breakout exception 比較）
+    total_score = Column(Float)
+    timing_score = Column(Float)
+    behavior_score = Column(Float)
+    # 分數動能（填入時的 5D 變化）
+    score_change_5d = Column(Float)
+    score_change_10d = Column(Float)
+    # 層級標記：'recommend'（Core Picks）/ 'opportunity'（New Opportunities）
+    tier = Column(String(20), default="recommend")
+    stock_name = Column(String(60))
     strategy_version = Column(String(20), default="v6.0")
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -304,6 +319,35 @@ class DailyReport(Base):
     date = Column(Date, nullable=False)
     content_md = Column(Text)
     strategy_version = Column(String(20), default="v6.0")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PipelineFunnel(Base):
+    """每日 pipeline 漏斗統計——追蹤各階段股票留存數"""
+
+    __tablename__ = "pipeline_funnels"
+    __table_args__ = (UniqueConstraint("date"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False)
+
+    # 各 stage 的股票數（由上到下遞減）
+    universe = Column(Integer, default=0)          # 全市場取得股價的股票數
+    with_price = Column(Integer, default=0)        # 篩選至有歷史資料後
+    hard_filter_pass = Column(Integer, default=0)  # 通過 Hard Filter
+    deep_analyzed = Column(Integer, default=0)     # 完成深度分析（=hard_filter_pass）
+    scored_55plus = Column(Integer, default=0)     # total_score ≥ 55
+    scored_65plus = Column(Integer, default=0)     # total_score ≥ 65
+    recommended = Column(Integer, default=0)       # 實際推薦
+
+    # Hard Filter 失敗原因 Top 3（次數最多）
+    fail_top1_reason = Column(String(120), default="")
+    fail_top1_count = Column(Integer, default=0)
+    fail_top2_reason = Column(String(120), default="")
+    fail_top2_count = Column(Integer, default=0)
+    fail_top3_reason = Column(String(120), default="")
+    fail_top3_count = Column(Integer, default=0)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

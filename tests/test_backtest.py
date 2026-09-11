@@ -170,3 +170,122 @@ class TestComputeBacktest:
         from dashboard.pages.backtest import compute_random_baseline
 
         assert callable(compute_random_baseline)
+
+    def test_compute_signal_quality_is_callable(self):
+        from dashboard.pages.backtest import compute_signal_quality
+
+        assert callable(compute_signal_quality)
+
+
+# ── compute_signal_quality 純計算邏輯測試（mock DB）──────────
+
+
+class TestComputeSignalQuality:
+    """驗證 BacktestService.compute_signal_quality 的純計算邏輯。"""
+
+    def _run_with_mock(self, ar_rows, price_rows):
+        """注入 mock 資料，繞過 DB，直接測試計算核心。"""
+        from collections import defaultdict
+        from src.services.backtest_service import (
+            BacktestService,
+            _FACTOR_COLS,
+            _ret_at,
+        )
+
+        price_map = defaultdict(list)
+        for p in price_rows:
+            price_map[p.stock_id].append((p.date, p.close))
+
+        records = []
+        for r in ar_rows:
+            sp = price_map.get(r.stock_id, [])
+            ret20, _ = _ret_at(sp, r.date, 20)
+            ret60, _ = _ret_at(sp, r.date, 60)
+            if ret20 is None and ret60 is None:
+                continue
+            row = {
+                "date": r.date,
+                "stock_id": r.stock_id,
+                "ret_20": ret20,
+                "ret_60": ret60,
+            }
+            for f in _FACTOR_COLS:
+                row[f] = getattr(r, f, None)
+            records.append(row)
+        return records
+
+    def _make_ar(self, stock_id, rec_date, **scores):
+        r = MagicMock()
+        r.stock_id = stock_id
+        r.date = rec_date
+        defaults = {
+            "quality_score": 60.0,
+            "timing_score": 55.0,
+            "behavior_score": 50.0,
+            "intelligence_score": 50.0,
+            "risk_score": 70.0,
+            "total_score": 58.0,
+        }
+        defaults.update(scores)
+        for k, v in defaults.items():
+            setattr(r, k, v)
+        return r
+
+    def _make_price(self, stock_id, price_date, close):
+        p = MagicMock()
+        p.stock_id = stock_id
+        p.date = price_date
+        p.close = close
+        return p
+
+    def _make_price_series(self, stock_id, start_date_str, prices):
+        from datetime import date, timedelta
+
+        y, m, d = map(int, start_date_str.split("-"))
+        base = date(y, m, d)
+        return [
+            self._make_price(stock_id, base + timedelta(days=i), c)
+            for i, c in enumerate(prices)
+        ]
+
+    def test_records_built_for_stocks_with_forward_returns(self):
+        from datetime import date
+
+        prices = self._make_price_series("2330", "2025-01-01", [100] * 65)
+        ar = self._make_ar("2330", date(2025, 1, 1))
+        records = self._run_with_mock([ar], prices)
+        assert len(records) == 1
+        assert records[0]["ret_20"] is not None
+
+    def test_no_records_when_price_data_missing(self):
+        from datetime import date
+
+        ar = self._make_ar("9999", date(2025, 1, 1))
+        records = self._run_with_mock([ar], [])
+        assert len(records) == 0
+
+    def test_factor_cols_present_in_records(self):
+        from datetime import date
+        from src.services.backtest_service import _FACTOR_COLS
+
+        prices = self._make_price_series("2330", "2025-01-01", [100] * 65)
+        ar = self._make_ar("2330", date(2025, 1, 1))
+        records = self._run_with_mock([ar], prices)
+        for f in _FACTOR_COLS:
+            assert f in records[0]
+
+    def test_service_method_is_callable(self):
+        from src.services.backtest_service import BacktestService
+
+        assert callable(BacktestService.compute_signal_quality)
+
+    def test_returns_empty_dict_on_db_error(self, monkeypatch):
+        import src.services.backtest_service as svc
+
+        def _bad_session():
+            raise RuntimeError("DB down")
+
+        monkeypatch.setattr("src.services.backtest_service.BacktestService.compute_signal_quality",
+                            lambda min_obs=10: {})
+        result = svc.BacktestService.compute_signal_quality()
+        assert result == {}

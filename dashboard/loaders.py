@@ -202,7 +202,10 @@ def load_db_recommendations(target_date: date) -> list:
         recs_rows = (
             s.execute(
                 select(Recommendation)
-                .where(Recommendation.date == target_date)
+                .where(
+                    Recommendation.date == target_date,
+                    Recommendation.tier == "recommend",
+                )
                 .order_by(Recommendation.confidence.desc())
             )
             .scalars()
@@ -267,6 +270,132 @@ def load_db_recommendations(target_date: date) -> list:
         return result
     except Exception as e:
         logger.warning(f"load_db_recommendations failed: {e}")
+        return []
+
+
+@st.cache_data(ttl=1800)
+def load_opportunity_recs(target_date: date) -> list:
+    """從 DB 讀取當日 tier='opportunity' 的推薦（New Opportunities），供 overview 頁獨立顯示。"""
+    try:
+        from sqlalchemy import select
+
+        from src.database import AnalysisResult, DailyPrice, Recommendation, Stock, get_session
+        from sqlalchemy import desc as _desc
+
+        s = get_session()
+        rows = (
+            s.execute(
+                select(Recommendation)
+                .where(
+                    Recommendation.date == target_date,
+                    Recommendation.tier == "opportunity",
+                )
+                .order_by(Recommendation.total_score.desc())
+            )
+            .scalars()
+            .all()
+        )
+        stock_name_map = {
+            r.stock_id: r.name
+            for r in s.execute(select(Stock)).scalars().all()
+            if r.name
+        }
+        ar_map = {
+            r.stock_id: r
+            for r in s.execute(
+                select(AnalysisResult).where(AnalysisResult.date == target_date)
+            ).scalars().all()
+        }
+        db_price_map = {}
+        for r in rows:
+            dp = s.execute(
+                select(DailyPrice)
+                .where(DailyPrice.stock_id == r.stock_id)
+                .order_by(_desc(DailyPrice.date))
+                .limit(1)
+            ).scalar_one_or_none()
+            if dp:
+                db_price_map[r.stock_id] = dp.close
+        s.close()
+        result = []
+        for r in rows:
+            ar = ar_map.get(r.stock_id)
+            result.append({
+                "name": r.stock_name or stock_name_map.get(r.stock_id, ""),
+                "sid": r.stock_id,
+                "price": db_price_map.get(r.stock_id),
+                "level": r.rec_level or "B",
+                "total_score": r.total_score or 0,
+                "score_change_5d": r.score_change_5d,
+                "score_change_10d": r.score_change_10d,
+                "scores": {
+                    "quality": ar.quality_score if ar else 0,
+                    "timing": ar.timing_score if ar else 0,
+                    "behavior": ar.behavior_score if ar else 0,
+                    "risk": ar.risk_score if ar else 0,
+                    "total": r.total_score or (ar.total_score if ar else 0),
+                },
+                "confidence": r.confidence or 0,
+                "advantages": json.loads(r.advantages) if r.advantages else [],
+                "risks": json.loads(r.risks) if r.risks else [],
+                "watch": json.loads(r.watch_points) if r.watch_points else [],
+                "summary": r.summary or "",
+            })
+        return result
+    except Exception as e:
+        logger.warning(f"load_opportunity_recs failed: {e}")
+        return []
+
+
+@st.cache_data(ttl=1800)
+def load_watch_recs(target_date: date) -> list:
+    """從 DB 讀取當日 tier='watch' 的觀察名單（由 DecisionEngine.select_watchlist 產生）。"""
+    try:
+        from sqlalchemy import select
+        from src.database import AnalysisResult, Recommendation, Stock, get_session
+
+        s = get_session()
+        rows = (
+            s.execute(
+                select(Recommendation)
+                .where(
+                    Recommendation.date == target_date,
+                    Recommendation.tier == "watch",
+                )
+                .order_by(Recommendation.total_score.desc())
+            )
+            .scalars()
+            .all()
+        )
+        stock_name_map = {
+            r.stock_id: r.name
+            for r in s.execute(select(Stock)).scalars().all()
+            if r.name
+        }
+        ar_map = {
+            r.stock_id: r
+            for r in s.execute(
+                select(AnalysisResult).where(AnalysisResult.date == target_date)
+            ).scalars().all()
+        }
+        s.close()
+        result = []
+        for r in rows:
+            ar = ar_map.get(r.stock_id)
+            result.append({
+                "name": r.stock_name or stock_name_map.get(r.stock_id, r.stock_id),
+                "sid": r.stock_id,
+                "total_score": r.total_score or 0,
+                "timing_score": r.timing_score or 0,
+                "behavior_score": r.behavior_score or 0,
+                "confidence": r.confidence or 0,
+                "score_change_5d": r.score_change_5d,
+                "quality": ar.quality_score if ar else 0,
+                "risk": ar.risk_score if ar else 0,
+            })
+        return result
+    except Exception as e:
+        logger.warning(f"load_watch_recs failed: {e}")
         return []
 
 

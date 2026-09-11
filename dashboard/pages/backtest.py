@@ -9,7 +9,11 @@ import logging
 import pandas as pd
 import streamlit as st
 
-from src.services.backtest_service import ROUND_TRIP_COST, BacktestService  # noqa: F401
+from src.services.backtest_service import (  # noqa: F401
+    ROUND_TRIP_COST,
+    BacktestService,
+    _FACTOR_COLS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,110 @@ def compute_backtest() -> pd.DataFrame:
 def compute_random_baseline(n_sim: int = 1000) -> dict:
     """Monte Carlo：對每筆推薦日期隨機抽一支，重複 n_sim 次，返回隨機選股均報酬的分布。"""
     return BacktestService.compute_baseline(n_sim=n_sim)
+
+
+@st.cache_data(ttl=3600)
+def compute_signal_quality() -> dict:
+    """模型修正：計算各因子維度 IC（Spearman）與 IC IR，識別 signal quality 瓶頸。"""
+    return BacktestService.compute_signal_quality()
+
+
+@st.cache_data(ttl=1800)
+def load_pipeline_funnels(days: int = 30) -> pd.DataFrame:
+    """載入近 N 天的 pipeline 漏斗統計。"""
+    try:
+        from datetime import date, timedelta
+        from sqlalchemy.orm import Session
+        from src.database import init_db, PipelineFunnel
+
+        engine = init_db()
+        since = date.today() - timedelta(days=days)
+        with Session(engine) as s:
+            rows = (
+                s.query(PipelineFunnel)
+                .filter(PipelineFunnel.date >= since)
+                .order_by(PipelineFunnel.date)
+                .all()
+            )
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame([{
+                "date":             r.date,
+                "universe":         r.universe,
+                "with_price":       r.with_price,
+                "hard_filter_pass": r.hard_filter_pass,
+                "scored_55plus":    r.scored_55plus,
+                "scored_65plus":    r.scored_65plus,
+                "recommended":      r.recommended,
+                "fail_top1":        f"{r.fail_top1_reason}({r.fail_top1_count})" if r.fail_top1_reason else "",
+                "fail_top2":        f"{r.fail_top2_reason}({r.fail_top2_count})" if r.fail_top2_reason else "",
+                "fail_top3":        f"{r.fail_top3_reason}({r.fail_top3_count})" if r.fail_top3_reason else "",
+            } for r in rows])
+    except Exception as e:
+        logger.warning(f"load_pipeline_funnels failed: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800)
+def load_rec_diversity(days: int = 60) -> dict:
+    """計算推薦重複率統計（近 N 天）。"""
+    try:
+        from datetime import date, timedelta
+        from collections import Counter
+        from sqlalchemy.orm import Session
+        from src.database import init_db, Recommendation
+
+        engine = init_db()
+        since = date.today() - timedelta(days=days)
+        with Session(engine) as s:
+            rows = (
+                s.query(Recommendation.date, Recommendation.stock_id,
+                        Recommendation.stock_name, Recommendation.total_score)
+                .filter(Recommendation.date >= since)
+                .all()
+            )
+        if not rows:
+            return {}
+        dates = sorted(set(r.date for r in rows))
+        cnt = Counter(r.stock_id for r in rows)
+        n_days = len(dates)
+        n_total = len(rows)
+        n_unique = len(cnt)
+
+        top10 = [
+            {
+                "stock_id": sid,
+                "count":    c,
+                "pct_days": round(c / n_days * 100, 1),
+                "name":     next((r.stock_name for r in rows if r.stock_id == sid), sid),
+            }
+            for sid, c in cnt.most_common(10)
+        ]
+
+        # 逐日 Top-3 重疊率
+        daily = {}
+        for r in rows:
+            daily.setdefault(r.date, []).append(r.stock_id)
+        overlap_rates = []
+        date_list = sorted(daily.keys())
+        for i in range(1, len(date_list)):
+            prev = set(daily[date_list[i - 1]])
+            curr = set(daily[date_list[i]])
+            if prev and curr:
+                overlap_rates.append(len(prev & curr) / max(len(prev), len(curr)))
+
+        return {
+            "n_days":        n_days,
+            "n_total":       n_total,
+            "n_unique":      n_unique,
+            "unique_rate":   round(n_unique / n_total * 100, 1) if n_total else 0,
+            "avg_overlap":   round(sum(overlap_rates) / len(overlap_rates) * 100, 1) if overlap_rates else 0,
+            "top10":         top10,
+            "since":         since,
+        }
+    except Exception as e:
+        logger.warning(f"load_rec_diversity failed: {e}")
+        return {}
 
 
 def _calc_stats(ret: pd.Series, alpha: pd.Series, hold_days: int) -> dict:
@@ -344,6 +452,113 @@ def page_backtest() -> None:
     )
     st.altair_chart(bar + zero2, use_container_width=True)
 
+    # ── Signal Quality（因子 IC 診斷）────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🔍 因子 IC 診斷（Signal Quality）")
+    st.caption(
+        "使用每日全截面 AnalysisResult（非僅推薦股）計算各因子對 20/60 日前向報酬的 Spearman IC。"
+        "IC > 0.05 具實務意義；|t| > 1.96 達統計顯著（大樣本）。"
+    )
+
+    with st.spinner("計算因子 IC 中…"):
+        sq = compute_signal_quality()
+
+    _FACTOR_LABELS = {
+        "quality_score": "基本面（品質）",
+        "timing_score": "技術面（時機）",
+        "behavior_score": "市場行為（籌碼）",
+        "intelligence_score": "市場情報",
+        "risk_score": "風險分數",
+        "total_score": "綜合評分",
+    }
+
+    if not sq or not sq.get("factor_ic"):
+        st.info("AnalysisResult 資料不足，無法計算因子 IC。請確認已執行分析並同步。")
+    else:
+        factor_ic = sq["factor_ic"]
+        n_obs = sq.get("n_obs", 0)
+        st.caption(f"全截面觀測數：{n_obs} 筆（含所有分析日期 × 股票）")
+
+        def _fmt_ic(v):
+            return f"{v:+.4f}" if v is not None else "—"
+
+        def _fmt_t(v):
+            if v is None:
+                return "—"
+            badge = " ✅" if abs(v) >= 1.96 else " ⚠️" if abs(v) >= 1.0 else ""
+            return f"{v:+.2f}{badge}"
+
+        ic_rows = []
+        for f in _FACTOR_COLS:
+            s = factor_ic.get(f, {})
+            ic_rows.append(
+                {
+                    "因子": _FACTOR_LABELS.get(f, f),
+                    "IC₂₀": _fmt_ic(s.get("ic_20")),
+                    "t₂₀": _fmt_t(s.get("t_20")),
+                    "IC₆₀": _fmt_ic(s.get("ic_60")),
+                    "t₆₀": _fmt_t(s.get("t_60")),
+                    "IC IR": f"{s['ic_20_ir']:.2f}" if s.get("ic_20_ir") is not None else "—",
+                    "n": s.get("n_20", 0),
+                    "_ic20_raw": s.get("ic_20"),
+                }
+            )
+        ic_df = pd.DataFrame(ic_rows)
+
+        def _color_ic_cell(v):
+            try:
+                val = float(str(v).split()[0])
+                if val > 0.05:
+                    return "color:#00c851;font-weight:600"
+                if val > 0:
+                    return "color:#88cc88"
+                if val > -0.05:
+                    return "color:#ff8800"
+                return "color:#ff4444;font-weight:600"
+            except Exception:
+                return ""
+
+        display_df = ic_df.drop(columns=["_ic20_raw"])
+        st.dataframe(
+            display_df.style.map(_color_ic_cell, subset=["IC₂₀", "IC₆₀"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        monthly_ic = sq.get("monthly_ic")
+        if monthly_ic is not None and not monthly_ic.empty:
+            key_factors = ["quality_score", "timing_score", "total_score"]
+            mf = monthly_ic[monthly_ic["factor"].isin(key_factors)].copy()
+            mf["因子"] = mf["factor"].map(_FACTOR_LABELS)
+            st.markdown("##### 逐月 IC 時間序列（20 日，主要因子）")
+            ic_line = (
+                alt.Chart(mf)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("ym:O", title="月份", axis=alt.Axis(labelAngle=-45)),
+                    y=alt.Y("ic_20:Q", title="IC（Spearman）"),
+                    color=alt.Color("因子:N"),
+                    tooltip=[
+                        alt.Tooltip("ym:O", title="月份"),
+                        alt.Tooltip("因子:N"),
+                        alt.Tooltip("ic_20:Q", format=".4f", title="IC"),
+                        alt.Tooltip("n:Q", title="樣本數"),
+                    ],
+                )
+                .properties(height=220)
+            )
+            zero_ic = (
+                alt.Chart(pd.DataFrame({"y": [0]}))
+                .mark_rule(color="#555", strokeDash=[4, 4])
+                .encode(y="y:Q")
+            )
+            st.altair_chart(ic_line + zero_ic, use_container_width=True)
+
+        st.caption(
+            "⚠️ risk_score 越高代表越安全，正 IC 表示高安全分數對應較高報酬（符合預期）。"
+            "  IC 穩定跨月為正，才代表該因子具跨 regime 預測力。"
+        )
+
     with st.expander("📋 推薦明細", expanded=False):
         cols = [
             "date",
@@ -389,3 +604,94 @@ def page_backtest() -> None:
             use_container_width=True,
             hide_index=True,
         )
+
+    # ── Pipeline 漏斗 + 推薦重複率診斷 ──────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🔬 Pipeline 漏斗 & 推薦多樣性診斷")
+
+    col_left, col_right = st.columns([3, 2])
+
+    with col_left:
+        st.markdown("##### Pipeline 漏斗（近 30 天）")
+        funnel_df = load_pipeline_funnels(days=30)
+        if funnel_df.empty:
+            st.info("尚無漏斗資料，下次執行 main.py 後會自動記錄。")
+        else:
+            latest = funnel_df.iloc[-1]
+            stages = {
+                "全市場股價":     int(latest.get("universe", 0)),
+                "有歷史資料":     int(latest.get("with_price", 0)),
+                "通過 Hard Filter": int(latest.get("hard_filter_pass", 0)),
+                "總分 ≥ 55":     int(latest.get("scored_55plus", 0)),
+                "總分 ≥ 65":     int(latest.get("scored_65plus", 0)),
+                "實際推薦":       int(latest.get("recommended", 0)),
+            }
+            st.caption(f"最新日期：{latest['date']}")
+            stage_df = pd.DataFrame(
+                {"階段": list(stages.keys()), "股票數": list(stages.values())}
+            )
+            try:
+                import altair as alt
+                chart = (
+                    alt.Chart(stage_df)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("股票數:Q", title="股票數"),
+                        y=alt.Y("階段:N", sort=list(stages.keys()), title=""),
+                        color=alt.Color(
+                            "股票數:Q",
+                            scale=alt.Scale(scheme="blues"),
+                            legend=None,
+                        ),
+                        tooltip=["階段:N", "股票數:Q"],
+                    )
+                    .properties(height=220)
+                )
+                st.altair_chart(chart, use_container_width=True)
+            except Exception:
+                st.dataframe(stage_df, use_container_width=True, hide_index=True)
+
+            # 近期漏斗趨勢（≥65 與推薦數）
+            if len(funnel_df) > 1:
+                trend = funnel_df[["date", "scored_65plus", "recommended"]].copy()
+                trend.columns = ["日期", "總分≥65", "實際推薦"]
+                st.caption("近期漏斗趨勢（總分≥65 / 實際推薦）")
+                st.dataframe(
+                    trend.sort_values("日期", ascending=False).head(10),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            # Hard Filter 失敗原因
+            if latest.get("fail_top1"):
+                st.caption("Hard Filter 主要失敗原因")
+                fail_rows = []
+                for col in ["fail_top1", "fail_top2", "fail_top3"]:
+                    v = latest.get(col, "")
+                    if v:
+                        fail_rows.append({"原因（次數）": v})
+                if fail_rows:
+                    st.dataframe(
+                        pd.DataFrame(fail_rows),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+    with col_right:
+        st.markdown("##### 推薦重複率（近 60 天）")
+        div = load_rec_diversity(days=60)
+        if not div:
+            st.info("尚無推薦記錄。")
+        else:
+            col_a, col_b = st.columns(2)
+            col_a.metric("推薦次數", div["n_total"])
+            col_b.metric("不同股票", div["n_unique"])
+            col_a.metric("Unique Rate", f"{div['unique_rate']}%",
+                         help="不同股票數 / 推薦總次數")
+            col_b.metric("日均重疊率", f"{div['avg_overlap']}%",
+                         help="相鄰兩日推薦名單的重疊比例（越高 = 越難換）")
+
+            st.caption(f"統計期間：{div['since']} 起，共 {div['n_days']} 個交易日")
+            top_df = pd.DataFrame(div["top10"])[["stock_id", "name", "count", "pct_days"]]
+            top_df.columns = ["股票代號", "名稱", "推薦次數", "出現天%"]
+            st.dataframe(top_df, use_container_width=True, hide_index=True)

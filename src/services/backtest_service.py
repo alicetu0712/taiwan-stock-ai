@@ -8,12 +8,22 @@ dashboard/pages/backtest.py 的 @st.cache_data 函數委託此 Service。
 import logging
 from collections import defaultdict
 from datetime import date
+from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 ROUND_TRIP_COST = 0.585  # 買進+賣出合計交易成本（%）
+
+_FACTOR_COLS = [
+    "quality_score",
+    "timing_score",
+    "behavior_score",
+    "intelligence_score",
+    "risk_score",
+    "total_score",
+]
 
 
 def _ret_at(plist: list, ref_date: date, n_trading_days: int):
@@ -249,3 +259,147 @@ class BacktestService:
             if sim_rets:
                 sim_means.append(sum(sim_rets) / len(sim_rets))
         return {"sim_means": sim_means, "n_sim": n_sim}
+
+    @staticmethod
+    def compute_signal_quality(min_obs: int = 10) -> dict:
+        """
+        模型修正：計算各因子維度的 IC（Spearman 相關）與 IC IR。
+
+        使用 AnalysisResult（每日全截面）+ DailyPrice 計算各因子對
+        20/60 日前向報酬的預測力，識別 signal quality 瓶頸。
+
+        Returns:
+            {
+                "factor_ic": {
+                    factor_name: {
+                        "ic_20": float | None,
+                        "ic_60": float | None,
+                        "ic_20_ir": float | None,   # IC / std(monthly IC)
+                        "ic_60_ir": float | None,
+                        "t_20": float | None,       # t-stat: IC sqrt(n) / std
+                        "t_60": float | None,
+                        "n_20": int,
+                        "n_60": int,
+                    }
+                },
+                "monthly_ic": pd.DataFrame,         # columns: ym, factor, ic_20, n
+                "n_obs": int,                       # 有效觀測數（至少有一個 forward ret）
+            }
+            或 {} 若 DB 查詢失敗。
+        """
+        try:
+            from src.database import AnalysisResult, DailyPrice, get_session
+
+            s = get_session()
+            ar_rows = s.query(AnalysisResult).all()
+            all_ids = {r.stock_id for r in ar_rows}
+            all_prices_q = (
+                s.query(DailyPrice)
+                .filter(DailyPrice.stock_id.in_(all_ids))
+                .order_by(DailyPrice.stock_id, DailyPrice.date)
+                .all()
+            )
+            s.close()
+        except Exception as e:
+            logger.exception(f"BacktestService.compute_signal_quality DB query failed: {e}")
+            return {}
+
+        price_map: dict = defaultdict(list)
+        for p in all_prices_q:
+            price_map[p.stock_id].append((p.date, p.close))
+
+        # 建立觀測記錄（每筆 AnalysisResult + 對應前向報酬）
+        records = []
+        for r in ar_rows:
+            sp = price_map.get(r.stock_id, [])
+            ret20, _ = _ret_at(sp, r.date, 20)
+            ret60, _ = _ret_at(sp, r.date, 60)
+            if ret20 is None and ret60 is None:
+                continue
+            row: dict = {
+                "date": r.date,
+                "stock_id": r.stock_id,
+                "ret_20": ret20,
+                "ret_60": ret60,
+            }
+            for f in _FACTOR_COLS:
+                row[f] = getattr(r, f, None)
+            records.append(row)
+
+        if not records:
+            return {}
+
+        df = pd.DataFrame(records)
+
+        try:
+            from scipy.stats import spearmanr as _spearmanr
+        except ImportError:
+            logger.error("scipy not installed; cannot compute IC")
+            return {}
+
+        # ── 整體 IC 與 t-stat ──────────────────────────────────
+        factor_ic: dict = {}
+        for f in _FACTOR_COLS:
+            ic20 = ic60 = t20 = t60 = None
+            n20 = n60 = 0
+
+            v20 = df.dropna(subset=[f, "ret_20"])
+            v60 = df.dropna(subset=[f, "ret_60"])
+            n20 = len(v20)
+            n60 = len(v60)
+
+            if n20 >= min_obs:
+                corr, _ = _spearmanr(v20[f], v20["ret_20"])
+                ic20 = round(float(corr), 4)
+                import math
+                # Fisher z t-stat approximation
+                t20 = round(ic20 * math.sqrt(n20), 4)
+
+            if n60 >= min_obs:
+                corr, _ = _spearmanr(v60[f], v60["ret_60"])
+                ic60 = round(float(corr), 4)
+                import math
+                t60 = round(ic60 * math.sqrt(n60), 4)
+
+            factor_ic[f] = {
+                "ic_20": ic20,
+                "ic_60": ic60,
+                "t_20": t20,
+                "t_60": t60,
+                "n_20": n20,
+                "n_60": n60,
+                "ic_20_ir": None,
+                "ic_60_ir": None,
+            }
+
+        # ── 逐月 IC（用於時間穩定性診斷）──────────────────────
+        def _ym(d):
+            return d.strftime("%Y-%m") if hasattr(d, "strftime") else str(d)[:7]
+
+        df["ym"] = df["date"].apply(_ym)
+        monthly_rows = []
+        for ym, grp in df.groupby("ym"):
+            for f in _FACTOR_COLS:
+                v = grp.dropna(subset=[f, "ret_20"])
+                if len(v) < min_obs:
+                    continue
+                corr, _ = _spearmanr(v[f], v["ret_20"])
+                monthly_rows.append({"ym": ym, "factor": f, "ic_20": round(float(corr), 4), "n": len(v)})
+
+        monthly_ic_df = pd.DataFrame(monthly_rows) if monthly_rows else pd.DataFrame(
+            columns=["ym", "factor", "ic_20", "n"]
+        )
+
+        # ── IC IR（月 IC 序列的均值/標準差）───────────────────
+        if not monthly_ic_df.empty:
+            for f in _FACTOR_COLS:
+                sub = monthly_ic_df[monthly_ic_df["factor"] == f]["ic_20"]
+                if len(sub) >= 3 and sub.std() > 0:
+                    ir = round(float(sub.mean() / sub.std()), 4)
+                    factor_ic[f]["ic_20_ir"] = ir
+
+        return {
+            "factor_ic": factor_ic,
+            "monthly_ic": monthly_ic_df,
+            "n_obs": len(df),
+        }

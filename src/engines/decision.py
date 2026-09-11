@@ -63,6 +63,15 @@ class StockRecommendation:
     # 橫斷面排名與分級（當日相對表現）
     percentile: float = 0.0  # 當日 percentile（0-100，越高代表當日相對越強）
     tier: str = "none"  # "recommend"（正式推薦）/ "watch"（觀察）/ "none"（不推薦）
+    # 分數動能（由 main.py _enrich_score_changes 填入）
+    score_change_5d: Optional[float] = None
+    score_change_10d: Optional[float] = None
+    timing_change_5d: Optional[float] = None    # timing_score 今日 − 5D 前
+    behavior_change_5d: Optional[float] = None  # behavior_score 今日 − 5D 前
+    # 推薦冷卻（由 main.py _check_cooldown 填入）
+    days_since_rec: Optional[int] = None   # None = 從未推薦過
+    on_cooldown: bool = False
+    cooldown_override: bool = False        # breakout exception 觸發
 
 
 class DecisionEngine:
@@ -223,16 +232,12 @@ class DecisionEngine:
         caution_mode: bool = False,
     ) -> Tuple[List[StockRecommendation], str]:
         """
-        從候選名單中選出 Top N。
-        若無符合條件者，回傳空列表並附說明。
+        Core Picks：依總分絕對值排序，可重複出現（不受 cooldown 限制）。
+        New Opportunities 另由 select_opportunities() 產生。
         """
         max_n = max_n or self.rules["max_daily_recs"]
         min_conf = self.rules["min_confidence"]
 
-        # 三段式市場方向控制：
-        # 只調整「可接受等級 / 推薦檔數 / 信心要求」，不再另外疊加一個分數門檻。
-        # 個股品質由 rec_level 單一把關（rec_level 已內含 RECOMMENDATION_LEVELS 的分數標準），
-        # 避免「rec_level>=B」與「total_score>=65」重複判斷。
         allowed_levels = ("A+", "A", "B")
         if bear_mode:
             allowed_levels = ("A+", "A")
@@ -252,7 +257,6 @@ class DecisionEngine:
                 f"[Decision] 多頭模式：接受 A+/A/B，信心≥{min_conf:.0f}%，最多 {max_n} 檔"
             )
 
-        # 篩選符合最低標準的候選（品質看 rec_level，信心看 confidence）
         qualified = [
             r
             for r in candidates
@@ -267,7 +271,6 @@ class DecisionEngine:
             )
             return [], reason
 
-        # 依總分降序後，套用產業集中度控制（同產業最多 2 支）
         qualified.sort(key=lambda r: r.total_score, reverse=True)
         top_n: list = []
         industry_count: dict = {}
@@ -280,8 +283,55 @@ class DecisionEngine:
             industry_count[ind] = industry_count.get(ind, 0) + 1
             if len(top_n) >= max_n:
                 break
-        reason = f"今日共有 {len(qualified)} 檔符合條件，推薦其中評分最高的 {len(top_n)} 檔（同產業上限 {max_per_industry} 支）。"
+        reason = f"今日共有 {len(qualified)} 檔符合條件，Core Picks 取評分最高的 {len(top_n)} 檔（同產業上限 {max_per_industry} 支）。"
         return top_n, reason
+
+    def select_opportunities(
+        self,
+        candidates: List[StockRecommendation],
+        exclude_ids: set,
+        max_n: int = 5,
+        min_score: float = 55.0,
+        min_score_momentum: float = 5.0,
+        min_component_change: float = 8.0,
+    ) -> List[StockRecommendation]:
+        """
+        Rising Opportunities：近 5D 分數快速轉強的標的（獨立於 Core Picks）。
+
+        入選條件（全部 AND）：
+          1. 不在 Core Picks 名單（exclude_ids）
+          2. total_score >= 55（品質底線，比 Core 寬鬆）
+          3. 不在冷卻期，或已觸發 breakout exception
+          4. score_change_5d >= 5（總分近 5D 上升 5 分以上）
+          5. timing_change_5d >= 8 OR behavior_change_5d >= 8（至少一個分項也明顯改善）
+
+        排序：score_change_5d 降序。
+        """
+        opps = []
+        for r in candidates:
+            if r.stock_id in exclude_ids:
+                continue
+            if r.total_score < min_score:
+                continue
+            if r.on_cooldown and not r.cooldown_override:
+                continue
+            # 總分動能必要條件
+            if r.score_change_5d is None or r.score_change_5d < min_score_momentum:
+                continue
+            # 至少一個分項也有明顯改善
+            component_rising = (
+                (r.timing_change_5d is not None and r.timing_change_5d >= min_component_change)
+                or (r.behavior_change_5d is not None and r.behavior_change_5d >= min_component_change)
+            )
+            if not component_rising:
+                continue
+            opps.append(r)
+
+        opps.sort(key=lambda r: (r.score_change_5d or 0), reverse=True)
+        result = opps[:max_n]
+        for r in result:
+            r.tier = "opportunity"
+        return result
 
     def assign_percentiles(
         self, candidates: List[StockRecommendation]

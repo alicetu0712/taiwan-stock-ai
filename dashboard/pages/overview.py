@@ -12,9 +12,11 @@ from dashboard.loaders import (
     load_analysis_results,
     load_db_recommendations,
     load_exec_logs,
+    load_opportunity_recs,
     load_report,
     load_stock_names,
     load_stock_prices,
+    load_watch_recs,
     parse_market_summary,
     parse_recs_from_report,
 )
@@ -300,7 +302,7 @@ def page_today(selected_date: date) -> None:
             )
         else:
             st.markdown(
-                f'<div class="section-title">今日研究候選（{len(recs)} 檔）</div>',
+                f'<div class="section-title">Core Picks（{len(recs)} 檔）</div>',
                 unsafe_allow_html=True,
             )
         cols_data = [recs[i::2] for i in range(2)]
@@ -314,17 +316,64 @@ def page_today(selected_date: date) -> None:
     else:
         st.info("今日尚無分析資料，請先執行分析。")
 
-    watch_df = (
-        results_df[(results_df["total"] >= 55) & (results_df["total"] < 65)]
-        if not results_df.empty
-        else __import__("pandas").DataFrame()
-    )
-    if not watch_df.empty:
-        with st.expander(f"📋 Watch List（{len(watch_df)} 檔，待觀察）"):
-            for _, row in watch_df.iterrows():
-                display_name = (
-                    f"{row.get('name', row['stock_id'])}（{row['stock_id']}）"
-                )
+    # ── New Opportunities（分數動能強勁但在冷卻期外的新股）──────────
+    opp_recs = load_opportunity_recs(selected_date)
+    if opp_recs:
+        st.markdown(
+            f'<div class="section-title">🔥 New Opportunities（{len(opp_recs)} 檔，觀察追蹤中）</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "⚡ 分數動能突出但尚未進入正式 Core Picks。追蹤 4–8 週績效後再決定是否納入正式推薦。"
+        )
+        for opp in opp_recs:
+            if opp["price"] is None:
+                opp["price"] = stock_prices.get(opp["sid"])
+            sc5 = opp.get("score_change_5d")
+            sc5_str = f"{sc5:+.1f}" if sc5 is not None else "—"
+            momentum_badge = (
+                f'<span style="background:#e65100;color:#fff;border-radius:4px;padding:2px 7px;font-size:0.7rem;font-weight:700">▲ 5D {sc5_str}</span>'
+                if sc5 and sc5 > 0
+                else f'<span style="background:#37474f;color:#fff;border-radius:4px;padding:2px 7px;font-size:0.7rem">5D {sc5_str}</span>'
+            )
+            total = opp.get("total_score", opp["scores"].get("total", 0))
+            name = opp.get("name", "") or opp["sid"]
+            sid = opp["sid"]
+            price = opp.get("price")
+            price_str = f"NT$ {price:,.1f}" if price else "—"
+            adv_tags = "".join(
+                f'<span class="tag-good">✓ {a[:18]}</span>'
+                for a in opp.get("advantages", [])[:2]
+            )
+            st.markdown(
+                f"""
+<div style="background:#1a1a2e;border:1px solid #e65100;border-radius:8px;padding:12px 16px;margin-bottom:8px">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <span style="font-weight:700;font-size:1rem">{name}</span>
+      <span style="color:#aaa;font-size:0.75rem;margin-left:8px">{sid} · {price_str}</span>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      {momentum_badge}
+      <span style="background:#333;color:#ddd;border-radius:4px;padding:2px 7px;font-size:0.7rem">總分 {total:.0f}</span>
+    </div>
+  </div>
+  {f'<div style="margin-top:6px">{adv_tags}</div>' if adv_tags else ''}
+  {f'<div style="color:#ccc;font-size:0.78rem;margin-top:6px">{opp["summary"]}</div>' if opp.get("summary") else ''}
+</div>""",
+                unsafe_allow_html=True,
+            )
+
+    # Watch List — 由 DecisionEngine.select_watchlist() 產生（percentile + min_score + confidence）
+    watch_recs_list = load_watch_recs(selected_date)
+    if watch_recs_list:
+        with st.expander(f"📋 Watch List（{len(watch_recs_list)} 檔，當日相對最強、待觀察）"):
+            for w in watch_recs_list:
+                sc5 = w.get("score_change_5d")
+                sc5_str = f"（5D {sc5:+.1f}）" if sc5 is not None else ""
+                display_name = f"{w['name']}（{w['sid']}）" if w['name'] != w['sid'] else w['sid']
                 st.markdown(
-                    f"**{display_name}** — 綜合分 {row['total']:.0f} | 品質 {row.get('quality', 0):.0f} | 時機 {row.get('timing', 0):.0f}"
+                    f"**{display_name}** — 綜合 {w['total_score']:.0f} | "
+                    f"技術 {w['timing_score']:.0f} | 籌碼 {w['behavior_score']:.0f} | "
+                    f"信心 {w['confidence']:.0f}%{sc5_str}"
                 )
