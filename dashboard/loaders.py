@@ -336,6 +336,8 @@ def load_opportunity_recs(target_date: date) -> list:
                     "total": r.total_score or (ar.total_score if ar else 0),
                 },
                 "confidence": r.confidence or 0,
+                "timing_change_5d": r.timing_change_5d,
+                "behavior_change_5d": r.behavior_change_5d,
                 "advantages": json.loads(r.advantages) if r.advantages else [],
                 "risks": json.loads(r.risks) if r.risks else [],
                 "watch": json.loads(r.watch_points) if r.watch_points else [],

@@ -920,22 +920,24 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
             ).first()
             if not existing:
                 session.add(Recommendation(
-                    date             = trade_date,
-                    stock_id         = rec.stock_id,
-                    stock_name       = rec.name,
-                    rec_level        = rec.rec_level,
-                    confidence       = rec.confidence,
-                    summary          = rec.summary,
-                    advantages       = json.dumps(rec.advantages, ensure_ascii=False),
-                    risks            = json.dumps(rec.risks, ensure_ascii=False),
-                    watch_points     = json.dumps(rec.watch_points, ensure_ascii=False),
-                    strategy_version = "v6.0",
-                    total_score      = rec.total_score,
-                    timing_score     = rec.timing_score,
-                    behavior_score   = rec.behavior_score,
-                    score_change_5d  = rec.score_change_5d,
-                    score_change_10d = rec.score_change_10d,
-                    tier             = "opportunity",
+                    date               = trade_date,
+                    stock_id           = rec.stock_id,
+                    stock_name         = rec.name,
+                    rec_level          = rec.rec_level,
+                    confidence         = rec.confidence,
+                    summary            = rec.summary,
+                    advantages         = json.dumps(rec.advantages, ensure_ascii=False),
+                    risks              = json.dumps(rec.risks, ensure_ascii=False),
+                    watch_points       = json.dumps(rec.watch_points, ensure_ascii=False),
+                    strategy_version   = "v6.0",
+                    total_score        = rec.total_score,
+                    timing_score       = rec.timing_score,
+                    behavior_score     = rec.behavior_score,
+                    score_change_5d    = rec.score_change_5d,
+                    score_change_10d   = rec.score_change_10d,
+                    timing_change_5d   = rec.timing_change_5d,
+                    behavior_change_5d = rec.behavior_change_5d,
+                    tier               = "opportunity",
                 ))
 
         # ── 儲存 Watch List（當日相對最強的觀察標的）──────────
@@ -1098,7 +1100,7 @@ def _check_cooldown(session, trade_date: date, candidates: list, cooldown_days: 
         from datetime import timedelta
         from src.database import Recommendation
 
-        # 近 20 曆日內的推薦記錄（確保涵蓋 10 個交易日）
+        # 近 20 曆日內的 Rising Opportunity 紀錄（cooldown 只限制 Rising，不限制 Core）
         since = trade_date - timedelta(days=20)
         recent_recs = session.query(
             Recommendation.stock_id,
@@ -1109,6 +1111,7 @@ def _check_cooldown(session, trade_date: date, candidates: list, cooldown_days: 
         ).filter(
             Recommendation.date >= since,
             Recommendation.date < trade_date,
+            Recommendation.tier == "opportunity",
         ).order_by(Recommendation.date.desc()).all()
 
         # 每支股票最近一次推薦

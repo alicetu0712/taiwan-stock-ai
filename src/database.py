@@ -184,10 +184,12 @@ class Recommendation(Base):
     total_score = Column(Float)
     timing_score = Column(Float)
     behavior_score = Column(Float)
-    # 分數動能（填入時的 5D 變化）
+    # 分數動能快照（填入時的 5D 變化，Rising Opportunities 顯示用）
     score_change_5d = Column(Float)
     score_change_10d = Column(Float)
-    # 層級標記：'recommend'（Core Picks）/ 'opportunity'（New Opportunities）
+    timing_change_5d = Column(Float)
+    behavior_change_5d = Column(Float)
+    # 層級標記：'recommend'（Core Picks）/ 'opportunity'（Rising）/ 'watch'
     tier = Column(String(20), default="recommend")
     stock_name = Column(String(60))
     strategy_version = Column(String(20), default="v6.0")

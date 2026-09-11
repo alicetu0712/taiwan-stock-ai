@@ -329,16 +329,26 @@ def page_today(selected_date: date) -> None:
         for opp in opp_recs:
             if opp["price"] is None:
                 opp["price"] = stock_prices.get(opp["sid"])
-            sc5 = opp.get("score_change_5d")
+            sc5  = opp.get("score_change_5d")
+            tc5  = opp.get("timing_change_5d")
+            bc5  = opp.get("behavior_change_5d")
             sc5_str = f"{sc5:+.1f}" if sc5 is not None else "—"
-            momentum_badge = (
-                f'<span style="background:#e65100;color:#fff;border-radius:4px;padding:2px 7px;font-size:0.7rem;font-weight:700">▲ 5D {sc5_str}</span>'
-                if sc5 and sc5 > 0
-                else f'<span style="background:#37474f;color:#fff;border-radius:4px;padding:2px 7px;font-size:0.7rem">5D {sc5_str}</span>'
+            tc5_str = f"{tc5:+.1f}" if tc5 is not None else "—"
+            bc5_str = f"{bc5:+.1f}" if bc5 is not None else "—"
+
+            def _badge(label, val, val_str, threshold=5):
+                bg = "#e65100" if val and val >= threshold else "#37474f"
+                arrow = "▲ " if val and val > 0 else ""
+                return f'<span style="background:{bg};color:#fff;border-radius:4px;padding:2px 7px;font-size:0.68rem;font-weight:700">{arrow}{label} {val_str}</span>'
+
+            badges = (
+                _badge("總5D", sc5, sc5_str, 5)
+                + " " + _badge("技術5D", tc5, tc5_str, 8)
+                + " " + _badge("籌碼5D", bc5, bc5_str, 8)
             )
             total = opp.get("total_score", opp["scores"].get("total", 0))
-            name = opp.get("name", "") or opp["sid"]
-            sid = opp["sid"]
+            name  = opp.get("name", "") or opp["sid"]
+            sid   = opp["sid"]
             price = opp.get("price")
             price_str = f"NT$ {price:,.1f}" if price else "—"
             adv_tags = "".join(
@@ -348,16 +358,14 @@ def page_today(selected_date: date) -> None:
             st.markdown(
                 f"""
 <div style="background:#1a1a2e;border:1px solid #e65100;border-radius:8px;padding:12px 16px;margin-bottom:8px">
-  <div style="display:flex;justify-content:space-between;align-items:center">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
     <div>
       <span style="font-weight:700;font-size:1rem">{name}</span>
       <span style="color:#aaa;font-size:0.75rem;margin-left:8px">{sid} · {price_str}</span>
     </div>
-    <div style="display:flex;gap:6px;align-items:center">
-      {momentum_badge}
-      <span style="background:#333;color:#ddd;border-radius:4px;padding:2px 7px;font-size:0.7rem">總分 {total:.0f}</span>
-    </div>
+    <span style="background:#333;color:#ddd;border-radius:4px;padding:2px 7px;font-size:0.7rem">總分 {total:.0f}</span>
   </div>
+  <div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">{badges}</div>
   {f'<div style="margin-top:6px">{adv_tags}</div>' if adv_tags else ''}
   {f'<div style="color:#ccc;font-size:0.78rem;margin-top:6px">{opp["summary"]}</div>' if opp.get("summary") else ''}
 </div>""",
