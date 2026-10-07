@@ -115,9 +115,30 @@ def load_recent_recs(days: int = 60) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _is_etf_or_excluded(sid: str, name: str) -> bool:
+    """判斷是否為 ETF/權證/非個股標的，需從清單中排除。"""
+    from config import EXCLUDE_KEYWORDS, EXCLUDE_PATTERNS
+    import re
+    # 代碼以 0 開頭 → ETF（0050, 0056 等）
+    if sid.startswith("0"):
+        return True
+    # 代碼含英文字母 → 權證/DR 等
+    if re.search(r"[A-Za-z]", sid):
+        return True
+    # 名稱含排除關鍵字
+    name_upper = name.upper()
+    if any(kw.upper() in name_upper for kw in EXCLUDE_KEYWORDS):
+        return True
+    # 代碼 pattern 比對
+    for pat in EXCLUDE_PATTERNS:
+        if re.match(pat, sid):
+            return True
+    return False
+
+
 @st.cache_data(ttl=86400)
 def load_stock_names() -> dict:
-    """股票代號→名稱對照表：優先讀本地 DB，再從 TWSE API 補缺"""
+    """股票代號→名稱對照表：優先讀本地 DB，再從 TWSE API 補缺（排除 ETF/非個股）"""
     names = {}
     try:
         from sqlalchemy import select
@@ -142,16 +163,18 @@ def load_stock_names() -> dict:
             for item in r.json():
                 sid = item.get("Code", "").strip()
                 name = item.get("Name", "").strip()
-                if sid and name and sid not in names:
+                # 已在 DB 中的優先保留 DB 名稱，且排除非個股標的
+                if sid and name and sid not in names and not _is_etf_or_excluded(sid, name):
                     names[sid] = name
     except Exception as e:
         logger.warning(f"load_stock_names TWSE API failed: {e}")
-    return names
+    # 移除 DB 中本身就是 ETF/非個股的條目
+    return {sid: name for sid, name in names.items() if not _is_etf_or_excluded(sid, name)}
 
 
 @st.cache_data(ttl=86400)
 def load_stock_list() -> list:
-    """回傳 [(顯示文字, stock_id), ...] 供 selectbox 搜尋用。"""
+    """回傳 [(顯示文字, stock_id), ...] 供 selectbox 搜尋用（已排除 ETF/非個股）。"""
     names = load_stock_names()
     return sorted(
         [(f"{name}（{sid}）", sid) for sid, name in names.items()], key=lambda x: x[1]
@@ -245,7 +268,7 @@ def load_db_recommendations(target_date: date) -> list:
             pm = pm_map.get(r.stock_id)
             result.append(
                 {
-                    "name": stock_name_map.get(r.stock_id, ""),
+                    "name": getattr(r, "stock_name", None) or stock_name_map.get(r.stock_id, ""),
                     "sid": r.stock_id,
                     "price": db_price_map.get(r.stock_id),
                     "level": r.rec_level or "B",

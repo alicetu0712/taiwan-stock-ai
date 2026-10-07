@@ -237,13 +237,13 @@ html, body, [class*="css"] {
 
 
 def main() -> None:
-    from dashboard.pages.backtest import page_backtest
-    from dashboard.pages.data_health import page_data_health
-    from dashboard.pages.guide import page_guide, page_settings
-    from dashboard.pages.my_trades import page_my_trades
-    from dashboard.pages.overview import page_today
-    from dashboard.pages.position import page_positions
-    from dashboard.pages.reports import page_history, page_search
+    from dashboard._pages.backtest import page_backtest
+    from dashboard._pages.data_health import page_data_health
+    from dashboard._pages.guide import page_guide, page_settings
+    from dashboard._pages.my_trades import page_my_trades
+    from dashboard._pages.overview import page_today
+    from dashboard._pages.position import page_positions
+    from dashboard._pages.reports import page_history, page_search
 
     if "selected_date" not in st.session_state:
         st.session_state["selected_date"] = date.today()

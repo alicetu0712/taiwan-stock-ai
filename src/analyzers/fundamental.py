@@ -1,8 +1,16 @@
 """
-fundamental.py — 基本面分析引擎（PRD Chapter 5）
+fundamental.py — 基本面篩除引擎（短線波段版）
 
-計算 Company Quality Score（0-100）並給出等級（A+/A/B/C/D）。
-遵循原則：趨勢優先、穩定優先、同產業比較。
+目標：排除基本面明顯惡化的股票；不以估值選股。
+核心邏輯：「股價轉強 → 確認基本面沒有反向惡化 → 推薦」
+
+評分構成（100分）：
+  EPS YoY 成長    40  最新年度 EPS vs 前一年
+  月營收趨勢      25  近期月營收方向（YoY/MoM）
+  毛利率趨勢      20  毛利率是否穩定/上升
+  營益率趨勢      15  營業利益率方向
+
+移除（不適合短線）：ROE、ROA、負債比、估值(P/E)、P/B
 """
 
 import logging
@@ -10,450 +18,252 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-from config import QUALITY_CONFIG
-
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class FundamentalResult:
-    """基本面分析結果"""
-
     stock_id: str
-    quality_score: float = 0.0  # 0-100
-    quality_grade: str = "D"  # A+/A/B/C/D
-    roe_score: float = 0.0
-    roa_score: float = 0.0
+    quality_score: float = 0.0   # 0-100
+    quality_grade: str = "D"     # A+/A/B/C/D
     eps_score: float = 0.0
-    margin_score: float = 0.0
-    finance_score: float = 0.0
-    valuation_score: float = 0.0
     revenue_score: float = 0.0
+    margin_score: float = 0.0
+    op_margin_score: float = 0.0
     factors_plus: List[str] = field(default_factory=list)
     factors_minus: List[str] = field(default_factory=list)
     summary: str = ""
     has_sufficient_data: bool = False
+    # 保留相容性（decision.py 讀取）
+    roe_score: float = 0.0
+    roa_score: float = 0.0
+    finance_score: float = 0.0
+    valuation_score: float = 0.0
+    revenue_score: float = 0.0
 
 
 class FundamentalAnalyzer:
     """
-    基本面分析引擎。
-    輸入：財務摘要 dict（來自 financial_collector）
-    輸出：FundamentalResult
+    短線基本面排除引擎。
+    重點：近期 EPS/營收/毛利率/營益率是否惡化。
+    非重點：P/E 是否便宜、ROE 是否高（長線邏輯）。
     """
 
-    # 各子評分最大分數
     WEIGHTS = {
-        "roe": 20,  # ROE 分析
-        "roa": 15,  # ROA 分析
-        "eps": 35,  # EPS 趨勢（含連續成長獎勵，最高 35）
-        "margin": 15,  # 毛利率
-        "finance": 15,  # 財務健康
-        "valuation": 10,  # 估值
-        "revenue": 5,  # 營收趨勢
+        "eps":      40,   # EPS YoY 成長
+        "revenue":  25,   # 月營收趨勢
+        "margin":   20,   # 毛利率趨勢
+        "op_margin": 15,  # 營益率趨勢
     }
 
     def analyze(self, stock_id: str, fin_summary: dict) -> FundamentalResult:
-        """
-        主要入口：依財務摘要計算基本面評分。
-        """
         result = FundamentalResult(stock_id=stock_id)
 
         if not fin_summary.get("has_data", False):
-            result.summary = "財務資料不足，無法進行基本面評分。"
+            result.summary = "財務資料不足，基本面無法評估（以中性分處理）。"
+            result.quality_score = 50.0   # 資料缺失給中性分，不阻擋技術面好的股票
+            result.quality_grade = "B"
             return result
 
         result.has_sufficient_data = True
-        factors_plus = []
-        factors_minus = []
+        plus, minus = [], []
 
-        # ── ROE 分析（最高 20 分）────────────────────────────
-        roe_list = fin_summary.get("roe_5y", [])
-        roe_avg = fin_summary.get("roe_avg")
-        roe_score, roe_plus, roe_minus = self._score_roe(roe_avg, roe_list)
-        result.roe_score = roe_score
-        factors_plus.extend(roe_plus)
-        factors_minus.extend(roe_minus)
-
-        # ── ROA 分析（最高 15 分）────────────────────────────
-        roa_avg = fin_summary.get("roa_avg")
-        roa_score, roa_plus, roa_minus = self._score_roa(roa_avg)
-        result.roa_score = roa_score
-        factors_plus.extend(roa_plus)
-        factors_minus.extend(roa_minus)
-
-        # ── EPS 趨勢分析（最高 20 分）───────────────────────
-        eps_ttm = fin_summary.get("eps_ttm")
-        eps_trend = fin_summary.get("eps_trend", "unknown")
-        eps_5y = fin_summary.get("eps_5y", [])
-        eps_score, eps_plus, eps_minus = self._score_eps(eps_ttm, eps_trend, eps_5y)
+        # ── EPS YoY（40分）──────────────────────────────────
+        eps_score, ep, em = self._score_eps_yoy(fin_summary)
         result.eps_score = eps_score
-        factors_plus.extend(eps_plus)
-        factors_minus.extend(eps_minus)
+        plus.extend(ep); minus.extend(em)
 
-        # ── 毛利率分析（最高 15 分）─────────────────────────
-        gm_avg = fin_summary.get("gross_margin_avg")
-        margin_score, gm_plus, gm_minus = self._score_gross_margin(gm_avg)
-        result.margin_score = margin_score
-        factors_plus.extend(gm_plus)
-        factors_minus.extend(gm_minus)
-
-        # ── 財務健康分析（最高 15 分）───────────────────────
-        debt_ratio = fin_summary.get("debt_ratio")
-        free_cf = fin_summary.get("free_cash_flow")
-        current_r = fin_summary.get("current_ratio")
-        fin_score, fin_plus, fin_minus = self._score_financial_health(
-            debt_ratio, free_cf, current_r
-        )
-        result.finance_score = fin_score
-        factors_plus.extend(fin_plus)
-        factors_minus.extend(fin_minus)
-
-        # ── 估值分析（最高 10 分）───────────────────────────
-        per = fin_summary.get("per")
-        pbr = fin_summary.get("pbr")
-        val_score, val_plus, val_minus = self._score_valuation(per, pbr)
-        result.valuation_score = val_score
-        factors_plus.extend(val_plus)
-        factors_minus.extend(val_minus)
-
-        # ── 營收趨勢（最高 5 分）────────────────────────────
-        rev_trend = fin_summary.get("revenue_trend", "unknown")
-        rev_score, rev_plus, rev_minus = self._score_revenue(rev_trend)
+        # ── 月營收趨勢（25分）────────────────────────────────
+        rev_score, rp, rm = self._score_revenue(fin_summary)
         result.revenue_score = rev_score
-        factors_plus.extend(rev_plus)
-        factors_minus.extend(rev_minus)
+        plus.extend(rp); minus.extend(rm)
 
-        # ── 計算綜合分數 ──────────────────────────────────
-        total = (
-            roe_score
-            + roa_score
-            + eps_score
-            + margin_score
-            + fin_score
-            + val_score
-            + rev_score
-        )
+        # ── 毛利率趨勢（20分）────────────────────────────────
+        margin_score, mp, mm = self._score_gross_margin(fin_summary)
+        result.margin_score = margin_score
+        plus.extend(mp); minus.extend(mm)
+
+        # ── 營益率趨勢（15分）────────────────────────────────
+        op_score, op, om = self._score_op_margin(fin_summary)
+        result.op_margin_score = op_score
+        plus.extend(op); minus.extend(om)
+
+        total = eps_score + rev_score + margin_score + op_score
         max_total = sum(self.WEIGHTS.values())
         normalized = round(total / max_total * 100, 1)
         normalized = max(0.0, min(100.0, normalized))
 
         result.quality_score = normalized
         result.quality_grade = self._to_grade(normalized)
-        result.factors_plus = factors_plus
-        result.factors_minus = factors_minus
+        result.factors_plus = plus
+        result.factors_minus = minus
         result.summary = self._build_summary(result)
 
-        logger.debug(
-            f"{stock_id}: Quality Score={normalized:.1f} ({result.quality_grade})"
-        )
+        logger.debug(f"{stock_id}: Fundamental Score={normalized:.1f} ({result.quality_grade})")
         return result
 
-    # ── 子評分方法 ────────────────────────────────────────────
+    # ── 子評分 ────────────────────────────────────────────────
 
-    def _score_roe(
-        self, roe_avg: Optional[float], roe_list: List[float]
-    ) -> Tuple[float, List[str], List[str]]:
-        """ROE 評分（最高 20 分）"""
-        score = 0.0
-        plus, minus = [], []
-        cfg = QUALITY_CONFIG["roe"]
-
-        if roe_avg is None:
-            return score, plus, minus
-
-        # 絕對值評分
-        if roe_avg >= cfg["excellent"]:  # ≥20%
-            score += 20
-            plus.append(f"ROE 長期維持 {roe_avg:.1f}%（非常優秀，≥20%）")
-        elif roe_avg >= cfg["great"]:  # ≥15%
-            score += 15
-            plus.append(f"ROE {roe_avg:.1f}%（優秀，≥15%）")
-        elif roe_avg >= cfg["good"]:  # ≥10%
-            score += 10
-            plus.append(f"ROE {roe_avg:.1f}%（良好）")
-        elif roe_avg >= cfg["pass"]:  # ≥8%
-            score += 5
-        else:
-            minus.append(f"ROE {roe_avg:.1f}% 偏低（<8%）")
-
-        # 趨勢加分
-        if len(roe_list) >= 4:
-            trend = _trend_direction(roe_list)
-            if trend == "up":
-                score += 2
-                plus.append("ROE 呈現上升趨勢")
-            elif trend == "down":
-                score -= 3
-                minus.append("ROE 呈現下降趨勢")
-
-        return max(0.0, min(score, 20)), plus, minus
-
-    def _score_roa(
-        self, roa_avg: Optional[float]
-    ) -> Tuple[float, List[str], List[str]]:
-        """ROA 評分（最高 15 分）"""
-        score = 0.0
-        plus, minus = [], []
-        cfg = QUALITY_CONFIG["roa"]
-
-        if roa_avg is None:
-            return score, plus, minus
-
-        if roa_avg >= cfg["excellent"]:  # ≥12%
-            score += 15
-            plus.append(f"ROA {roa_avg:.1f}%（非常優秀，≥12%）")
-        elif roa_avg >= cfg["great"]:  # ≥8%
-            score += 11
-            plus.append(f"ROA {roa_avg:.1f}%（優秀，≥8%）")
-        elif roa_avg >= cfg["good"]:  # ≥5%
-            score += 7
-        elif roa_avg >= cfg["pass"]:  # ≥3%
-            score += 4
-        else:
-            minus.append(f"ROA {roa_avg:.1f}% 偏低，資產利用效率不佳")
-
-        return max(0.0, min(score, 15)), plus, minus
-
-    def _score_eps(
-        self,
-        eps_ttm: Optional[float],
-        eps_trend: str,
-        eps_5y: List[float],
-    ) -> Tuple[float, List[str], List[str]]:
-        """EPS 評分（最高 20 分）"""
-        score = 0.0
+    def _score_eps_yoy(self, fin: dict) -> Tuple[float, List[str], List[str]]:
+        """EPS YoY 成長（40分）"""
         plus, minus = [], []
 
-        if eps_ttm is None:
+        # 優先用 eps_yoy（年度 YoY）
+        eps_yoy = fin.get("eps_yoy")
+        eps_5y = fin.get("eps_5y", [])
+        eps_ttm = fin.get("eps_ttm")
+
+        # 虧損直接給低分
+        if eps_ttm is not None and eps_ttm <= 0:
+            minus.append(f"近期 EPS {eps_ttm:.2f}（虧損），基本面偏弱")
+            return 5.0, plus, minus
+
+        if eps_yoy is not None:
+            if eps_yoy >= 30:
+                score = 40.0
+                plus.append(f"EPS YoY +{eps_yoy:.0f}%，獲利明顯加速")
+            elif eps_yoy >= 15:
+                score = 32.0
+                plus.append(f"EPS YoY +{eps_yoy:.0f}%，獲利穩健成長")
+            elif eps_yoy >= 5:
+                score = 24.0
+                plus.append(f"EPS YoY +{eps_yoy:.0f}%，獲利小幅成長")
+            elif eps_yoy >= -5:
+                score = 18.0   # 持平，不扣也不加
+            elif eps_yoy >= -20:
+                score = 10.0
+                minus.append(f"EPS YoY {eps_yoy:.0f}%，獲利衰退中，需留意")
+            else:
+                score = 4.0
+                minus.append(f"EPS YoY {eps_yoy:.0f}%，獲利大幅衰退")
             return score, plus, minus
 
-        # TTM EPS > 0（基本要求）
-        if eps_ttm <= 0:
-            minus.append(f"TTM EPS {eps_ttm:.2f}（虧損）")
-            return 0.0, plus, minus
-
-        score += 5  # 基本分：EPS > 0
-
-        # EPS 趨勢
+        # 備案：從 eps_5y 推估趨勢
+        eps_trend = fin.get("eps_trend", "unknown")
         if eps_trend == "up":
-            score += 10
-            plus.append("EPS 近五年整體呈上升趨勢")
+            plus.append("EPS 近年呈上升趨勢")
+            return 28.0, plus, minus
         elif eps_trend == "stable":
-            score += 6
+            return 20.0, plus, minus
         elif eps_trend == "down":
-            score -= 2
-            minus.append("EPS 近期呈下降趨勢")
+            minus.append("EPS 近年呈下降趨勢")
+            return 8.0, plus, minus
 
-        # 連續正成長（績優股核心特徵）
-        valid_eps = [v for v in eps_5y if v is not None and v > 0]
-        if len(valid_eps) >= 5:
-            last_5 = valid_eps[-5:]
-            if all(last_5[i] > last_5[i - 1] for i in range(1, 5)):
-                score += 15
-                plus.append("連續 5 年 EPS 正成長（績優核心特徵）")
-            elif all(last_5[-3:][i] > last_5[-3:][i - 1] for i in range(1, 3)):
-                score += 8
-                plus.append("連續 3 年 EPS 正成長")
-        elif len(valid_eps) >= 3:
-            last_3 = valid_eps[-3:]
-            if all(last_3[i] > last_3[i - 1] for i in range(1, 3)):
-                score += 8
-                plus.append("連續 3 年 EPS 正成長")
+        return 20.0, plus, minus   # 未知給中性
 
-        # 近四季波動（穩定性加分）
-        if len(eps_5y) >= 8:
-            recent_8 = [v for v in eps_5y[-8:] if v is not None and v > 0]
-            if len(recent_8) >= 4:
-                cv = _coeff_variation(recent_8)
-                if cv < 0.2:
-                    score += 5
-                    plus.append("EPS 波動小，獲利穩定")
-                elif cv > 0.5:
-                    minus.append("EPS 波動較大")
-
-        return max(0.0, min(score, 35)), plus, minus
-
-    def _score_gross_margin(
-        self, gm_avg: Optional[float]
-    ) -> Tuple[float, List[str], List[str]]:
-        """毛利率評分（最高 15 分）"""
-        score = 0.0
+    def _score_revenue(self, fin: dict) -> Tuple[float, List[str], List[str]]:
+        """月營收趨勢（25分）"""
         plus, minus = [], []
-        cfg = QUALITY_CONFIG["gross_margin"]
+        rev_trend = fin.get("revenue_trend", "unknown")
+        rev_yoy = fin.get("revenue_yoy_avg")
 
-        if gm_avg is None:
-            return score, plus, minus
+        score = 12.0  # 未知給中性
 
-        if gm_avg >= cfg["excellent"]:  # ≥40%
-            score += 15
-            plus.append(f"毛利率 {gm_avg:.1f}%（產品競爭力強，≥40%）")
-        elif gm_avg >= cfg["great"]:  # ≥30%
-            score += 11
-            plus.append(f"毛利率 {gm_avg:.1f}%（良好，≥30%）")
-        elif gm_avg >= cfg["good"]:  # ≥20%
-            score += 7
-        elif gm_avg >= cfg["pass"]:  # ≥10%
-            score += 4
-        else:
-            minus.append(f"毛利率 {gm_avg:.1f}% 偏低，競爭壓力可能較大")
-
-        return max(0.0, min(score, 15)), plus, minus
-
-    def _score_financial_health(
-        self,
-        debt_ratio: Optional[float],
-        free_cf: Optional[float],
-        current_ratio: Optional[float],
-    ) -> Tuple[float, List[str], List[str]]:
-        """財務健康評分（最高 15 分）"""
-        score = 0.0
-        plus, minus = [], []
-        cfg = QUALITY_CONFIG["debt_ratio"]
-
-        if debt_ratio is not None:
-            if debt_ratio <= cfg["safe"]:
-                score += 6
-                plus.append(f"負債比率 {debt_ratio:.1f}%（低，財務穩健）")
-            elif debt_ratio <= cfg["moderate"]:
-                score += 4
-            elif debt_ratio <= cfg["risky"]:
-                score += 2
+        if rev_yoy is not None:
+            if rev_yoy >= 20:
+                score = 25.0
+                plus.append(f"月營收 YoY +{rev_yoy:.0f}%，營收強勁成長")
+            elif rev_yoy >= 5:
+                score = 20.0
+                plus.append(f"月營收 YoY +{rev_yoy:.0f}%，營收成長")
+            elif rev_yoy >= -5:
+                score = 14.0
+            elif rev_yoy >= -15:
+                score = 7.0
+                minus.append(f"月營收 YoY {rev_yoy:.0f}%，營收衰退")
             else:
-                minus.append(f"負債比率 {debt_ratio:.1f}% 偏高（>60%）")
-
-        if free_cf is not None:
-            if free_cf > 0:
-                score += 5
-                plus.append("自由現金流為正，財務體質健康")
-            else:
-                score -= 2
-                minus.append("自由現金流為負，需關注資金狀況")
-
-        if current_ratio is not None:
-            if current_ratio >= 2.0:
-                score += 4
-                plus.append(f"流動比率 {current_ratio:.1f}（短期償債能力強）")
-            elif current_ratio >= 1.5:
-                score += 2
-            elif current_ratio < 1.0:
-                minus.append(f"流動比率 {current_ratio:.1f} 偏低，短期流動性存在風險")
-
-        return max(0.0, min(score, 15)), plus, minus
-
-    def _score_valuation(
-        self,
-        per: Optional[float],
-        pbr: Optional[float],
-    ) -> Tuple[float, List[str], List[str]]:
-        """估值評分（最高 10 分）"""
-        score = 5.0  # 預設中立
-        plus, minus = [], []
-
-        if per is not None and per > 0:
-            if per <= 15:
-                score += 3
-                plus.append(f"本益比 {per:.1f} 倍（估值合理偏低）")
-            elif per <= 25:
-                pass  # 普通，不加分也不扣分
-            elif per <= 40:
-                score -= 2
-                minus.append(f"本益比 {per:.1f} 倍（估值偏高，需留意）")
-            else:
-                score -= 4
-                minus.append(f"本益比 {per:.1f} 倍（估值過高）")
-
-        if pbr is not None and pbr > 0:
-            if pbr <= 2.0:
-                score += 2
-                plus.append(f"股價淨值比 {pbr:.1f}（合理）")
-            elif pbr > 5.0:
-                score -= 1
-                minus.append(f"股價淨值比 {pbr:.1f}（偏高）")
-
-        return max(0.0, min(score, 10)), plus, minus
-
-    def _score_revenue(self, rev_trend: str) -> Tuple[float, List[str], List[str]]:
-        """營收趨勢評分（最高 5 分）"""
-        score = 0.0
-        plus, minus = [], []
-
-        if rev_trend == "up":
-            score = 5
-            plus.append("近期月營收呈成長趨勢")
-        elif rev_trend == "stable":
-            score = 3
+                score = 2.0
+                minus.append(f"月營收 YoY {rev_yoy:.0f}%，營收明顯衰退")
+        elif rev_trend == "up":
+            score = 20.0
+            plus.append("月營收近期呈成長趨勢")
         elif rev_trend == "down":
-            score = 0
-            minus.append("近期月營收呈衰退趨勢")
+            score = 5.0
+            minus.append("月營收近期呈衰退趨勢")
+        elif rev_trend == "stable":
+            score = 14.0
 
         return score, plus, minus
 
+    def _score_gross_margin(self, fin: dict) -> Tuple[float, List[str], List[str]]:
+        """毛利率趨勢（20分）"""
+        plus, minus = [], []
+        gm_avg = fin.get("gross_margin_avg")
+        gm_trend = fin.get("gross_margin_trend", "unknown")
+
+        score = 10.0  # 中性基礎分
+
+        if gm_avg is not None:
+            if gm_avg >= 40:
+                score = 18.0
+                plus.append(f"毛利率 {gm_avg:.0f}%，競爭壁壘強")
+            elif gm_avg >= 25:
+                score = 14.0
+                plus.append(f"毛利率 {gm_avg:.0f}%，產品力良好")
+            elif gm_avg >= 10:
+                score = 10.0
+            else:
+                score = 5.0
+                minus.append(f"毛利率 {gm_avg:.0f}%，競爭壓力較大")
+
+        # 趨勢修正（±2-4分）
+        if gm_trend == "up":
+            score = min(score + 4, 20)
+            plus.append("毛利率呈改善趨勢")
+        elif gm_trend == "down":
+            score = max(score - 4, 0)
+            minus.append("毛利率呈下滑趨勢，需關注競爭壓力")
+
+        return max(0.0, min(score, 20)), plus, minus
+
+    def _score_op_margin(self, fin: dict) -> Tuple[float, List[str], List[str]]:
+        """營益率趨勢（15分）"""
+        plus, minus = [], []
+        op_avg = fin.get("op_margin_avg")
+        op_trend = fin.get("op_margin_trend", "unknown")
+
+        score = 7.0   # 中性基礎分
+
+        if op_avg is not None:
+            if op_avg >= 15:
+                score = 13.0
+                plus.append(f"營益率 {op_avg:.0f}%，獲利能力強")
+            elif op_avg >= 8:
+                score = 10.0
+            elif op_avg >= 3:
+                score = 7.0
+            else:
+                score = 3.0
+                minus.append(f"營益率 {op_avg:.0f}%，本業獲利能力偏弱")
+
+        if op_trend == "up":
+            score = min(score + 3, 15)
+            plus.append("營益率呈改善趨勢")
+        elif op_trend == "down":
+            score = max(score - 3, 0)
+            minus.append("營益率呈下滑趨勢")
+
+        return max(0.0, min(score, 15)), plus, minus
+
     def _to_grade(self, score: float) -> str:
-        if score >= 85:
+        if score >= 80:
             return "A+"
-        elif score >= 75:
-            return "A"
         elif score >= 65:
+            return "A"
+        elif score >= 45:
             return "B"
-        elif score >= 50:
+        elif score >= 30:
             return "C"
         return "D"
 
     def _build_summary(self, r: "FundamentalResult") -> str:
-        """生成基本面分析摘要文字。"""
         grade_desc = {
-            "A+": "企業體質非常優秀",
-            "A": "企業體質良好",
-            "B": "企業體質尚可",
-            "C": "企業體質普通",
-            "D": "企業體質較弱",
+            "A+": "近期獲利/營收均在成長，基本面正向",
+            "A":  "基本面穩健，無明顯惡化",
+            "B":  "基本面中性，需持續觀察",
+            "C":  "基本面有部分衰退訊號",
+            "D":  "基本面明顯惡化，需謹慎",
         }
         desc = grade_desc.get(r.quality_grade, "")
-        plus_str = "；".join(r.factors_plus[:3]) if r.factors_plus else "無明顯加分因素"
-        return f"{desc}（{r.quality_score:.1f}分）。主要優勢：{plus_str}。"
-
-
-# ── 工具函式 ──────────────────────────────────────────────────
-
-
-def _trend_direction(values: List[float]) -> str:
-    """簡單趨勢方向判斷。"""
-    if not values or len(values) < 3:
-        return "unknown"
-    import numpy as np
-
-    try:
-        clean = [v for v in values if v is not None and not math.isnan(v)]
-        if len(clean) < 3:
-            return "unknown"
-        x = list(range(len(clean)))
-        slope = np.polyfit(x, clean, 1)[0]
-        mean_v = abs(sum(clean) / len(clean))
-        if mean_v < 1e-6:
-            return "stable"
-        rel_slope = slope / mean_v
-        if rel_slope > 0.05:
-            return "up"
-        elif rel_slope < -0.05:
-            return "down"
-        return "stable"
-    except Exception as e:
-        logger.debug(f"revenue trend calc failed: {e}")
-        return "unknown"
-
-
-def _coeff_variation(values: List[float]) -> float:
-    """變異係數（CV）= std / mean，衡量穩定性。"""
-    try:
-        arr = [v for v in values if v is not None and not math.isnan(v)]
-        if not arr:
-            return 0.0
-        mean = sum(arr) / len(arr)
-        if abs(mean) < 1e-6:
-            return 0.0
-        std = (sum((v - mean) ** 2 for v in arr) / len(arr)) ** 0.5
-        return std / abs(mean)
-    except Exception as e:
-        logger.debug(f"_coeff_variation failed: {e}")
-        return 0.0
+        minus_str = "；".join(r.factors_minus[:2]) if r.factors_minus else "無"
+        return f"{desc}（{r.quality_score:.0f}分）。注意：{minus_str}。"

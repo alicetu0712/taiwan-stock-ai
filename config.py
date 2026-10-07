@@ -90,13 +90,13 @@ TA_CONFIG = {
 }
 
 # ── AI 評分模型 ───────────────────────────────────────────────
-# 各模組權重（合計 = 1.0）
+# 短線波段策略（20-60 trading days）：股價行為決定進場，基本面負責排除惡化
 SCORE_WEIGHTS = {
-    "quality": 0.40,  # Company Quality（基本面）
-    "timing": 0.25,  # Technical Timing（技術面）
-    "behavior": 0.20,  # Market Behavior（籌碼）
-    "intelligence": 0.10,  # Market Intelligence（情報）
-    "risk": 0.05,  # Risk Penalty（風險扣分）
+    "quality": 0.15,     # Fundamental（排除基本面惡化，非選股主軸）
+    "timing": 0.50,      # Price / Technical（進場時機核心）
+    "behavior": 0.20,    # Momentum / Behavior（法人籌碼確認）
+    "intelligence": 0.10,  # Institutional / Flow（市場情報）
+    "risk": 0.05,        # Risk Penalty（風險扣分）
 }
 
 # ── 硬性篩選條件（Hard Filter）────────────────────────────────

@@ -241,6 +241,9 @@ def page_today(selected_date: date) -> None:
     recs = load_db_recommendations(selected_date)
 
     for r in recs:
+        if not r.get("name"):
+            r["name"] = stock_names.get(r["sid"], "")
+    for r in recs:
         if r["price"] is None:
             r["price"] = stock_prices.get(r["sid"])
     for r in recs:
@@ -327,6 +330,8 @@ def page_today(selected_date: date) -> None:
             "⚡ 分數動能突出但尚未進入正式 Core Picks。追蹤 4–8 週績效後再決定是否納入正式推薦。"
         )
         for opp in opp_recs:
+            if not opp.get("name"):
+                opp["name"] = stock_names.get(opp["sid"], "")
             if opp["price"] is None:
                 opp["price"] = stock_prices.get(opp["sid"])
             sc5  = opp.get("score_change_5d")

@@ -221,6 +221,15 @@ def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> 
     # rows 已按 year desc 排序；reversed() 得到 oldest→newest 順序
     eps_asc = [r.eps for r in reversed(rows)]
     roe_asc = [r.roe for r in reversed(rows)]
+    gm_asc = [r.gross_margin for r in reversed(rows)]
+    op_asc = [r.op_margin for r in reversed(rows) if hasattr(r, "op_margin")]
+
+    # EPS YoY：最新年度 vs 前一年度（避免除零）
+    eps_yoy = None
+    if len(eps_asc) >= 2 and eps_asc[-2] and eps_asc[-1] is not None:
+        prev = eps_asc[-2]
+        if abs(prev) > 0.01:
+            eps_yoy = round((eps_asc[-1] - prev) / abs(prev) * 100, 1)
 
     return {
         "stock_id": stock_id,
@@ -228,10 +237,14 @@ def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> 
         "eps_ttm": rows[0].eps,
         "eps_5y": eps_asc[-5:],
         "eps_trend": _trend(eps_asc),
+        "eps_yoy": eps_yoy,                               # 新增：最新年度 EPS YoY%
         "roe_avg": _avg([r.roe for r in rows[:5]]),
         "roe_5y": roe_asc[-5:],
         "roa_avg": _avg([r.roa for r in rows[:5]]),
         "gross_margin_avg": _avg([r.gross_margin for r in rows[:5]]),
+        "gross_margin_trend": _trend(gm_asc),             # 新增：毛利率趨勢
+        "op_margin_avg": _avg(op_asc[-5:]) if op_asc else None,  # 新增：營益率平均
+        "op_margin_trend": _trend(op_asc) if op_asc else "unknown",  # 新增：營益率趨勢
         "debt_ratio": rows[0].debt_ratio,
         "free_cash_flow": rows[0].free_cash_flow,
         "current_ratio": rows[0].current_ratio,

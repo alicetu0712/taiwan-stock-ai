@@ -37,41 +37,51 @@ class StockRecommendation:
     name: str = ""
     date: Optional[date] = None
     # 各模組分數
-    quality_score: float = 0.0  # 基本面（0-100）
-    timing_score: float = 0.0  # 技術面（0-100）
-    behavior_score: float = 0.0  # 市場行為（0-100）
-    intelligence_score: float = 0.0  # 市場情報（0-100）
-    risk_score: float = 100.0  # 風險（0-100，越高越安全）
-    total_score: float = 0.0  # 綜合評分（0-100）
+    quality_score: float = 0.0      # Fundamental（0-100）
+    timing_score: float = 0.0       # Price/Technical（0-100）
+    behavior_score: float = 0.0     # Momentum/Behavior（0-100）
+    intelligence_score: float = 0.0  # Institutional/Flow（0-100）
+    risk_score: float = 100.0        # Risk（0-100，越高越安全）
+    total_score: float = 0.0
     # 推薦等級與信心
-    rec_level: str = "D"  # A+/A/B/C/D
+    rec_level: str = "D"
     stars: str = "★☆☆☆☆"
-    confidence: float = 0.0  # 信心分數（0-100%）
+    confidence: float = 0.0
     # Explainable AI
-    summary: str = ""  # 一句話推薦摘要
+    summary: str = ""
     advantages: List[str] = field(default_factory=list)
     risks: List[str] = field(default_factory=list)
     watch_points: List[str] = field(default_factory=list)
-    ai_conclusion: str = ""  # AI CIO 結論
+    ai_conclusion: str = ""
     # 附加資訊
     quality_grade: str = "D"
     close: Optional[float] = None
     volume: Optional[float] = None
     market: str = ""
     industry: str = ""
-    skip_reason: str = ""  # 若無推薦，說明原因
-    # 橫斷面排名與分級（當日相對表現）
-    percentile: float = 0.0  # 當日 percentile（0-100，越高代表當日相對越強）
-    tier: str = "none"  # "recommend"（正式推薦）/ "watch"（觀察）/ "none"（不推薦）
+    skip_reason: str = ""
+    # 橫斷面排名
+    percentile: float = 0.0
+    tier: str = "none"
     # 分數動能（由 main.py _enrich_score_changes 填入）
     score_change_5d: Optional[float] = None
     score_change_10d: Optional[float] = None
-    timing_change_5d: Optional[float] = None    # timing_score 今日 − 5D 前
-    behavior_change_5d: Optional[float] = None  # behavior_score 今日 − 5D 前
-    # 推薦冷卻（由 main.py _check_cooldown 填入）
-    days_since_rec: Optional[int] = None   # None = 從未推薦過
+    timing_change_5d: Optional[float] = None
+    behavior_change_5d: Optional[float] = None
+    # 推薦冷卻
+    days_since_rec: Optional[int] = None
     on_cooldown: bool = False
-    cooldown_override: bool = False        # breakout exception 觸發
+    cooldown_override: bool = False
+    # ── 短線交易關鍵欄位（新增）─────────────────────────────
+    setup_type: str = "none"          # breakout / pullback_hold / trending / none
+    atr: Optional[float] = None       # 14日 ATR（用於止損/目標計算）
+    entry_low: Optional[float] = None
+    entry_high: Optional[float] = None
+    stop_price: Optional[float] = None
+    target1: Optional[float] = None
+    target2: Optional[float] = None
+    expected_holding: str = ""        # 預估持有期間
+    vol_ratio: Optional[float] = None
 
 
 class DecisionEngine:
@@ -128,6 +138,20 @@ class DecisionEngine:
         rec.behavior_score = b_score
         rec.risk_score = r_score
         rec.quality_grade = quality_result.quality_grade if quality_result else "D"
+
+        # ── 傳入技術面細節（短線用）──────────────────────────
+        if technical_result:
+            rec.setup_type = getattr(technical_result, "setup_type", "none")
+            rec.atr = getattr(technical_result, "atr", None)
+            rec.vol_ratio = getattr(technical_result, "vol_ratio", None)
+            if close and rec.atr:
+                atr = rec.atr
+                rec.entry_low  = round(close - 0.3 * atr, 2)
+                rec.entry_high = round(close + 0.3 * atr, 2)
+                rec.stop_price = round(close - 2.0 * atr, 2)
+                rec.target1    = round(close + 2.5 * atr, 2)
+                rec.target2    = round(close + 5.0 * atr, 2)
+            rec.expected_holding = self._estimate_holding(rec.setup_type)
 
         # ── 計算綜合評分（Dynamic Weighting：quality/behavior 缺失時重分配權重）──
         w = dict(self.weights)
@@ -445,75 +469,110 @@ class DecisionEngine:
         risk_result,
     ) -> float:
         """
-        計算分析信心分數（0-100%）。
-        主要受：資料完整性、各模組一致性、風險高低 影響。
+        短線信心分數：以技術面為主軸，基本面負責排除惡化。
+        - 技術面是主要驅動，技術差直接大幅扣分
+        - 基本面惡化（D級）才扣分；中性/良好不扣
+        - 籌碼缺失扣分但影響較小
         """
         confidence = 100.0
 
-        # 資料完整性扣分
-        if quality_result is None or not quality_result.has_sufficient_data:
-            confidence -= 20  # 缺少基本面資料
+        # 技術面是主軸：技術差 → 大幅扣分
         if technical_result is None or technical_result.timing_score == 0:
-            confidence -= 15
-        if behavior_result is None:
+            confidence -= 30
+        elif technical_result.timing_score < 50:
+            confidence -= 20
+        elif technical_result.timing_score < 60:
             confidence -= 10
 
-        # 各模組一致性：若方向不一致，降低信心
-        if quality_result and technical_result:
-            q_good = quality_result.quality_score >= 70
-            t_good = technical_result.timing_score >= 60
-            if q_good and not t_good:
-                confidence -= 10  # 基本面好但技術面不佳
-            elif not q_good and t_good:
-                confidence -= 15  # 只有技術面好，不符合「先基本面」原則
+        # 基本面：只在明顯惡化時扣分（D = 惡化，C = 小扣）
+        if quality_result and quality_result.has_sufficient_data:
+            if quality_result.quality_grade == "D":
+                confidence -= 20   # 基本面明顯惡化
+            elif quality_result.quality_grade == "C":
+                confidence -= 8
+            # A/A+/B：不扣分（技術優先，基本面只負責排除惡化）
+        else:
+            confidence -= 8    # 無財務資料：小幅扣（不確定因素）
 
-        # 風險高時降低信心
+        # 籌碼缺失
+        if behavior_result is None:
+            confidence -= 5
+
+        # 風險
         if risk_result:
             if risk_result.risk_score < 50:
                 confidence -= 20
             elif risk_result.risk_score < 65:
                 confidence -= 10
 
+        # Setup 型態加分
+        if technical_result:
+            st = getattr(technical_result, "setup_type", "none")
+            if st in ("breakout", "pullback_hold"):
+                confidence += 5
+
         return round(max(0.0, min(100.0, confidence)), 1)
 
+    def _estimate_holding(self, setup_type: str) -> str:
+        return {
+            "breakout":     "15–30 交易日",
+            "pullback_hold": "20–40 交易日",
+            "trending":     "20–50 交易日",
+            "none":         "20–40 交易日",
+        }.get(setup_type, "20–40 交易日")
+
     def _build_summary(self, rec: StockRecommendation) -> str:
-        """一句話推薦摘要。"""
-        level_desc = {
-            "A+": "基本面與技術面均優秀，強烈建議深入研究",
-            "A": "公司體質良好，值得持續追蹤",
-            "B": "基本面不錯，等待更佳進場時機",
-            "C": "目前條件不夠理想，建議觀望",
-            "D": "不建議研究",
+        """一句話推薦摘要（短線版）。"""
+        setup_desc = {
+            "breakout":     "突破型，股價接近或站上20日新高",
+            "pullback_hold": "回踩守穩，回踩均線後支撐有效",
+            "trending":     "趨勢延伸，均線多頭排列中",
+            "none":         "等待更明確的進場訊號",
         }
-        return level_desc.get(rec.rec_level, "")
+        level_desc = {
+            "A+": "Short-term Bullish（強勢）",
+            "A":  "Short-term Bullish",
+            "B":  "Watch（接近條件）",
+            "C":  "觀望",
+            "D":  "不建議",
+        }
+        setup = setup_desc.get(rec.setup_type, "")
+        level = level_desc.get(rec.rec_level, "")
+        return f"{level}；{setup}" if setup and rec.rec_level in ("A+", "A", "B") else level
 
     def _build_conclusion(self, rec: StockRecommendation) -> str:
-        """AI CIO 最終結論（在 Claude 分析前的預填版本）。"""
+        """短線決策結論：技術面為主，基本面確認。"""
         parts = []
 
-        if rec.quality_score >= 75:
-            parts.append(
-                f"公司品質評分 {rec.quality_score:.0f} 分（{rec.quality_grade} 級），基本面優秀"
-            )
-        elif rec.quality_score >= 60:
-            parts.append(f"公司品質評分 {rec.quality_score:.0f} 分，基本面尚可")
+        # 技術面（主軸）
+        if rec.timing_score >= 75:
+            parts.append(f"技術面強勢（{rec.timing_score:.0f}分），{rec.summary}")
+        elif rec.timing_score >= 60:
+            parts.append(f"技術面偏多（{rec.timing_score:.0f}分），有進場條件")
         else:
-            parts.append(f"公司品質評分 {rec.quality_score:.0f} 分，基本面需持續觀察")
+            parts.append(f"技術面偏弱（{rec.timing_score:.0f}分），建議等待轉強")
 
-        if rec.timing_score >= 70:
-            parts.append("技術面偏多，現為較佳觀察時機")
-        elif rec.timing_score >= 50:
-            parts.append("技術面中性，等待更明確方向")
-        else:
-            parts.append("技術面偏弱，建議等待改善再考慮")
+        # 基本面（確認角色）
+        if rec.quality_grade in ("A+", "A"):
+            parts.append(f"基本面確認無惡化（{rec.quality_grade}）")
+        elif rec.quality_grade == "D":
+            parts.append(f"注意：基本面出現惡化訊號，需謹慎")
+
+        # 法人
+        if rec.behavior_score >= 70:
+            parts.append("籌碼面偏多，法人有買進跡象")
+
+        # 進出場參考
+        if rec.entry_low and rec.stop_price and rec.target1:
+            parts.append(
+                f"參考進場 {rec.entry_low}–{rec.entry_high}，"
+                f"止損 {rec.stop_price}，"
+                f"目標 {rec.target1}（T1）/ {rec.target2}（T2）"
+            )
+            parts.append(f"預估持有：{rec.expected_holding}")
 
         if rec.risks:
             parts.append(f"主要風險：{'；'.join(rec.risks[:2])}")
-
-        if rec.confidence < 70:
-            parts.append(
-                f"本次分析信心分數 {rec.confidence:.0f}%，建議持續觀察後再評估"
-            )
 
         return "。".join(parts) + "。"
 
@@ -523,16 +582,21 @@ class DecisionEngine:
         technical_result,
         trade_date,
     ) -> List[str]:
-        """建議觀察重點。"""
+        """短線觀察重點：技術面為主。"""
         points = []
 
         if technical_result:
+            st = getattr(technical_result, "setup_type", "none")
+            if st == "breakout":
+                points.append("確認突破後能否站穩，量能是否持續")
+            elif st == "pullback_hold":
+                points.append("確認 MA20 是否守穩，不破支撐")
+            elif st == "trending":
+                points.append("確認均線多頭排列持續，量不萎縮")
             if technical_result.resistance:
-                points.append(f"觀察是否突破前波高點 {technical_result.resistance:.2f}")
-        if quality_result and quality_result.has_sufficient_data:
-            points.append("下季財報 EPS 是否持續改善")
-            points.append("月營收 YoY 是否維持成長")
-
-        points.append("三大法人籌碼是否持續流入")
+                points.append(f"關注前波壓力 {technical_result.resistance:.2f} 是否有效突破")
+        if quality_result and quality_result.factors_minus:
+            points.append(f"基本面注意：{quality_result.factors_minus[0]}")
+        points.append("法人籌碼是否連續買超")
 
         return points[:4]
