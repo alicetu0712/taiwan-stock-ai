@@ -365,7 +365,7 @@ def page_today(selected_date: date) -> None:
 <div style="background:#1a1a2e;border:1px solid #e65100;border-radius:8px;padding:12px 16px;margin-bottom:8px">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
     <div>
-      <span style="font-weight:700;font-size:1rem">{name}</span>
+      <span style="font-weight:700;font-size:1rem;color:#f0f6fc">{name}</span>
       <span style="color:#aaa;font-size:0.75rem;margin-left:8px">{sid} · {price_str}</span>
     </div>
     <span style="background:#333;color:#ddd;border-radius:4px;padding:2px 7px;font-size:0.7rem">總分 {total:.0f}</span>
