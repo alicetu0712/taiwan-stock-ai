@@ -692,38 +692,51 @@ def load_latest_pt_analysis(stock_id: str) -> dict:
 
 @st.cache_data(ttl=600)
 def load_watchable_stocks(sel_date: date) -> list[dict]:
-    """回傳看盤用股票清單：今日推薦 + Watch List，含名稱。TTL=10 分鐘。"""
+    """回傳看盤用股票清單：今日推薦優先，fallback 到 analysis_results top-20。TTL=10 分鐘。"""
     try:
-        from sqlalchemy import select
+        from sqlalchemy import text
 
-        from src.database import Recommendation, Stock, get_session
+        from src.database import get_session
 
         s = get_session()
-        recs = (
-            s.execute(
-                select(Recommendation)
-                .where(Recommendation.date == sel_date)
-                .order_by(Recommendation.tier, Recommendation.date.desc())
-            )
-            .scalars()
-            .all()
-        )
-        stock_names = {
-            r.stock_id: r.name
-            for r in s.execute(select(Stock)).scalars().all()
-            if r.name
-        }
+
+        # 直接用原始 SQL 只取需要的欄位，避免 ORM 讀取不存在的新欄位
+        rows = s.execute(
+            text("""
+                SELECT r.stock_id, COALESCE(r.stock_name, st.name, r.stock_id) AS name,
+                       COALESCE(r.tier, 'recommend') AS tier
+                FROM recommendations r
+                LEFT JOIN stocks st ON st.stock_id = r.stock_id
+                WHERE r.date = :d
+                ORDER BY r.tier, r.id DESC
+            """),
+            {"d": sel_date},
+        ).fetchall()
+
+        if not rows:
+            # fallback：從 analysis_results 取今日 total_score 最高的 20 支
+            rows = s.execute(
+                text("""
+                    SELECT ar.stock_id,
+                           COALESCE(st.name, ar.stock_id) AS name,
+                           'analysis' AS tier
+                    FROM analysis_results ar
+                    LEFT JOIN stocks st ON st.stock_id = ar.stock_id
+                    WHERE ar.date = :d
+                    ORDER BY ar.total_score DESC
+                    LIMIT 20
+                """),
+                {"d": sel_date},
+            ).fetchall()
+
         s.close()
         seen = set()
         result = []
-        for r in recs:
-            if r.stock_id not in seen:
-                seen.add(r.stock_id)
-                result.append({
-                    "sid":  r.stock_id,
-                    "name": r.stock_name or stock_names.get(r.stock_id, ""),
-                    "tier": r.tier or "recommend",
-                })
+        for r in rows:
+            sid = r[0]
+            if sid not in seen:
+                seen.add(sid)
+                result.append({"sid": sid, "name": r[1] or "", "tier": r[2] or "recommend"})
         return result
     except Exception as e:
         logger.warning(f"load_watchable_stocks failed: {e}")
