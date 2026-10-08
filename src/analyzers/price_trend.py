@@ -55,7 +55,7 @@ class PriceTrendResult:
     ma_trend: str = "neutral"           # bullish / bullish_weak / neutral / bearish
     ma20_slope: str = "neutral"         # up / flat / down
     ma60_slope: str = "neutral"
-    setup_type: str = "none"            # breakout / pullback_buy / pullback_hold
+    setup_type: str = "none"            # breakout / pullback_buy / pullback_hold / ma60_support
                                         # trending / overextended / breakdown / none
     trade_signal: str = "wait"          # strong_buy / buy / wait / reduce / sell
 
@@ -111,7 +111,7 @@ class PriceTrendAnalyzer:
         vol_ratio = self._calc_vol_ratio(volume)
         result.volume_ratio = vol_ratio
         breakout_20d, near_20d = self._check_breakout(close, high)
-        setup = self._detect_setup(cur, ma_vals, ma_trend, ma20_slope, breakout_20d, near_20d, vol_ratio)
+        setup = self._detect_setup(cur, ma_vals, ma_trend, ma20_slope, ma60_slope, breakout_20d, near_20d, vol_ratio)
         result.setup_type = setup
         result.setup_score = self._score_setup(setup, vol_ratio)
 
@@ -168,6 +168,9 @@ class PriceTrendAnalyzer:
             if cur > ma20 or cur > ma60:          return 4.0,  "neutral"
             if cur < ma5 < ma10 < ma20 < ma60:   return 0.0,  "bearish"
             if cur < ma20 < ma60:                 return 1.0,  "bearish"
+            # MA60 support zone: price pulled back below MA20 but near MA60, MA20 still > MA60
+            if cur < ma20 and ma20 > ma60 and abs((cur - ma60) / ma60) <= 0.05:
+                return 4.0, "neutral"
             if cur < ma20:                        return 2.0,  "bearish"
             return 3.0, "neutral"
 
@@ -229,6 +232,12 @@ class PriceTrendAnalyzer:
 
         if ma20 and ma20 > 0:
             ma20_gap = round((cur - ma20) / ma20 * 100, 2)
+        if ma60 and ma60 > 0:
+            ma60_gap = round((cur - ma60) / ma60 * 100, 2)
+
+        if ma20_gap is not None:
+            _near_ma60 = (ma60_gap is not None and abs(ma60_gap) <= 3.0
+                          and ma20 is not None and ma60 is not None and ma20 > ma60)
             if   0   <= ma20_gap <  3:  score = 8.0   # 健康位置
             elif 3   <= ma20_gap <  5:  score = 7.0
             elif 5   <= ma20_gap <  8:  score = 5.0
@@ -236,11 +245,12 @@ class PriceTrendAnalyzer:
             elif 12  <= ma20_gap < 15:  score = 1.0
             elif ma20_gap >= 15:        score = 0.0   # 過熱，不追
             elif -5  <  ma20_gap < 0:   score = 6.0   # 回踩帶（接近MA20）
-            elif -10 <  ma20_gap <= -5: score = 3.0   # 跌到MA20下方
-            else:                       score = 1.0   # 深度跌破
-
-        if ma60 and ma60 > 0:
-            ma60_gap = round((cur - ma60) / ma60 * 100, 2)
+            elif -10 <  ma20_gap <= -5:
+                # MA60 支撐帶（MA20>MA60 且距 MA60 ±3%）視同健康回踩
+                score = 6.0 if _near_ma60 else 3.0
+            else:
+                # 深度跌破 MA20；若仍在 MA60 附近且結構完整，給予緩衝分
+                score = 5.0 if _near_ma60 else 1.0
 
         return score, ma20_gap, ma60_gap
 
@@ -262,11 +272,12 @@ class PriceTrendAnalyzer:
         return (recent_high >= high_20d * 0.999), (cur_close >= high_20d * 0.95)
 
     def _detect_setup(
-        self, cur: float, mas: Dict, ma_trend: str, ma20_slope: str,
+        self, cur: float, mas: Dict, ma_trend: str, ma20_slope: str, ma60_slope: str,
         breakout_20d: bool, near_20d: bool, vol_ratio: Optional[float]
     ) -> str:
         ma10 = mas.get("ma10")
         ma20 = mas.get("ma20")
+        ma60 = mas.get("ma60")
 
         # Breakdown：跌破 MA20 且均線下彎
         if ma20 and cur < ma20 and ma_trend == "bearish" and ma20_slope == "down":
@@ -291,6 +302,12 @@ class PriceTrendAnalyzer:
            0 <= (cur - ma20) / ma20 <= 0.04:
             return "pullback_hold"
 
+        # MA60 Support：多頭中期結構完整（MA20>MA60），回踩至 MA60 ±3%，縮量等確認
+        if (ma60 and ma20 and cur < ma20 and ma20 > ma60 and ma60_slope == "up"
+                and abs((cur - ma60) / ma60) <= 0.03
+                and (vol_ratio is None or vol_ratio <= 1.0)):
+            return "ma60_support"
+
         # Trending：多頭排列延伸
         if ma_trend == "bullish" and ma20_slope == "up":
             return "trending"
@@ -303,6 +320,7 @@ class PriceTrendAnalyzer:
             "breakout":      8.0,
             "pullback_buy":  9.0,
             "pullback_hold": 7.0,
+            "ma60_support":  7.0,   # 中期支撐待確認，低於 pullback_buy
             "trending":      6.0,
             "overextended":  2.0,
             "breakdown":     0.0,
@@ -340,6 +358,12 @@ class PriceTrendAnalyzer:
             if vol_ratio <= 1.5:  return 3.0
             return 1.0            # 放量回踩：賣壓疑慮
 
+        if setup == "ma60_support":
+            if vol_ratio <= 0.6:  return 7.0  # 極度縮量，蓄積跡象
+            if vol_ratio <= 0.8:  return 6.0
+            if vol_ratio <= 1.0:  return 4.0
+            return 2.0            # 放量下跌至MA60：賣壓仍在，慎入
+
         if setup == "breakdown":
             if vol_ratio >= 2.0:  return 0.0  # 爆量跌破：強賣訊
             if vol_ratio >= 1.5:  return 1.0
@@ -366,6 +390,10 @@ class PriceTrendAnalyzer:
             return "sell"
 
         if setup == "overextended" or gap >= 15:
+            return "wait"
+
+        # MA60 support：觀察點，等止跌確認後再進場
+        if setup == "ma60_support":
             return "wait"
 
         if setup == "pullback_buy" and trend in ("bullish", "bullish_weak") and r.ma20_slope == "up":
@@ -397,6 +425,7 @@ class PriceTrendAnalyzer:
             "breakout":      "突破前高",
             "pullback_buy":  "回踩MA10買點",
             "pullback_hold": "回踩MA20守穩",
+            "ma60_support":  "回踩MA60支撐",
             "trending":      "趨勢延伸",
             "overextended":  "過度乖離",
             "breakdown":     "趨勢破壞",

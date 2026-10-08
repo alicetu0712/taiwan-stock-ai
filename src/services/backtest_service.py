@@ -481,29 +481,52 @@ class BacktestService:
             if len(hist) < 20:
                 continue
 
-            # 組成 HistoricalData 格式（list of dict）
-            hist_dicts = [
+            # 組成 DataFrame 供 PriceTrendAnalyzer 使用
+            import pandas as _pd
+            hist_df = _pd.DataFrame([
                 {"date": str(d), "open": o, "high": h, "low": lo,
                  "close": c, "volume": v}
                 for d, o, h, lo, c, v in hist[-90:]
-            ]
+            ])
 
             # 重跑 V2 分析
             try:
-                pt_result = pt_engine.analyze(r.stock_id, hist_dicts)
-            except Exception:
+                pt_result = pt_engine.analyze(r.stock_id, hist_df)
+            except Exception as _exc:
+                logger.debug(f"PT analyze failed for {r.stock_id}: {_exc}")
                 pt_result = None
 
             pt_score  = pt_result.price_trend_score if pt_result else 0.0
             setup     = pt_result.setup_type         if pt_result else "none"
             signal    = pt_result.trade_signal       if pt_result else "wait"
             ma20_gap  = pt_result.ma20_gap           if pt_result else None
+            ma60_gap  = pt_result.ma60_gap           if pt_result else None
             vol_ratio = pt_result.volume_ratio       if pt_result else None
+            ma60_slope = pt_result.ma60_slope        if pt_result else "flat"
+            pt_ma20   = pt_result.ma20               if pt_result else None
+            pt_ma60   = pt_result.ma60               if pt_result else None
 
             # V2 關卡判斷
             v2_pass = (pt_score >= 60) and (setup != "breakdown") and (signal != "sell")
 
-            # 乖離率分組
+            # MA60 支撐候選分組（條件：價格 < MA20 且 MA20 > MA60 且 MA60 向上 且縮量）
+            ma60_bracket = None
+            if (ma20_gap is not None and ma20_gap < 0
+                    and ma60_gap is not None and abs(ma60_gap) <= 5.0
+                    and ma60_slope == "up"
+                    and pt_ma20 is not None and pt_ma60 is not None and pt_ma20 > pt_ma60
+                    and (vol_ratio is None or vol_ratio <= 1.0)):
+                ab = abs(ma60_gap)
+                if ab <= 1.0:
+                    ma60_bracket = "≤1%"
+                elif ab <= 2.0:
+                    ma60_bracket = "1–2%"
+                elif ab <= 3.0:
+                    ma60_bracket = "2–3%"
+                else:
+                    ma60_bracket = "3–5%"
+
+            # MA20 乖離率分組
             if ma20_gap is None:
                 dev_bracket = "—"
             elif ma20_gap < 0:
@@ -557,8 +580,10 @@ class BacktestService:
                 "setup":       setup,
                 "signal":      signal,
                 "ma20_gap":    round(ma20_gap, 1) if ma20_gap is not None else None,
+                "ma60_gap":    round(ma60_gap, 1) if ma60_gap is not None else None,
                 "vol_ratio":   round(vol_ratio, 2) if vol_ratio is not None else None,
                 "dev_bracket": dev_bracket,
+                "ma60_bracket": ma60_bracket,
                 "v2_pass":     v2_pass,
                 "ret_20d":     s20,
                 "ret_60d":     s60,
@@ -668,9 +693,54 @@ class BacktestService:
             .reset_index(drop=True)
         )
 
+        # ── MA60 支撐距離驗證（數據驗證是否值得升為 BUY）──────────
+        bracket_order_ma60 = ["≤1%", "1–2%", "2–3%", "3–5%"]
+        ma60_candidates = detail[detail["ma60_bracket"].notna()].copy()
+        ma60_rows = []
+        for bracket in bracket_order_ma60:
+            sub = ma60_candidates[ma60_candidates["ma60_bracket"] == bracket]
+            if len(sub) == 0:
+                continue
+            s20 = _group_stats(sub, 20)
+            s60 = _group_stats(sub, 60)
+            ma60_rows.append({
+                "MA60 距離":   bracket,
+                "樣本數":      s20.get("n", 0),
+                "20D均報酬%":  s20.get("mean_ret"),
+                "20D Alpha%":  s20.get("mean_alpha"),
+                "20D勝率%":    s20.get("win_rate"),
+                "20D Sharpe":  s20.get("sharpe"),
+                "20D MDD%":    s20.get("mdd"),
+                "60D均報酬%":  s60.get("mean_ret"),
+                "60D Alpha%":  s60.get("mean_alpha"),
+                "60D勝率%":    s60.get("win_rate"),
+                "60D Sharpe":  s60.get("sharpe"),
+            })
+        # 全部候選合計 + V1 基準對照
+        if not ma60_candidates.empty:
+            for label, sub in [("全部 MA60 候選 ≤5%", ma60_candidates),
+                                ("V1 全集（對照）", detail)]:
+                s20 = _group_stats(sub, 20)
+                s60 = _group_stats(sub, 60)
+                ma60_rows.append({
+                    "MA60 距離":   label,
+                    "樣本數":      s20.get("n", 0),
+                    "20D均報酬%":  s20.get("mean_ret"),
+                    "20D Alpha%":  s20.get("mean_alpha"),
+                    "20D勝率%":    s20.get("win_rate"),
+                    "20D Sharpe":  s20.get("sharpe"),
+                    "20D MDD%":    s20.get("mdd"),
+                    "60D均報酬%":  s60.get("mean_ret"),
+                    "60D Alpha%":  s60.get("mean_alpha"),
+                    "60D勝率%":    s60.get("win_rate"),
+                    "60D Sharpe":  s60.get("sharpe"),
+                })
+        by_ma60_df = pd.DataFrame(ma60_rows)
+
         return {
             "summary":      summary_df,
             "by_setup":     by_setup_df,
             "by_deviation": by_dev_df,
+            "by_ma60_gap":  by_ma60_df,
             "detail":       detail,
         }

@@ -771,3 +771,47 @@ def page_backtest() -> None:
             top_df = pd.DataFrame(div["top10"])[["stock_id", "name", "count", "pct_days"]]
             top_df.columns = ["股票代號", "名稱", "推薦次數", "出現天%"]
             st.dataframe(top_df, use_container_width=True, hide_index=True)
+
+    # ── MA60 支撐型態驗證（數據決定是否升為 BUY）────────────────────
+    st.markdown("---")
+    st.markdown("### 🔵 MA60 Support 型態驗證")
+    st.caption(
+        "從歷史 V1 推薦中，找出符合 MA60 支撐候選條件的股票"
+        "（Price < MA20、MA20 > MA60、MA60 向上、縮量），"
+        "按距離 MA60 的遠近分組，驗證這種型態是否真的有更好的 Alpha。"
+        "數據支持後才升級為 BUY 訊號。"
+    )
+
+    # 共用 V1 vs V2 的計算結果（已快取）
+    with st.spinner("讀取 MA60 支撐分析資料…"):
+        v1v2_data = compute_v1_v2()
+
+    if not v1v2_data:
+        st.info("尚無歷史資料，請先點擊上方「執行 V1 vs V2 比較」。")
+    else:
+        by_ma60 = v1v2_data.get("by_ma60_gap", pd.DataFrame())
+        if by_ma60.empty:
+            st.info("歷史資料中尚無符合 MA60 支撐候選條件的推薦記錄。")
+        else:
+            st.dataframe(by_ma60, use_container_width=True, hide_index=True)
+
+            # 解讀提示
+            st.caption(
+                "判讀標準：若 ≤1% / 1–2% 組的 20D Alpha 明顯高於 V1 全集（對照），"
+                "且勝率 ≥ 55%，樣本數 ≥ 10，可考慮將 ma60_support 的 signal 升級為 buy。"
+            )
+
+            # 從 detail 撈 ma60_support 明細
+            detail = v1v2_data.get("detail", pd.DataFrame())
+            if not detail.empty and "ma60_bracket" in detail.columns:
+                ma60_detail = detail[detail["ma60_bracket"].notna()].copy()
+                if not ma60_detail.empty:
+                    with st.expander(f"📋 MA60 候選明細（共 {len(ma60_detail)} 筆）"):
+                        show_cols = ["date", "stock_id", "stock_name", "ma60_bracket",
+                                     "ma20_gap", "ma60_gap", "vol_ratio",
+                                     "ret_20d", "ret_60d", "alpha_20d", "alpha_60d"]
+                        st.dataframe(
+                            ma60_detail[[c for c in show_cols if c in ma60_detail.columns]]
+                            .sort_values("date", ascending=False),
+                            use_container_width=True, hide_index=True,
+                        )
