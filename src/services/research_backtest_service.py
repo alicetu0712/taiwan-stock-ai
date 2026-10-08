@@ -26,10 +26,16 @@ from scipy import stats as sp_stats
 
 logger = logging.getLogger(__name__)
 
-# Lazy import helper — avoids module-level import ordering issues with Streamlit hot-reload
+# Lazy import helper — avoids module-level import ordering issues with Streamlit hot-reload.
+# Falls back to hardcoded value if sys.modules["src.database"] is stale (hot-reload scenario).
 def _get_cutoff():
-    from src.database import RESEARCH_CUTOFF_DATE
-    return RESEARCH_CUTOFF_DATE
+    from datetime import date as _d
+    _FALLBACK = _d(2026, 10, 9)
+    try:
+        from src.database import RESEARCH_CUTOFF_DATE
+        return RESEARCH_CUTOFF_DATE
+    except (ImportError, AttributeError):
+        return _FALLBACK
 
 ROUND_TRIP_COST = 0.585  # 買進 + 賣出合計（%）
 

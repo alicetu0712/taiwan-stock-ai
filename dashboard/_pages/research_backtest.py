@@ -74,8 +74,12 @@ def _render_stats_table(df: pd.DataFrame, group_col: str) -> None:
 
 @st.cache_data(ttl=3600, show_spinner="計算 Research Backtest（首次約 30 秒）…")
 def _load_research():
-    from src.services.research_backtest_service import ResearchBacktestService
-    return ResearchBacktestService().compute()
+    import traceback
+    try:
+        from src.services.research_backtest_service import ResearchBacktestService
+        return ResearchBacktestService().compute()
+    except Exception as e:
+        return {"_error": traceback.format_exc()}
 
 
 def _load_forward():
@@ -156,7 +160,12 @@ def page_research_backtest() -> None:
     with tab_r:
         res = _load_research()
         if not res:
-            st.error("Research Backtest 計算失敗，請查看 log。")
+            st.error("Research Backtest 計算失敗（空結果）。側欄の「🔄 重新整理資料」を押して再試行してください。")
+            return
+        if "_error" in res:
+            st.error("Research Backtest 計算失敗")
+            st.code(res["_error"], language="python")
+            st.info("「🔄 重新整理資料」ボタンを押してキャッシュをクリアして再試行してください。")
             return
 
         n_total = res.get("n_total_candidates", 0)
