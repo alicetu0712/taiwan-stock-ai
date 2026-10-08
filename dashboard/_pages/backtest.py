@@ -36,6 +36,12 @@ def compute_signal_quality() -> dict:
     return BacktestService.compute_signal_quality()
 
 
+@st.cache_data(ttl=3600)
+def compute_v1_v2() -> dict:
+    """V1 vs V2 策略比較：對歷史推薦重跑 PriceTrendAnalyzer，模擬 V2 關卡篩選效果。"""
+    return BacktestService.compute_v1_v2_comparison()
+
+
 @st.cache_data(ttl=1800)
 def load_pipeline_funnels(days: int = 30) -> pd.DataFrame:
     """載入近 N 天的 pipeline 漏斗統計。"""
@@ -676,6 +682,76 @@ def page_backtest() -> None:
                         use_container_width=True,
                         hide_index=True,
                     )
+
+    # ── V1 vs V2 策略比較 ──────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🆚 V1 vs V2 策略比較")
+    st.caption(
+        "對所有歷史 recommend tier 推薦，用當時價格重跑 PriceTrendAnalyzer，"
+        "模擬 V2 三關卡（PT≥60 AND setup≠breakdown AND signal≠sell）的篩選效果。"
+        "計算需要 1-2 分鐘。"
+    )
+
+    if st.button("▶ 執行 V1 vs V2 比較", key="run_v1v2"):
+        st.cache_data.clear()
+
+    with st.spinner("計算中（重跑歷史 PriceTrend 分析）…"):
+        v1v2 = compute_v1_v2()
+
+    if not v1v2:
+        st.info("尚無歷史推薦資料，或 PriceTrendAnalyzer 初始化失敗。")
+    else:
+        # ── 彙總表 ──────────────────────────────────────────────
+        st.markdown("#### 總體績效對比")
+        summary = v1v2.get("summary", pd.DataFrame())
+        if not summary.empty:
+            def _fmt(v):
+                if v is None or (isinstance(v, float) and v != v):
+                    return "—"
+                if isinstance(v, float):
+                    return f"{v:+.2f}" if "Alpha" in str(v) or "報酬" in str(v) else f"{v:.2f}"
+                return str(v)
+
+            st.dataframe(
+                summary.style.format({
+                    c: lambda x: f"{x:+.2f}%" if x is not None and isinstance(x, float) else "—"
+                    for c in summary.columns if "%" in c
+                }).format({
+                    c: lambda x: f"{x:.2f}" if x is not None and isinstance(x, float) else "—"
+                    for c in summary.columns if "Sharpe" in c
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+        tabs_v2 = st.tabs(["按 Setup 型態", "按 MA20 乖離率", "明細資料"])
+
+        with tabs_v2[0]:
+            by_setup = v1v2.get("by_setup", pd.DataFrame())
+            if not by_setup.empty:
+                st.dataframe(by_setup, use_container_width=True, hide_index=True)
+                st.caption("各 Setup 型態的 20D/60D 均報酬與勝率，樣本數 < 5 請忽略。")
+            else:
+                st.info("無 Setup 資料。")
+
+        with tabs_v2[1]:
+            by_dev = v1v2.get("by_deviation", pd.DataFrame())
+            if not by_dev.empty:
+                st.dataframe(by_dev, use_container_width=True, hide_index=True)
+                st.caption("MA20 乖離率越小（0–3%）通常是最佳進場區間。")
+            else:
+                st.info("無乖離率資料。")
+
+        with tabs_v2[2]:
+            detail = v1v2.get("detail", pd.DataFrame())
+            if not detail.empty:
+                show_cols = ["date", "stock_id", "stock_name", "pt_score", "setup",
+                             "signal", "ma20_gap", "vol_ratio", "v2_pass",
+                             "ret_20d", "ret_60d", "alpha_20d", "alpha_60d"]
+                st.dataframe(
+                    detail[[c for c in show_cols if c in detail.columns]]
+                    .sort_values("date", ascending=False),
+                    use_container_width=True, hide_index=True,
+                )
 
     with col_right:
         st.markdown("##### 推薦重複率（近 60 天）")

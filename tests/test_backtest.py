@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dashboard.pages.backtest import (
+from dashboard._pages.backtest import (
     ROUND_TRIP_COST,
     _calc_beta,
     _calc_stats,
@@ -162,17 +162,17 @@ class TestComputeBacktest:
         return p
 
     def test_compute_backtest_is_callable(self):
-        from dashboard.pages.backtest import compute_backtest
+        from dashboard._pages.backtest import compute_backtest
 
         assert callable(compute_backtest)
 
     def test_compute_random_baseline_is_callable(self):
-        from dashboard.pages.backtest import compute_random_baseline
+        from dashboard._pages.backtest import compute_random_baseline
 
         assert callable(compute_random_baseline)
 
     def test_compute_signal_quality_is_callable(self):
-        from dashboard.pages.backtest import compute_signal_quality
+        from dashboard._pages.backtest import compute_signal_quality
 
         assert callable(compute_signal_quality)
 

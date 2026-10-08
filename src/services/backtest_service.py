@@ -403,3 +403,274 @@ class BacktestService:
             "monthly_ic": monthly_ic_df,
             "n_obs": len(df),
         }
+
+    # ──────────────────────────────────────────────────────────────
+    # V1 vs V2 策略比較
+    # ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def compute_v1_v2_comparison() -> dict:
+        """
+        對所有歷史 recommend tier 推薦，用當時可用的價格資料重跑
+        PriceTrendAnalyzer，模擬 V2 三關卡（PT≥60 AND setup≠breakdown
+        AND signal≠sell），比較兩版策略的績效指標。
+
+        Returns dict with keys:
+            summary      : pd.DataFrame  — V1/V2/V2-fail 三組彙總
+            by_setup     : pd.DataFrame  — 按 setup_type 分組
+            by_deviation : pd.DataFrame  — 按 MA20 乖離率分組
+            detail       : pd.DataFrame  — 每筆推薦明細
+        """
+        try:
+            from src.database import DailyPrice, Recommendation, get_session
+            s = get_session()
+            recs = (
+                s.query(Recommendation)
+                .filter(Recommendation.tier == "recommend")
+                .order_by(Recommendation.date)
+                .all()
+            )
+            all_ids = {r.stock_id for r in recs} | {"0050"}
+            price_rows = (
+                s.query(DailyPrice)
+                .filter(DailyPrice.stock_id.in_(all_ids))
+                .order_by(DailyPrice.stock_id, DailyPrice.date)
+                .all()
+            )
+            s.close()
+        except Exception as e:
+            logger.exception(f"compute_v1_v2_comparison DB query failed: {e}")
+            return {}
+
+        # price_map: stock_id -> sorted [(date, open, high, low, close, volume)]
+        from collections import defaultdict
+        price_map: dict = defaultdict(list)
+        for p in price_rows:
+            price_map[p.stock_id].append((p.date, p.open, p.high, p.low, p.close, p.volume))
+
+        # 去重（同股 20 交易日內只取第一筆）
+        last_date: dict = {}
+        deduped = []
+        for r in recs:
+            prev = last_date.get(r.stock_id)
+            if prev is None:
+                deduped.append(r)
+                last_date[r.stock_id] = r.date
+            else:
+                tdays = sum(1 for d, *_ in price_map.get(r.stock_id, []) if prev < d <= r.date)
+                if tdays >= 20:
+                    deduped.append(r)
+                    last_date[r.stock_id] = r.date
+
+        # 建立 PriceTrendAnalyzer 並計算每筆推薦的 V2 指標
+        try:
+            from src.analyzers.price_trend import PriceTrendAnalyzer
+            pt_engine = PriceTrendAnalyzer()
+        except Exception as e:
+            logger.error(f"PriceTrendAnalyzer import failed: {e}")
+            return {}
+
+        import math
+        rows_out = []
+        today_dt = date.today()
+
+        for r in deduped:
+            sp_full = price_map.get(r.stock_id, [])
+            # 取截至 rec date 的最近 90 筆（≈ 4 個月）
+            hist = [(d, o, h, lo, c, v) for d, o, h, lo, c, v in sp_full if d <= r.date]
+            if len(hist) < 20:
+                continue
+
+            # 組成 HistoricalData 格式（list of dict）
+            hist_dicts = [
+                {"date": str(d), "open": o, "high": h, "low": lo,
+                 "close": c, "volume": v}
+                for d, o, h, lo, c, v in hist[-90:]
+            ]
+
+            # 重跑 V2 分析
+            try:
+                pt_result = pt_engine.analyze(r.stock_id, hist_dicts)
+            except Exception:
+                pt_result = None
+
+            pt_score  = pt_result.price_trend_score if pt_result else 0.0
+            setup     = pt_result.setup_type         if pt_result else "none"
+            signal    = pt_result.trade_signal       if pt_result else "wait"
+            ma20_gap  = pt_result.ma20_gap           if pt_result else None
+            vol_ratio = pt_result.volume_ratio       if pt_result else None
+
+            # V2 關卡判斷
+            v2_pass = (pt_score >= 60) and (setup != "breakdown") and (signal != "sell")
+
+            # 乖離率分組
+            if ma20_gap is None:
+                dev_bracket = "—"
+            elif ma20_gap < 0:
+                dev_bracket = "< 0%"
+            elif ma20_gap < 3:
+                dev_bracket = "0–3%"
+            elif ma20_gap < 5:
+                dev_bracket = "3–5%"
+            elif ma20_gap < 8:
+                dev_bracket = "5–8%"
+            elif ma20_gap < 12:
+                dev_bracket = "8–12%"
+            else:
+                dev_bracket = "≥12%"
+
+            # 計算前向報酬
+            sp_close = [(d, c) for d, _, _, _, c, _ in sp_full]
+            s20, entry = _ret_at(sp_close, r.date, 20)
+            s60, _     = _ret_at(sp_close, r.date, 60)
+
+            # 補全停牌/下市
+            data_flag = None
+            if s20 is None and entry is not None and (today_dt - r.date).days > 35:
+                after = [(d, c) for d, c in sp_close if d > r.date and c]
+                if after:
+                    s20 = round((after[-1][1] - entry) / entry * 100 - ROUND_TRIP_COST, 2)
+                    data_flag = "⚠️ 停牌"
+                else:
+                    s20 = round(-100.0 - ROUND_TRIP_COST, 2)
+                    data_flag = "❌ 下市"
+
+            if s20 is not None and data_flag is None:
+                s20 = round(s20 - ROUND_TRIP_COST, 2)
+            if s60 is not None:
+                s60 = round(s60 - ROUND_TRIP_COST, 2)
+
+            # 0050 基準
+            sp_0050 = [(d, c) for d, _, _, _, c, _ in price_map.get("0050", [])]
+            b0050_20, _ = _ret_at(sp_0050, r.date, 20)
+            b0050_60, _ = _ret_at(sp_0050, r.date, 60)
+            if b0050_20 is not None:
+                b0050_20 = round(b0050_20 - ROUND_TRIP_COST, 2)
+            if b0050_60 is not None:
+                b0050_60 = round(b0050_60 - ROUND_TRIP_COST, 2)
+
+            rows_out.append({
+                "date":        r.date,
+                "stock_id":    r.stock_id,
+                "stock_name":  r.stock_name or "",
+                "pt_score":    round(pt_score, 1),
+                "setup":       setup,
+                "signal":      signal,
+                "ma20_gap":    round(ma20_gap, 1) if ma20_gap is not None else None,
+                "vol_ratio":   round(vol_ratio, 2) if vol_ratio is not None else None,
+                "dev_bracket": dev_bracket,
+                "v2_pass":     v2_pass,
+                "ret_20d":     s20,
+                "ret_60d":     s60,
+                "b0050_20":    b0050_20,
+                "b0050_60":    b0050_60,
+                "alpha_20d":   _alpha(s20, b0050_20),
+                "alpha_60d":   _alpha(s60, b0050_60),
+                "data_flag":   data_flag,
+            })
+
+        if not rows_out:
+            return {}
+
+        detail = pd.DataFrame(rows_out)
+
+        def _group_stats(sub: pd.DataFrame, hold: int) -> dict:
+            """計算一個子集的彙總指標。"""
+            ret_col   = f"ret_{hold}d"
+            alpha_col = f"alpha_{hold}d"
+            r = sub[ret_col].dropna()
+            a = sub[alpha_col].dropna()
+            n = len(r)
+            if n == 0:
+                return {"n": 0}
+            mean_ret   = round(r.mean(), 2)
+            mean_alpha = round(a.mean(), 2) if len(a) else None
+            win_rate   = round((r > 0).mean() * 100, 1)
+            sharpe     = round(r.mean() / r.std() * (252 / hold) ** 0.5, 2) if r.std() > 0 else None
+            cum        = (1 + r / 100).cumprod()
+            mdd        = round(((cum - cum.cummax()) / cum.cummax() * 100).min(), 2)
+            return {
+                "n":          n,
+                "mean_ret":   mean_ret,
+                "mean_alpha": mean_alpha,
+                "win_rate":   win_rate,
+                "sharpe":     sharpe,
+                "mdd":        mdd,
+            }
+
+        # ── 彙總表：V1 / V2-pass / V2-fail ──────────────────────
+        groups = {
+            "V1 全集":   detail,
+            "V2 通過":   detail[detail["v2_pass"]],
+            "V2 篩掉":   detail[~detail["v2_pass"]],
+        }
+        summary_rows = []
+        for label, sub in groups.items():
+            s20 = _group_stats(sub, 20)
+            s60 = _group_stats(sub, 60)
+            summary_rows.append({
+                "策略":        label,
+                "樣本數":      s20.get("n", 0),
+                "20D均報酬%":  s20.get("mean_ret"),
+                "20D Alpha%":  s20.get("mean_alpha"),
+                "20D勝率%":    s20.get("win_rate"),
+                "20D Sharpe":  s20.get("sharpe"),
+                "20D MDD%":    s20.get("mdd"),
+                "60D均報酬%":  s60.get("mean_ret"),
+                "60D Alpha%":  s60.get("mean_alpha"),
+                "60D勝率%":    s60.get("win_rate"),
+                "60D Sharpe":  s60.get("sharpe"),
+                "60D MDD%":    s60.get("mdd"),
+            })
+        summary_df = pd.DataFrame(summary_rows)
+
+        # ── 按 setup_type 分組 ──────────────────────────────────
+        setup_rows = []
+        for setup_val, sub in detail.groupby("setup"):
+            s20 = _group_stats(sub, 20)
+            s60 = _group_stats(sub, 60)
+            setup_rows.append({
+                "Setup":       setup_val,
+                "樣本數":      s20.get("n", 0),
+                "20D均報酬%":  s20.get("mean_ret"),
+                "20D勝率%":    s20.get("win_rate"),
+                "20D Sharpe":  s20.get("sharpe"),
+                "20D MDD%":    s20.get("mdd"),
+                "60D均報酬%":  s60.get("mean_ret"),
+                "60D勝率%":    s60.get("win_rate"),
+                "60D Sharpe":  s60.get("sharpe"),
+            })
+        by_setup_df = pd.DataFrame(setup_rows).sort_values("20D均報酬%", ascending=False)
+
+        # ── 按乖離率分組 ────────────────────────────────────────
+        dev_order = ["< 0%", "0–3%", "3–5%", "5–8%", "8–12%", "≥12%", "—"]
+        dev_rows = []
+        for bracket, sub in detail.groupby("dev_bracket"):
+            s20 = _group_stats(sub, 20)
+            s60 = _group_stats(sub, 60)
+            dev_rows.append({
+                "MA20 乖離":   bracket,
+                "樣本數":      s20.get("n", 0),
+                "20D均報酬%":  s20.get("mean_ret"),
+                "20D勝率%":    s20.get("win_rate"),
+                "20D Sharpe":  s20.get("sharpe"),
+                "20D MDD%":    s20.get("mdd"),
+                "60D均報酬%":  s60.get("mean_ret"),
+                "60D勝率%":    s60.get("win_rate"),
+            })
+        by_dev_df = (
+            pd.DataFrame(dev_rows)
+            .assign(_order=lambda df: df["MA20 乖離"].map(
+                {v: i for i, v in enumerate(dev_order)}
+            ))
+            .sort_values("_order")
+            .drop(columns="_order")
+            .reset_index(drop=True)
+        )
+
+        return {
+            "summary":      summary_df,
+            "by_setup":     by_setup_df,
+            "by_deviation": by_dev_df,
+            "detail":       detail,
+        }
