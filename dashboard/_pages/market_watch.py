@@ -220,7 +220,9 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         dragmode="pan",
     )
 
-    # Setup 型態標示（右上角 annotation）
+    # Setup 型態標示（左上角 annotation）— setup=none 時不顯示
+    if setup == "none":
+        return fig
     fig.add_annotation(
         text=f"{sm['icon']} {sm['label']}",
         xref="paper", yref="paper",
