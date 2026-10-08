@@ -186,7 +186,19 @@ class ResearchBacktestService:
         cutoff = _get_cutoff()
         s = get_session()
         ar_rows = (
-            s.query(AnalysisResult)
+            s.query(
+                AnalysisResult.stock_id,
+                AnalysisResult.date,
+                AnalysisResult.price_trend_score,
+                AnalysisResult.setup_type,
+                AnalysisResult.trade_signal,
+                AnalysisResult.ma20_gap,
+                AnalysisResult.volume_ratio,
+                AnalysisResult.total_score,
+                AnalysisResult.timing_score,
+                AnalysisResult.behavior_score,
+                AnalysisResult.rec_level,
+            )
             .filter(AnalysisResult.date < cutoff)
             .all()
         )
