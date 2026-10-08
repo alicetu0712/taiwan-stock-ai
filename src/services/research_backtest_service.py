@@ -24,9 +24,12 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
-from src.database import RESEARCH_CUTOFF_DATE
-
 logger = logging.getLogger(__name__)
+
+# Lazy import helper — avoids module-level import ordering issues with Streamlit hot-reload
+def _get_cutoff():
+    from src.database import RESEARCH_CUTOFF_DATE
+    return RESEARCH_CUTOFF_DATE
 
 ROUND_TRIP_COST = 0.585  # 買進 + 賣出合計（%）
 
@@ -142,7 +145,7 @@ class ResearchBacktestService:
         if raw_df.empty:
             return {
                 "raw_df": raw_df,
-                "cutoff": RESEARCH_CUTOFF_DATE,
+                "cutoff": _get_cutoff(),
                 "n_total_candidates": n_total,
                 "n_usable": 0,
             }
@@ -165,7 +168,7 @@ class ResearchBacktestService:
             "by_ma60":            self._group_stats(usable, "ma60_bracket", MA60_BRACKET_ORDER),
             "by_month":           self._group_stats(usable, "ym",           None),
             "by_regime":          self._group_stats(usable, "regime",       ["bull", "bear"]),
-            "cutoff":             RESEARCH_CUTOFF_DATE,
+            "cutoff":             _get_cutoff(),
             "n_total_candidates": n_total,
             "n_usable":           len(usable),
             "n_with_pt":          n_with_pt,
@@ -178,10 +181,11 @@ class ResearchBacktestService:
     def _build_raw_df(self):
         from src.database import AnalysisResult, DailyPrice, get_session
 
+        cutoff = _get_cutoff()
         s = get_session()
         ar_rows = (
             s.query(AnalysisResult)
-            .filter(AnalysisResult.date < RESEARCH_CUTOFF_DATE)
+            .filter(AnalysisResult.date < cutoff)
             .all()
         )
         n_total = len(ar_rows)
