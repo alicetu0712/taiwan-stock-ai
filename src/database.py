@@ -151,9 +151,9 @@ class AnalysisResult(Base):
     date = Column(Date, nullable=False)
     quality_score = Column(Float)  # 基本面評分（0-100）
     quality_grade = Column(String(5))  # A+/A/B/C/D
-    timing_score = Column(Float)  # 技術面評分（0-100）
+    timing_score = Column(Float)  # Momentum（RSI/MACD）0-100（V2: 15%）
     behavior_score = Column(Float)  # 市場行為評分（0-100）
-    intelligence_score = Column(Float)  # 情報評分（0-100）
+    intelligence_score = Column(Float)  # 情報評分（舊欄位，V2 不計分）
     risk_score = Column(Float)  # 風險評分（0-100，越高越安全）
     total_score = Column(Float)  # 綜合評分（0-100）
     confidence = Column(Float)  # 信心分數（%）
@@ -163,6 +163,12 @@ class AnalysisResult(Base):
     score_change_10d = Column(Float)
     timing_change_5d = Column(Float)    # timing_score 今日 − 5D 前
     behavior_change_5d = Column(Float)  # behavior_score 今日 − 5D 前
+    # V2 新增欄位
+    price_trend_score = Column(Float)   # PriceTrend 0-100（V2: 45%）
+    setup_type = Column(String(20))     # breakout/pullback_buy/pullback_hold/trending/breakdown/none
+    ma20_gap = Column(Float)            # (close−MA20)/MA20 × 100%
+    volume_ratio = Column(Float)        # 當日量 / 20日均量
+    trade_signal = Column(String(20))   # strong_buy/buy/wait/reduce/sell
 
 
 class Recommendation(Base):
@@ -192,7 +198,12 @@ class Recommendation(Base):
     # 層級標記：'recommend'（Core Picks）/ 'opportunity'（Rising）/ 'watch'
     tier = Column(String(20), default="recommend")
     stock_name = Column(String(60))
-    strategy_version = Column(String(20), default="v6.0")
+    strategy_version = Column(String(20), default="v7.0")
+    # V2 新增欄位
+    price_trend_score = Column(Float)
+    setup_type = Column(String(20))
+    ma20_gap = Column(Float)
+    trade_signal = Column(String(20))   # strong_buy/buy/wait/reduce/sell
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

@@ -70,6 +70,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
     from src.validators.data_validator  import DataValidator
     from src.analyzers.fundamental      import FundamentalAnalyzer
     from src.analyzers.technical        import TechnicalAnalyzer
+    from src.analyzers.price_trend      import PriceTrendAnalyzer
     from src.analyzers.market_behavior  import MarketBehaviorAnalyzer, analyze_market_sentiment
     from src.analyzers.risk             import RiskAnalyzer
     from src.engines.hard_filter        import HardFilter
@@ -83,6 +84,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
     validator   = DataValidator()
     fund_eng    = FundamentalAnalyzer()
     tech_eng    = TechnicalAnalyzer()
+    pt_eng      = PriceTrendAnalyzer()
     behav_eng   = MarketBehaviorAnalyzer()
     risk_eng    = RiskAnalyzer()
     hf          = HardFilter()
@@ -335,6 +337,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             except Exception as e:
                 logger.warning(f"歷史資料載入失敗（{e}），改用當日資料")
 
+        pt_results: dict = {}
         grouped = price_df.groupby("stock_id")
         for sid, today_row in grouped:
             if sid in hist_map:
@@ -342,6 +345,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             else:
                 hist = today_row
             tech_results[sid] = tech_eng.analyze(sid, hist)
+            pt_results[sid]   = pt_eng.analyze(sid, hist)
 
         # ── Step 6: Hard Filter ──────────────────────────────
         # 若無 FinMind，則跳過財務 Hard Filter，改用流動性篩選
@@ -422,6 +426,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
 
             # 技術面分析
             tech_r = tech_results.get(sid, tech_eng.analyze(sid, hist))
+            pt_r   = pt_results.get(sid, pt_eng.analyze(sid, hist))
 
             # 市場行為分析
             chip_hist = inst_df[inst_df["stock_id"] == sid].copy() if not inst_df.empty else pd.DataFrame()
@@ -453,6 +458,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                 technical_result       = tech_r,
                 behavior_result        = behav_r,
                 risk_result            = risk_r,
+                price_trend_result     = pt_r,
                 intelligence_score     = 60.0,
                 has_real_intelligence  = has_real_news,
                 name                   = name,
@@ -846,10 +852,16 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     total_score          = rec.total_score,
                     confidence           = rec.confidence,
                     rec_level            = rec.rec_level,
-                    score_change_5d    = rec.score_change_5d,
-                    score_change_10d   = rec.score_change_10d,
-                    timing_change_5d   = rec.timing_change_5d,
-                    behavior_change_5d = rec.behavior_change_5d,
+                    score_change_5d      = rec.score_change_5d,
+                    score_change_10d     = rec.score_change_10d,
+                    timing_change_5d     = rec.timing_change_5d,
+                    behavior_change_5d   = rec.behavior_change_5d,
+                    # V2 新增
+                    price_trend_score    = rec.price_trend_score,
+                    setup_type           = rec.setup_type,
+                    ma20_gap             = rec.ma20_gap,
+                    volume_ratio         = rec.vol_ratio,
+                    trade_signal         = rec.trade_signal,
                 )
                 session.add(ar)
             else:
@@ -862,10 +874,15 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                 existing.total_score         = rec.total_score
                 existing.confidence          = rec.confidence
                 existing.rec_level           = rec.rec_level
-                existing.score_change_5d    = rec.score_change_5d
-                existing.score_change_10d   = rec.score_change_10d
-                existing.timing_change_5d   = rec.timing_change_5d
-                existing.behavior_change_5d = rec.behavior_change_5d
+                existing.score_change_5d     = rec.score_change_5d
+                existing.score_change_10d    = rec.score_change_10d
+                existing.timing_change_5d    = rec.timing_change_5d
+                existing.behavior_change_5d  = rec.behavior_change_5d
+                existing.price_trend_score   = rec.price_trend_score
+                existing.setup_type          = rec.setup_type
+                existing.ma20_gap            = rec.ma20_gap
+                existing.volume_ratio        = rec.vol_ratio
+                existing.trade_signal        = rec.trade_signal
 
         # ── 儲存推薦紀錄（今日 Top N）────────────────────────
         top_ids = {r.stock_id for r in top_recs}

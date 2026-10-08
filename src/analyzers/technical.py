@@ -58,6 +58,7 @@ class TechnicalResult:
     ma10: Optional[float] = None
     ma_deviation20: Optional[float] = None  # (Price - MA20) / MA20 * 100%
     ma_slope: str = "neutral"          # MA20 斜率方向：up / down / neutral
+    momentum_score: float = 0.0        # MACD + RSI 動能分（V2 timing 15%）
 
 
 class TechnicalAnalyzer:
@@ -121,6 +122,10 @@ class TechnicalAnalyzer:
         result.rsi = rsi_val
         if rsi_risk:
             risk_signals.append(rsi_risk)
+
+        # ── Momentum Score（V2 架構：MACD+RSI 占 timing 15%）─
+        # MACD(0-20) + RSI(0-10) → normalize to 0-100
+        result.momentum_score = round((macd_score + rsi_score) / 30.0 * 100, 1)
 
         # ── ATR ─────────────────────────────────────────────
         result.atr = self._calc_atr(high, low, close)

@@ -89,14 +89,17 @@ TA_CONFIG = {
     "min_history": 60,
 }
 
-# ── AI 評分模型 ───────────────────────────────────────────────
-# 短線波段策略（20-60 trading days）：股價行為決定進場，基本面負責排除惡化
+# ── AI 評分模型（V2）─────────────────────────────────────────
+# 短線波段策略（20-60 trading days）：60% 由股價本身決定
+# price_trend（45%）+ momentum（15%）= 60% 純技術面
+# quality（20%）純作過濾器，不是選股主軸
 SCORE_WEIGHTS = {
-    "quality": 0.15,     # Fundamental（排除基本面惡化，非選股主軸）
-    "timing": 0.50,      # Price / Technical（進場時機核心）
-    "behavior": 0.20,    # Momentum / Behavior（法人籌碼確認）
-    "intelligence": 0.10,  # Institutional / Flow（市場情報）
-    "risk": 0.05,        # Risk Penalty（風險扣分）
+    "price_trend":  0.45,  # PriceTrendAnalyzer：MA結構/斜率/乖離/型態/量能
+    "timing":       0.15,  # TechnicalAnalyzer.momentum_score：RSI/MACD/KD
+    "behavior":     0.15,  # MarketBehaviorAnalyzer：籌碼/法人
+    "quality":      0.20,  # FundamentalAnalyzer：基本面過濾
+    "risk":         0.05,  # RiskAnalyzer：風險懲罰
+    "intelligence": 0.00,  # 已移除直接計分，改為警示/說明用
 }
 
 # ── 硬性篩選條件（Hard Filter）────────────────────────────────

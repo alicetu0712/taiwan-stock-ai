@@ -72,15 +72,19 @@ class StockRecommendation:
     days_since_rec: Optional[int] = None
     on_cooldown: bool = False
     cooldown_override: bool = False
-    # ── 短線交易關鍵欄位（新增）─────────────────────────────
-    setup_type: str = "none"          # breakout / pullback_hold / trending / none
-    atr: Optional[float] = None       # 14日 ATR（用於止損/目標計算）
+    # ── V2 Price Trend 欄位 ──────────────────────────────────
+    price_trend_score: float = 0.0    # PriceTrend 0-100（V2: 45%）
+    setup_type: str = "none"          # breakout/pullback_buy/pullback_hold/trending/breakdown/none
+    ma20_gap: Optional[float] = None  # (close−MA20)/MA20 × 100%
+    trade_signal: str = "wait"        # strong_buy/buy/wait/reduce/sell
+    # ── 短線交易關鍵欄位 ─────────────────────────────────────
+    atr: Optional[float] = None       # 14日 ATR（止損/目標計算用）
     entry_low: Optional[float] = None
     entry_high: Optional[float] = None
     stop_price: Optional[float] = None
     target1: Optional[float] = None
     target2: Optional[float] = None
-    expected_holding: str = ""        # 預估持有期間
+    expected_holding: str = ""
     vol_ratio: Optional[float] = None
 
 
@@ -103,6 +107,7 @@ class DecisionEngine:
         technical_result=None,
         behavior_result=None,
         risk_result=None,
+        price_trend_result=None,      # V2 新增
         intelligence_score: float = 60.0,
         has_real_intelligence: bool = False,
         name: str = "",
@@ -126,24 +131,39 @@ class DecisionEngine:
             intelligence_score=intelligence_score,
         )
 
-        # 提取各模組分數
-        q_score = quality_result.quality_score if quality_result else 0.0
-        t_score = technical_result.timing_score if technical_result else 0.0
-        b_score = behavior_result.behavior_score if behavior_result else 50.0
-        r_score = risk_result.risk_score if risk_result else 100.0
+        # ── 提取各模組分數 ──────────────────────────────────────
+        q_score  = quality_result.quality_score if quality_result else 0.0
+        # V2: timing_score 改為 momentum_score (RSI+MACD)；若無 V2 欄位則 fallback 舊 timing_score
+        t_score  = getattr(technical_result, "momentum_score",
+                           (technical_result.timing_score if technical_result else 0.0))
+        b_score  = behavior_result.behavior_score if behavior_result else 50.0
+        r_score  = risk_result.risk_score if risk_result else 100.0
+        pt_score = price_trend_result.price_trend_score if price_trend_result else 0.0
         has_chip = behavior_result.has_real_chip_data if behavior_result else False
 
-        rec.quality_score = q_score
-        rec.timing_score = t_score
-        rec.behavior_score = b_score
-        rec.risk_score = r_score
-        rec.quality_grade = quality_result.quality_grade if quality_result else "D"
+        rec.quality_score      = q_score
+        rec.timing_score       = t_score   # momentum
+        rec.behavior_score     = b_score
+        rec.risk_score         = r_score
+        rec.price_trend_score  = pt_score
+        rec.quality_grade      = quality_result.quality_grade if quality_result else "D"
 
-        # ── 傳入技術面細節（短線用）──────────────────────────
-        if technical_result:
+        # ── V2 Price Trend 細節 ─────────────────────────────────
+        if price_trend_result:
+            rec.setup_type   = price_trend_result.setup_type
+            rec.ma20_gap     = price_trend_result.ma20_gap
+            rec.vol_ratio    = price_trend_result.volume_ratio
+            rec.trade_signal = price_trend_result.trade_signal
+            rec.expected_holding = self._estimate_holding(rec.setup_type)
+        elif technical_result:
+            # fallback to technical_result (V1 compat)
             rec.setup_type = getattr(technical_result, "setup_type", "none")
+            rec.vol_ratio  = getattr(technical_result, "vol_ratio", None)
+            rec.expected_holding = self._estimate_holding(rec.setup_type)
+
+        # ── ATR 進出場計算 ──────────────────────────────────────
+        if technical_result:
             rec.atr = getattr(technical_result, "atr", None)
-            rec.vol_ratio = getattr(technical_result, "vol_ratio", None)
             if close and rec.atr:
                 atr = rec.atr
                 rec.entry_low  = round(close - 0.3 * atr, 2)
@@ -151,50 +171,43 @@ class DecisionEngine:
                 rec.stop_price = round(close - 2.0 * atr, 2)
                 rec.target1    = round(close + 2.5 * atr, 2)
                 rec.target2    = round(close + 5.0 * atr, 2)
-            rec.expected_holding = self._estimate_holding(rec.setup_type)
 
-        # ── 計算綜合評分（Dynamic Weighting：quality/behavior 缺失時重分配權重）──
+        # ── 計算綜合評分（Dynamic Weighting）─────────────────────
+        # V2 weights: price_trend(45%) + timing/momentum(15%) + behavior(15%) + quality(20%) + risk(5%)
         w = dict(self.weights)
+
         if q_score == 0.0:
-            # 把 quality 的 40% 等比例分給 timing / behavior / intelligence
-            non_q_sum = w["timing"] + w["behavior"] + w["intelligence"]
-            extra = w["quality"]
-            w["timing"] += extra * (w["timing"] / non_q_sum)
-            w["behavior"] += extra * (w["behavior"] / non_q_sum)
-            w["intelligence"] += extra * (w["intelligence"] / non_q_sum)
-            w["quality"] = 0.0
-        if not has_chip:
-            # 無真實籌碼資料：把 behavior 20% 分給 timing/intelligence
-            non_b_sum = w["timing"] + w["intelligence"]
-            extra = w["behavior"]
-            w["timing"] += extra * (w["timing"] / non_b_sum)
-            w["intelligence"] += extra * (w["intelligence"] / non_b_sum)
-            w["behavior"] = 0.0
-            b_score = 0.0  # 不納入計算
-        if not has_real_intelligence:
-            # 無真實新聞/情報資料：把 intelligence 10% 等比例分給 quality/timing/behavior
-            active = {
-                k: v
-                for k, v in w.items()
-                if k != "intelligence" and k != "risk" and v > 0
-            }
+            # 無基本面資料：把 quality 等比分給 price_trend / timing / behavior
+            active = {k: v for k, v in w.items()
+                      if k not in ("quality", "risk", "intelligence") and v > 0}
             active_sum = sum(active.values())
             if active_sum > 0:
-                extra = w["intelligence"]
+                extra = w["quality"]
                 for k in active:
                     w[k] += extra * (w[k] / active_sum)
-            w["intelligence"] = 0.0
+            w["quality"] = 0.0
 
+        if not has_chip:
+            # 無真實籌碼資料：把 behavior 分給 price_trend / timing
+            active = {k: v for k, v in w.items()
+                      if k in ("price_trend", "timing") and v > 0}
+            active_sum = sum(active.values())
+            if active_sum > 0:
+                extra = w["behavior"]
+                for k in active:
+                    w[k] += extra * (w[k] / active_sum)
+            w["behavior"] = 0.0
+            b_score = 0.0
+
+        # intelligence 在 V2 中為 0，不影響計算
         base_score = (
-            q_score * w["quality"]
-            + t_score * w["timing"]
-            + b_score * w["behavior"]
-            + intelligence_score * w["intelligence"]
+            pt_score * w.get("price_trend", 0)
+            + t_score  * w["timing"]
+            + b_score  * w["behavior"]
+            + q_score  * w["quality"]
         )
-        # 風險扣分（risk_score 越低代表風險越高，對 total 造成扣分）
         risk_penalty = (100 - r_score) * w["risk"]
-        total_score = base_score - risk_penalty
-        total_score = round(max(0.0, min(100.0, total_score)), 1)
+        total_score = round(max(0.0, min(100.0, base_score - risk_penalty)), 1)
         rec.total_score = total_score
 
         # ── 推薦等級 ──────────────────────────────────────────
@@ -281,17 +294,35 @@ class DecisionEngine:
                 f"[Decision] 多頭模式：接受 A+/A/B，信心≥{min_conf:.0f}%，最多 {max_n} 檔"
             )
 
+        # ── V2 多關卡篩選 ────────────────────────────────────────
+        # Gate 1: 等級 + 信心（原有）
+        # Gate 2: PriceTrend >= 60（趨勢門檻），V1 compat 用 timing_score 代替
+        # Gate 3: 排除 breakdown（無論分數多高，趨勢已破壞）
+        # Gate 4: trade_signal != "sell"
+        def _passes_v2_gate(r: StockRecommendation) -> bool:
+            pt = r.price_trend_score
+            # 若 price_trend_score 未填（V1 資料），用 timing_score 近似
+            trend_ok = (pt >= 60) if pt > 0 else (r.timing_score >= 55)
+            if not trend_ok:
+                return False
+            if r.setup_type == "breakdown":
+                return False
+            if r.trade_signal == "sell":
+                return False
+            return True
+
         qualified = [
-            r
-            for r in candidates
-            if r.confidence >= min_conf and r.rec_level in allowed_levels
+            r for r in candidates
+            if r.confidence >= min_conf
+            and r.rec_level in allowed_levels
+            and _passes_v2_gate(r)
         ]
 
         if not qualified:
             reason = (
                 f"今日沒有符合本研究策略的股票。"
-                f"（所有分析股票中，無同時滿足 信心≥{min_conf:.0f}% "
-                f"與 等級 {'/'.join(allowed_levels)} 的標的）"
+                f"（信心≥{min_conf:.0f}%、等級{'/'.join(allowed_levels)}、"
+                f"PriceTrend≥60 且無 breakdown，三關卡均未通過）"
             )
             return [], reason
 
