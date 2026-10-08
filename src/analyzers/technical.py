@@ -1,13 +1,17 @@
 """
 technical.py — 價格結構與技術面分析引擎（短線波段版）
 
-核心邏輯：股價行為決定進場時機。
+核心邏輯：股價行為決定進場時機；成交量確認真假；RSI/MACD 輔助 Timing。
 評分構成（100分）：
-  價格結構/突破   35  20D新高、HH/HL、動能、突破型態
+  價格結構/突破   35  20D新高、HH/HL、動能、放量確認
   MACD            20  Histogram 方向與擴張
-  均線排列        20  MA5/20/60 多頭排列
-  成交量確認      15  量比、放量突破
+  均線分析        20  均線結構7 + 價格位置4 + 均線斜率3 + 乖離率3 + 交叉3
+  成交量確認      15  量比、漲跌量性質
   RSI             10  45-70 健康區間
+
+Setup 類型：breakout / pullback_buy / pullback_hold / trending / breakdown / none
+  pullback_buy：多頭排列中回踩 MA10 附近（縮量）後守穩 → 較佳進場點
+  breakdown：跌破 MA20 且 MA5/10 下彎 → 賣出訊號
 """
 
 import logging
@@ -43,7 +47,7 @@ class TechnicalResult:
     ma240: Optional[float] = None
     close: Optional[float] = None
     # ── 新增：短線關鍵欄位 ──────────────────────────────────
-    setup_type: str = "none"           # breakout / pullback_hold / trending / none
+    setup_type: str = "none"           # breakout / pullback_buy / pullback_hold / trending / breakdown / none
     breakout_20d: bool = False         # 近5日是否創20日新高
     hh_hl_structure: bool = False      # Higher Highs + Higher Lows 結構
     atr: Optional[float] = None        # 14日 ATR
@@ -51,6 +55,9 @@ class TechnicalResult:
     price_change_5d: Optional[float] = None  # 5日價格變化%
     near_20d_high: bool = False        # 股價在20日高點的95%以上
     price_structure_score: float = 0.0
+    ma10: Optional[float] = None
+    ma_deviation20: Optional[float] = None  # (Price - MA20) / MA20 * 100%
+    ma_slope: str = "neutral"          # MA20 斜率方向：up / down / neutral
 
 
 class TechnicalAnalyzer:
@@ -72,16 +79,19 @@ class TechnicalAnalyzer:
         score = 0.0
         risk_signals = []
 
-        # ── 均線排列（20分）──────────────────────────────────
-        ma_score, ma_trend, ma_vals = self._analyze_ma(close)
+        # ── 均線分析（20分）──────────────────────────────────
+        ma_score, ma_trend, ma_vals, ma_dev, ma_slope = self._analyze_ma(close)
         score += ma_score
         result.ma_trend = ma_trend
         result.ma5 = ma_vals.get("ma5")
+        result.ma10 = ma_vals.get("ma10")
         result.ma20 = ma_vals.get("ma20")
         result.ma60 = ma_vals.get("ma60")
         result.ma120 = ma_vals.get("ma120")
         result.ma240 = ma_vals.get("ma240")
         result.close = float(close[-1])
+        result.ma_deviation20 = ma_dev
+        result.ma_slope = ma_slope
 
         # ── 價格結構/突破（35分）────────────────────────────
         ps_score, ps_details = self._analyze_price_structure(close, high, low, volume)
@@ -121,8 +131,10 @@ class TechnicalAnalyzer:
         )
 
         # ── 風險信號 ─────────────────────────────────────────
-        if result.close and result.ma20 and result.close > result.ma20 * 1.15:
-            risk_signals.append("股價距 MA20 超過 15%，短線可能過熱")
+        if result.ma_deviation20 is not None and result.ma_deviation20 >= 15:
+            risk_signals.append(f"MA20 乖離 {result.ma_deviation20:.1f}%，短線過熱勿追")
+        elif result.ma_deviation20 is not None and result.ma_deviation20 >= 10:
+            risk_signals.append(f"MA20 乖離 {result.ma_deviation20:.1f}%，留意拉回風險")
         if result.resistance and result.close and result.close >= result.resistance * 0.98:
             risk_signals.append("接近前波壓力區，追高需謹慎")
         if rsi_val and rsi_val > 80:
@@ -140,8 +152,18 @@ class TechnicalAnalyzer:
 
     # ── 分析子方法 ────────────────────────────────────────────
 
-    def _analyze_ma(self, close: np.ndarray) -> Tuple[float, str, Dict]:
-        """均線排列（20分）"""
+    def _analyze_ma(self, close: np.ndarray) -> Tuple[float, str, Dict, Optional[float], str]:
+        """均線分析（20分）
+
+        Sub-components:
+          均線結構（多空排列）   7  MA5/10/20/60 相對位置
+          股價 vs 均線位置      4  Price vs MA20 / MA60
+          均線斜率              3  MA20 / MA60 是否向上
+          乖離率                3  過度乖離懲罰 / 健康位置加分
+          黃金/死亡交叉         3  MA5 穿越 MA20
+
+        Returns: (score, trend, ma_vals, deviation20, slope_direction)
+        """
         score = 0.0
         cfg = TA_CONFIG["ma_periods"]
         ma_vals = {}
@@ -151,47 +173,97 @@ class TechnicalAnalyzer:
             if n >= period:
                 ma_vals[f"ma{period}"] = float(np.mean(close[-period:]))
 
-        cur = close[-1]
+        cur = float(close[-1])
         ma5  = ma_vals.get("ma5")
         ma10 = ma_vals.get("ma10")
         ma20 = ma_vals.get("ma20")
         ma60 = ma_vals.get("ma60")
+        trend = "neutral"
+        slope_direction = "neutral"
+        deviation = None
 
-        # 股價在均線上方
-        if ma20 and cur > ma20:
-            score += 4
-        if ma60 and cur > ma60:
-            score += 3
-
-        # 多頭排列（最重要指標）
+        # ── 均線結構（7分）──────────────────────────────────
         if ma5 and ma10 and ma20 and ma60:
             if ma5 > ma10 > ma20 > ma60:
-                score += 13   # 完美多頭排列
+                score += 7      # 完美多頭排列
                 trend = "bullish"
             elif ma5 > ma20 > ma60:
-                score += 8
+                score += 5
                 trend = "bullish"
             elif ma5 > ma20:
-                score += 4
+                score += 3
                 trend = "bullish_weak"
-            elif ma5 < ma20:
-                score -= 3
+            elif ma5 < ma10 < ma20 < ma60:
+                score -= 4      # 完美空頭排列
                 trend = "bearish"
+            elif ma5 < ma20:
+                score -= 2
+                trend = "bearish"
+        elif ma5 and ma20:
+            if ma5 > ma20:
+                score += 3
+                trend = "bullish_weak"
             else:
-                trend = "neutral"
-        else:
-            trend = "neutral"
+                score -= 2
+                trend = "bearish"
 
-        # MA5 黃金交叉 MA20
+        # ── 股價 vs 均線位置（4分）──────────────────────────
+        if ma20:
+            if cur > ma20:
+                score += 2
+            else:
+                score -= 2
+        if ma60:
+            if cur > ma60:
+                score += 2
+            else:
+                score -= 2
+
+        # ── 均線斜率（3分）：MA20 現值 vs 5日前 MA20 ────────
+        if n >= 25:
+            ma20_prev = float(np.mean(close[-25:-5]))
+            ma20_now  = float(np.mean(close[-20:]))
+            if ma20_now > ma20_prev * 1.001:
+                score += 2
+                slope_direction = "up"
+            elif ma20_now < ma20_prev * 0.999:
+                score -= 1
+                slope_direction = "down"
+        if n >= 65 and ma60:
+            ma60_prev = float(np.mean(close[-65:-5]))
+            ma60_now  = float(np.mean(close[-60:]))
+            if ma60_now > ma60_prev * 1.001:
+                score += 1
+
+        # ── 乖離率（3分）────────────────────────────────────
+        if ma20 and ma20 > 0:
+            deviation = round((cur - ma20) / ma20 * 100, 2)
+            if 0 <= deviation < 5:
+                score += 2      # 健康位置，未過熱
+            elif 5 <= deviation < 10:
+                score += 1
+            elif deviation >= 15:
+                score -= 2      # 過度乖離，追高風險
+            elif deviation >= 10:
+                score -= 1
+            # 略低於 MA20（-5% 到 0）：中性，讓 setup 判斷
+            elif deviation < -5:
+                score -= 1      # 跌到 MA20 下方一段，偏空
+
+        # ── 黃金/死亡交叉（3分）─────────────────────────────
         if ma5 and ma20 and n >= 21:
-            prev_ma5 = float(np.mean(close[-6:-1]))
+            prev_ma5  = float(np.mean(close[-6:-1]))
             prev_ma20 = float(np.mean(close[-21:-1]))
             if prev_ma5 < prev_ma20 and ma5 >= ma20:
-                score += 3
+                score += 3      # MA5 黃金交叉 MA20
                 if trend not in ("bullish",):
                     trend = "bullish_weak"
+            elif prev_ma5 > prev_ma20 and ma5 < ma20:
+                score -= 2      # MA5 死亡交叉 MA20
+                if trend not in ("bearish",):
+                    trend = "bearish"
 
-        return max(0.0, min(score, 20)), trend, ma_vals
+        return max(0.0, min(score, 20)), trend, ma_vals, deviation, slope_direction
 
     def _analyze_price_structure(
         self, close: np.ndarray, high: np.ndarray, low: np.ndarray, volume: np.ndarray
@@ -416,32 +488,46 @@ class TechnicalAnalyzer:
 
     def _detect_setup(self, r: TechnicalResult, ma_vals: Dict, close: np.ndarray) -> str:
         """
-        判斷 Setup 類型：
-        breakout     — 近新高 + 量增 + MACD 正向
-        pullback_hold — 回踩 MA20 守穩 + 未破支撐
-        trending     — 均線多頭排列 + 穩定上漲
+        Setup 判斷優先順序（高優先先判斷）：
+        breakdown    — 跌破 MA20 且均線下彎：賣出訊號
+        breakout     — 近20日新高 + 放量 + MACD 正向：突破買點
+        pullback_buy — 多頭排列中回踩 MA10（5%內）縮量守穩：較佳進場點
+        pullback_hold — 多頭排列中回踩 MA20（3%內）守穩：次優進場點
+        trending     — 均線多頭排列 + HH/HL：趨勢延伸
         none         — 無明確型態
         """
+        ma10 = ma_vals.get("ma10")
         ma20 = ma_vals.get("ma20")
-        ma60 = ma_vals.get("ma60")
         cur = r.close
 
         if cur is None:
             return "none"
 
-        # Breakout：近20日新高附近 + MACD 正向 + 量比 >= 1.2
+        # Breakdown：跌破 MA20 且 MA 趨勢偏空（含放量加權）
+        if ma20 and cur < ma20 and r.ma_trend == "bearish":
+            return "breakdown"
+
+        # Breakout：近20日新高 + MACD 正向
+        # 有量突破 vs 無量突破 → 均算 breakout，量的差異由 vol_ratio 顯示
         if (r.breakout_20d or r.near_20d_high) and \
-           r.macd_signal in ("golden", "golden_strong") and \
-           r.vol_ratio is not None and r.vol_ratio >= 1.2:
+           r.macd_signal in ("golden", "golden_strong"):
             return "breakout"
 
-        # Pullback Hold：回踩 MA20 在3%內、仍在 MA20 上
-        if ma20 and (0 <= (cur - ma20) / ma20 <= 0.03) and \
+        # Pullback Buy：多頭排列，回踩 MA10 附近（0-5%以上）且縮量
+        # 代表健康拉回而非趨勢破壞，是較佳的低風險進場點
+        if ma10 and r.ma_trend in ("bullish", "bullish_weak") and \
+           0 <= (cur - ma10) / ma10 <= 0.05 and \
+           r.macd_signal != "dead" and \
+           (r.vol_ratio is None or r.vol_ratio <= 1.2):   # 縮量回踩更健康
+            return "pullback_buy"
+
+        # Pullback Hold：多頭排列，回踩 MA20 在3%以內守穩
+        if ma20 and 0 <= (cur - ma20) / ma20 <= 0.03 and \
            r.ma_trend in ("bullish", "bullish_weak") and \
            r.macd_signal != "dead":
             return "pullback_hold"
 
-        # Trending：MA5>MA20>MA60，HH/HL
+        # Trending：完整多頭排列 + HH/HL 結構
         if r.ma_trend == "bullish" and r.hh_hl_structure:
             return "trending"
 
@@ -449,19 +535,24 @@ class TechnicalAnalyzer:
 
     def _build_summary(self, r: TechnicalResult) -> str:
         setup_desc = {
-            "breakout": "突破型態：接近或站上20日新高",
-            "pullback_hold": "回踩守穩：回踩均線後守住",
-            "trending": "趨勢延伸：均線多頭排列，持續向上",
-            "none": "無明確型態",
+            "breakout":      "突破型態：站上20日新高",
+            "pullback_buy":  "回踩買點：多頭排列中縮量回踩MA10",
+            "pullback_hold": "回踩守穩：回踩MA20後守住",
+            "trending":      "趨勢延伸：均線多頭排列持續向上",
+            "breakdown":     "趨勢破壞：跌破MA20且均線下彎",
+            "none":          "無明確型態",
         }
         parts = [setup_desc.get(r.setup_type, "")]
         ma_desc = {
-            "bullish": "均線多頭排列",
+            "bullish":      "均線多頭排列",
             "bullish_weak": "短均線在長均線上",
-            "bearish": "均線空頭排列",
-            "neutral": "均線方向中性",
+            "bearish":      "均線空頭排列",
+            "neutral":      "均線方向中性",
         }
         parts.append(ma_desc.get(r.ma_trend, ""))
+        if r.ma_deviation20 is not None:
+            sign = "+" if r.ma_deviation20 >= 0 else ""
+            parts.append(f"MA20乖離{sign}{r.ma_deviation20:.1f}%")
         if r.vol_ratio:
             parts.append(f"量比 {r.vol_ratio:.1f}×")
         if r.rsi:
