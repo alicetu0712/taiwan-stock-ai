@@ -643,7 +643,8 @@ def load_price_chart_data(stock_id: str, days: int = 120) -> pd.DataFrame:
             ]
         )
         df = df.sort_values("date").reset_index(drop=True)
-        df["date"] = pd.to_datetime(df["date"])
+        # 不轉 datetime：macOS ARM64 + pandas3 + numpy2 + Python3.13 會在 datetime array 操作時 SIGBUS crash
+        df["date"] = df["date"].astype(str)
         return df
     except Exception as e:
         logger.warning(f"load_price_chart_data({stock_id}) failed: {e}")
