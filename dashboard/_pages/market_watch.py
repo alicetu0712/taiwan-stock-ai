@@ -125,7 +125,7 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
                         name=ma_key.upper(),
                         line=dict(color=mc["color"], width=mc["width"], dash=mc["dash"]),
                         mode="lines",
-                        hovertemplate=f"<b>%{{x|%m/%d}}</b><br>{ma_key.upper()} %{{y:.1f}}<extra></extra>",
+                        hovertemplate=f"{ma_key.upper()} %{{y:.1f}}<extra></extra>",
                     ),
                     row=1, col=1,
                 )
@@ -198,13 +198,20 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             bgcolor="rgba(0,0,0,0)",
             font=dict(size=10),
         ),
-        hovermode="x unified",
+        hovermode="x",
         margin=dict(l=0, r=0, t=10, b=0),
         xaxis2=dict(
+            type="category",
             showgrid=True, gridcolor=_GRID_COLOR,
-            showticklabels=True, tickformat="%m/%d",
+            showticklabels=True,
+            tickangle=-45, tickfont=dict(size=9),
+            nticks=10,
         ),
-        xaxis=dict(showgrid=False, showticklabels=False, rangeslider=dict(visible=False)),
+        xaxis=dict(
+            type="category",
+            showgrid=False, showticklabels=False,
+            rangeslider=dict(visible=False),
+        ),
         yaxis=dict(
             showgrid=True, gridcolor=_GRID_COLOR,
             side="right",
