@@ -6,6 +6,7 @@ database.py — SQLite 資料庫與 SQLAlchemy 設定
 """
 
 import logging
+from datetime import date as _date
 from datetime import datetime
 from typing import Optional
 
@@ -26,6 +27,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 logger = logging.getLogger(__name__)
+
+# ── Research / Forward 邊界（固定，永不隨今日日期移動）─────────
+# In-Sample  : analysis_results.date < RESEARCH_CUTOFF_DATE
+# Out-of-Sample: forward_signals.trade_date >= RESEARCH_CUTOFF_DATE
+RESEARCH_CUTOFF_DATE: _date = _date(2026, 10, 9)
+
+MODEL_VERSION = "v6.0"
 
 
 class Base(DeclarativeBase):
@@ -333,6 +341,43 @@ class DailyReport(Base):
     content_md = Column(Text)
     strategy_version = Column(String(20), default="v6.0")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ForwardSignal(Base):
+    """
+    Forward validation signals — append-only，features 在建立當下凍結。
+
+    Rules:
+      - (trade_date, stock_id) UNIQUE — 重複資料只 skip，永不 UPDATE
+      - locked_at 記錄凍結時間戳
+      - 即使演算法改版，也禁止回頭覆寫歷史記錄
+    """
+
+    __tablename__ = "forward_signals"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "stock_id", name="uq_fs_date_stock"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    stock_id = Column(String(10), nullable=False, index=True)
+    stock_name = Column(String(50))
+
+    # ── 凍結的 feature snapshot ─────────────────────────────
+    pt_score = Column(Float)           # price_trend_score
+    setup_type = Column(String(20))
+    trade_signal = Column(String(20))
+    ma20_gap = Column(Float)
+    ma60_gap = Column(Float)           # (close − MA60) / MA60 × 100
+    ma60_slope = Column(String(10))    # "up" / "down" / "flat"
+    vol_ratio = Column(Float)
+    total_score = Column(Float)
+    timing_score = Column(Float)
+    behavior_score = Column(Float)
+    rec_level = Column(String(5))
+    model_version = Column(String(20), default=MODEL_VERSION)
+
+    locked_at = Column(DateTime, default=datetime.utcnow)
 
 
 class PipelineFunnel(Base):

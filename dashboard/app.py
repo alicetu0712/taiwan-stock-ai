@@ -1,6 +1,5 @@
 """
-dashboard/app.py — Responsive Research Dashboard (thin router)
-電腦：寬版多欄  |  手機：窄版單欄（CSS 自動適應）
+dashboard/app.py — Research Dashboard (thin router)
 
 頁面邏輯已拆分至 dashboard/pages/：
   overview.py   — 今日分析
@@ -64,90 +63,35 @@ html, body, [class*="css"] {
 }
 #MainMenu, footer { visibility: hidden; }
 
-/* ══ 電腦版（≥ 769px）══ */
-@media (min-width: 769px) {
-    .block-container { padding: 1.5rem 2rem 2rem 2rem !important; max-width: 100% !important; }
-    .top-bar { display: none !important; }
-    .stat-grid { grid-template-columns: repeat(4, 1fr) !important; }
-    .rec-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    .stTabs [data-baseweb="tab-list"] {
-        background: transparent !important; border-bottom: 2px solid #f0f0f0 !important;
-        border-radius: 0 !important; padding: 0 !important; gap: 0 !important; margin-bottom: 1.5rem;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 0 !important; font-size: 0.95rem !important; font-weight: 600 !important;
-        padding: 10px 20px !important; height: auto !important;
-        border-bottom: 3px solid transparent !important;
-    }
-    .stTabs [aria-selected="true"] {
-        background: transparent !important; box-shadow: none !important;
-        color: #667eea !important; border-bottom: 3px solid #667eea !important;
-    }
-    .stat-box .stat-val { font-size: 2rem !important; }
-    .market-card .index-val { font-size: 2.8rem !important; }
-    section[data-testid="stSidebar"] {
-        background: #f5f6fa !important;
-        min-width: 210px !important; max-width: 220px !important;
-        border-right: 1px solid #e8eaf0 !important;
-    }
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] span { color: #444 !important; }
+/* ══ 版面 ══ */
+.block-container { padding: 1.5rem 2rem 2rem 2rem !important; max-width: 100% !important; }
+.stat-grid { grid-template-columns: repeat(4, 1fr) !important; }
+.rec-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.stTabs [data-baseweb="tab-list"] {
+    background: transparent !important; border-bottom: 2px solid #f0f0f0 !important;
+    border-radius: 0 !important; padding: 0 !important; gap: 0 !important; margin-bottom: 1.5rem;
 }
-
-/* ══ 手機版（≤ 768px）══ */
-@media (max-width: 768px) {
-    .block-container { padding: 0 0.75rem 5rem 0.75rem !important; max-width: 100% !important; }
-    section[data-testid="stSidebar"] { display: none !important; }
-    button[data-testid="collapsedControl"] { display: none !important; }
-    [data-testid="stSidebarCollapsedControl"] { display: none !important; }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0 !important; background: #f8f9fa; border-radius: 12px; padding: 4px;
-        margin-bottom: 1rem; display: flex !important;
-    }
-    .stTabs [data-baseweb="tab"] {
-        flex: 1 !important; border-radius: 8px; font-size: 0.62rem !important;
-        font-weight: 600 !important; padding: 6px 0px !important; height: 38px !important;
-        min-width: 0 !important; overflow: hidden; text-align: center !important;
-        white-space: nowrap !important; letter-spacing: -0.02em;
-    }
-    .stTabs [aria-selected="true"] {
-        background: white !important; box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important;
-        color: #1a1a2e !important; border-bottom: none !important;
-    }
-    .rec-grid { display: block; }
-    .stButton > button { width: 100%; height: 48px; border-radius: 12px; font-weight: 600; }
-    [data-testid="metric-container"] {
-        background: white; border-radius: 12px; padding: 10px 8px !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    }
-    [data-testid="stHorizontalBlock"] {
-        flex-wrap: wrap !important;
-    }
-    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-        flex: 0 0 100% !important;
-        min-width: 100% !important;
-        width: 100% !important;
-    }
-    [data-testid="metric-container"] [data-testid="stMetricValue"] {
-        font-size: 1.1rem !important;
-    }
-    [data-testid="metric-container"] [data-testid="stMetricLabel"] {
-        font-size: 0.7rem !important;
-    }
-    .stExpander p { word-break: break-all; font-size: 0.82rem !important; }
-    [data-testid="stDataFrame"] { overflow-x: auto !important; }
-    .stDataFrame iframe { min-width: 100%; }
+.stTabs [data-baseweb="tab"] {
+    border-radius: 0 !important; font-size: 0.95rem !important; font-weight: 600 !important;
+    padding: 10px 20px !important; height: auto !important;
+    border-bottom: 3px solid transparent !important;
 }
+.stTabs [aria-selected="true"] {
+    background: transparent !important; box-shadow: none !important;
+    color: #667eea !important; border-bottom: 3px solid #667eea !important;
+}
+.stat-box .stat-val { font-size: 2rem !important; }
+.market-card .index-val { font-size: 2.8rem !important; }
+section[data-testid="stSidebar"] {
+    background: #f5f6fa !important;
+    min-width: 210px !important; max-width: 220px !important;
+    border-right: 1px solid #e8eaf0 !important;
+}
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] span { color: #444 !important; }
 
 /* ══ 共用元件 ══ */
-.top-bar {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-    color: white; padding: 14px 16px; border-radius: 0 0 16px 16px;
-    margin: -0.5rem -0.75rem 1rem -0.75rem; text-align: center;
-}
-.top-bar h1 { font-size: 1.1rem; margin: 0; font-weight: 700; }
-.top-bar p  { font-size: 0.68rem; margin: 3px 0 0 0; opacity: 0.65; }
 
 .market-card {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -244,6 +188,7 @@ def main() -> None:
     from dashboard._pages.overview import page_today
     from dashboard._pages.position import page_positions
     from dashboard._pages.reports import page_history, page_search
+    from dashboard._pages.research_backtest import page_research_backtest
 
     if "selected_date" not in st.session_state:
         st.session_state["selected_date"] = date.today()
@@ -295,16 +240,6 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    st.markdown(
-        """
-    <div class="top-bar">
-      <h1>📈 台股 AI 研究平台</h1>
-      <p>v6.8 · 研究輔助工具 · 不構成投資建議</p>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
-
     tabs = st.tabs(
         [
             "📊今日",
@@ -313,6 +248,7 @@ def main() -> None:
             "📋歷史",
             "💼模型持倉",
             "🔬模型驗證",
+            "🧪研究回測",
             "🗂我的交易",
             "🩺資料健康",
             "📖說明",
@@ -334,12 +270,14 @@ def main() -> None:
     with tabs[5]:
         page_backtest()
     with tabs[6]:
-        page_my_trades()
+        page_research_backtest()
     with tabs[7]:
-        page_data_health()
+        page_my_trades()
     with tabs[8]:
-        page_guide()
+        page_data_health()
     with tabs[9]:
+        page_guide()
+    with tabs[10]:
         page_settings(sel_date)
 
     st.markdown(

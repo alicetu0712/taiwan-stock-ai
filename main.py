@@ -661,6 +661,26 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
         except Exception as e:
             logger.warning(f"[Step 9b] 持倉管理失敗（不影響主流程）：{e}")
 
+        # ── Step 9c: 凍結 Forward Signal（cutoff 當日起，append-only）──
+        from src.database import RESEARCH_CUTOFF_DATE
+        if trade_date >= RESEARCH_CUTOFF_DATE:
+            try:
+                from src.database import AnalysisResult
+                from src.services.research_backtest_service import write_forward_signals
+
+                today_ars = (
+                    session.query(AnalysisResult)
+                    .filter(AnalysisResult.date == trade_date)
+                    .all()
+                )
+                inserted = write_forward_signals(session, trade_date, today_ars)
+                logger.info(
+                    f"[Step 9c] Forward signal 凍結完成："
+                    f"{inserted} 筆新增，{len(today_ars) - inserted} 筆已存在（skip）"
+                )
+            except Exception as e:
+                logger.warning(f"[Step 9c] Forward signal 凍結失敗（不影響主流程）：{e}")
+
         # ── Step 10: 產生報告 ────────────────────────────────
         logger.info("[Step 10] Generating daily report...")
         watch_list_data = [
