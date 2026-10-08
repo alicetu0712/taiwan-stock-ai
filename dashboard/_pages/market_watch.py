@@ -298,10 +298,10 @@ def _render_setup_banner(analysis: dict, stock_id: str, stock_name: str) -> None
         font-weight:700;
     ">{sig['label']}</span>
   </div>
-  <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:0.8rem;color:#8b949e">
+  <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:0.8rem;color:#111827">
     <div>
       <span style="display:block;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em">PriceTrend</span>
-      <span style="font-size:1.1rem;font-weight:700;color:#c9d1d9">{pt_str}</span>
+      <span style="font-size:1.1rem;font-weight:700;color:#111827">{pt_str}</span>
     </div>
     <div>
       <span style="display:block;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em">MA20乖離</span>
@@ -309,11 +309,11 @@ def _render_setup_banner(analysis: dict, stock_id: str, stock_name: str) -> None
     </div>
     <div>
       <span style="display:block;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em">量比</span>
-      <span style="font-size:1.1rem;font-weight:700;color:#c9d1d9">{vol_str}</span>
+      <span style="font-size:1.1rem;font-weight:700;color:#111827">{vol_str}</span>
     </div>
     <div>
       <span style="display:block;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em">等級</span>
-      <span style="font-size:1.1rem;font-weight:700;color:#c9d1d9">{level}</span>
+      <span style="font-size:1.1rem;font-weight:700;color:#111827">{level}</span>
     </div>
   </div>
 </div>
