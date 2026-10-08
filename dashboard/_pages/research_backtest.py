@@ -160,12 +160,12 @@ def page_research_backtest() -> None:
     with tab_r:
         res = _load_research()
         if not res:
-            st.error("Research Backtest 計算失敗（空結果）。側欄の「🔄 重新整理資料」を押して再試行してください。")
+            st.error("Research Backtest 計算失敗（空結果）。請點側欄「🔄 重新整理資料」再試。")
             return
         if "_error" in res:
-            st.error("Research Backtest 計算失敗")
+            st.error("Research Backtest 計算失敗，詳細錯誤如下：")
             st.code(res["_error"], language="python")
-            st.info("「🔄 重新整理資料」ボタンを押してキャッシュをクリアして再試行してください。")
+            st.info("請點側欄「🔄 重新整理資料」清除快取後再試。")
             return
 
         n_total = res.get("n_total_candidates", 0)
