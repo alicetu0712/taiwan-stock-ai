@@ -105,11 +105,6 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             name="K線",
             increasing=dict(line=dict(color="#ef5350", width=1), fillcolor="#ef5350"),
             decreasing=dict(line=dict(color="#26a69a", width=1), fillcolor="#26a69a"),
-            hovertext=[
-                f"開 {o:.1f}　高 {h:.1f}　低 {l:.1f}　收 {c:.1f}"
-                for o, h, l, c in zip(df["open"], df["high"], df["low"], df["close"])
-            ],
-            hoverinfo="x+text",
         ),
         row=1, col=1,
     )
