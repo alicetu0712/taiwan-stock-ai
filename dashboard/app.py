@@ -70,29 +70,34 @@ html, body, [class*="css"] {
 .block-container { padding: 1.5rem 2rem 2rem 2rem !important; max-width: 100% !important; }
 .stat-grid { grid-template-columns: repeat(4, 1fr) !important; }
 .rec-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-.stTabs, .stTabs > div {
-    overflow: visible !important;
-}
 .stTabs [data-baseweb="tab-list"] {
-    background: transparent !important; border-bottom: 2px solid #f0f0f0 !important;
-    border-radius: 0 !important; gap: 0 !important; margin-bottom: 1.5rem;
-    margin-top: 8px !important; padding: 0 !important;
-    display: flex !important; flex-wrap: nowrap !important;
-    overflow-x: auto !important; overflow-y: visible !important;
+    background: transparent !important;
+    border-bottom: 2px solid #f0f0f0 !important;
+    border-radius: 0 !important;
+    gap: 0 !important;
+    margin-bottom: 1.5rem !important;
+    padding-top: 10px !important;
+    padding-bottom: 0 !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
     align-items: flex-end !important;
-    scrollbar-width: none;
+    scrollbar-width: none !important;
     -webkit-overflow-scrolling: touch;
+    box-sizing: content-box !important;
 }
 .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar { display: none; }
 .stTabs [data-baseweb="tab"] {
-    border-radius: 0 !important; font-size: 0.85rem !important; font-weight: 600 !important;
-    padding: 10px 12px 8px 12px !important; line-height: 1.6 !important;
+    border-radius: 0 !important;
+    font-size: 0.85rem !important;
+    font-weight: 600 !important;
+    padding: 4px 12px 8px 12px !important;
+    line-height: 1.5 !important;
     border-bottom: 3px solid transparent !important;
-    flex-shrink: 0 !important; overflow: visible !important;
-    white-space: nowrap !important; height: auto !important;
-}
-.stTabs [data-baseweb="tab"] *, .stTabs [data-baseweb="tab"] div {
-    overflow: visible !important; line-height: 1.6 !important;
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    display: flex !important;
+    align-items: center !important;
 }
 .stTabs [aria-selected="true"] {
     background: transparent !important; box-shadow: none !important;
