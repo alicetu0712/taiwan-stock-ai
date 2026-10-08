@@ -182,8 +182,20 @@ def page_today(selected_date: date) -> None:
             logger.debug(f"today_log DB fallback failed: {e}")
     analyzed = int(today_log.iloc[0]["analyzed"]) if not today_log.empty else 0
     qualified = int(today_log.iloc[0]["qualified"]) if not today_log.empty else 0
-    recs_cnt = int(today_log.iloc[0]["recs"]) if not today_log.empty else 0
     status = today_log.iloc[0]["status"] if not today_log.empty else "—"
+
+    # 直接從 recommendations 表算，避免 execution_log 記錄值與實際不符
+    try:
+        from sqlalchemy import text as _text
+        from src.database import get_session as _gs
+        _s = _gs()
+        recs_cnt = _s.execute(
+            _text("SELECT COUNT(*) FROM recommendations WHERE date=:d AND tier='recommend'"),
+            {"d": selected_date},
+        ).scalar() or 0
+        _s.close()
+    except Exception:
+        recs_cnt = int(today_log.iloc[0]["recs"]) if not today_log.empty else 0
 
     st.markdown(
         f"""
@@ -221,7 +233,7 @@ def page_today(selected_date: date) -> None:
       </div>
       <div class="stat-box">
         <div class="stat-val" style="color:#764ba2">{recs_cnt}</div>
-        <div class="stat-lbl">今日推薦</div>
+        <div class="stat-lbl">Core Picks</div>
       </div>
       <div class="stat-box">
         <div class="stat-val" style="font-size:1.4rem">{'✅' if status == 'success' else '❌' if status == 'failed' else '—'}</div>
