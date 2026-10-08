@@ -14,8 +14,8 @@ from pathlib import Path
 _db_path = Path(__file__).resolve().parent.parent / "src" / "database.py"
 _db_spec = _ilu.spec_from_file_location("src.database", str(_db_path))
 _db_mod = _ilu.module_from_spec(_db_spec)
-sys.modules.setdefault("src.database", _db_mod)
-_db_spec.loader.exec_module(_db_mod)
+_db_spec.loader.exec_module(_db_mod)       # populate first
+sys.modules["src.database"] = _db_mod      # always overwrite (handles stale cached module)
 
 get_session = _db_mod.get_session
 UserTrade = _db_mod.UserTrade

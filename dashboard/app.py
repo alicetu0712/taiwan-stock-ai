@@ -72,9 +72,10 @@ html, body, [class*="css"] {
     border-radius: 0 !important; padding: 0 !important; gap: 0 !important; margin-bottom: 1.5rem;
 }
 .stTabs [data-baseweb="tab"] {
-    border-radius: 0 !important; font-size: 0.95rem !important; font-weight: 600 !important;
-    padding: 10px 20px !important; height: auto !important;
+    border-radius: 0 !important; font-size: 0.85rem !important; font-weight: 600 !important;
+    padding: 8px 10px !important; height: auto !important;
     border-bottom: 3px solid transparent !important;
+    white-space: nowrap !important;
 }
 .stTabs [aria-selected="true"] {
     background: transparent !important; box-shadow: none !important;
