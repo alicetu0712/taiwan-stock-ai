@@ -90,16 +90,16 @@ class PriceTrendAnalyzer:
         result.ma20 = ma_vals.get("ma20")
         result.ma60 = ma_vals.get("ma60")
 
-        # ── ① MA Structure（12分）────────────────────────────────
-        ms_score, ma_trend = self._score_ma_structure(cur, ma_vals)
-        result.ma_structure_score = ms_score
-        result.ma_trend = ma_trend
-
-        # ── ② MA Slope（8分）─────────────────────────────────────
+        # ── ① MA Slope（先算，MA Structure 需要 ma60_slope 判斷 MA60 Zone）──
         sl_score, ma20_slope, ma60_slope = self._score_ma_slope(close)
         result.ma_slope_score = sl_score
         result.ma20_slope = ma20_slope
         result.ma60_slope = ma60_slope
+
+        # ── ② MA Structure（12分）────────────────────────────────
+        ms_score, ma_trend = self._score_ma_structure(cur, ma_vals, ma60_slope)
+        result.ma_structure_score = ms_score
+        result.ma_trend = ma_trend
 
         # ── ③ Deviation（8分）────────────────────────────────────
         dv_score, ma20_gap, ma60_gap = self._score_deviation(cur, ma_vals)
@@ -153,7 +153,7 @@ class PriceTrendAnalyzer:
 
     # ── ① MA Structure ────────────────────────────────────────────
 
-    def _score_ma_structure(self, cur: float, mas: Dict) -> Tuple[float, str]:
+    def _score_ma_structure(self, cur: float, mas: Dict, ma60_slope: str = "flat") -> Tuple[float, str]:
         """多頭層級（12分）：完美排列最高，完美空頭最低"""
         ma5  = mas.get("ma5")
         ma10 = mas.get("ma10")
@@ -165,11 +165,16 @@ class PriceTrendAnalyzer:
             if cur > ma5 > ma20 > ma60:           return 10.0, "bullish"
             if cur > ma20 > ma60:                 return 8.0,  "bullish"
             if cur > ma20 and cur > ma60:         return 6.0,  "bullish_weak"
+            # MA60 Support Zone：specific before general neutral
+            # Price < MA20, near MA60 (±3%), MA20 > MA60, MA60 rising
+            if (cur < ma20 and ma20 > ma60 and ma60_slope == "up"
+                    and abs((cur - ma60) / ma60 * 100) <= 3.0):
+                return 5.0, "neutral"
             if cur > ma20 or cur > ma60:          return 4.0,  "neutral"
             if cur < ma5 < ma10 < ma20 < ma60:   return 0.0,  "bearish"
             if cur < ma20 < ma60:                 return 1.0,  "bearish"
-            # MA60 support zone: price pulled back below MA20 but near MA60, MA20 still > MA60
-            if cur < ma20 and ma20 > ma60 and abs((cur - ma60) / ma60) <= 0.05:
+            # MA60 support zone (from below): slightly below MA60 (within 5%), MA20 > MA60, MA60 rising
+            if cur < ma20 and ma20 > ma60 and ma60_slope == "up" and abs((cur - ma60) / ma60) <= 0.05:
                 return 4.0, "neutral"
             if cur < ma20:                        return 2.0,  "bearish"
             return 3.0, "neutral"
