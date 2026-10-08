@@ -277,7 +277,7 @@ def _render_setup_banner(analysis: dict, stock_id: str, stock_name: str) -> None
 ">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <div>
-      <span style="font-size:1.25rem;font-weight:800;color:#f0f6fc">{display_name}</span>
+      <span style="font-size:1.25rem;font-weight:800;color:#000000">{display_name}</span>
     </div>
     <span style="
         background:{sm['color']}33;
