@@ -199,7 +199,7 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             type="category",
             showgrid=True, gridcolor=_GRID_COLOR,
             showticklabels=True,
-            tickangle=-45, tickfont=dict(size=9),
+            tickangle=-45, tickfont=dict(size=10, color="#e6edf3"),
             nticks=10,
         ),
         xaxis=dict(
@@ -210,10 +210,12 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         yaxis=dict(
             showgrid=True, gridcolor=_GRID_COLOR,
             side="right",
+            tickfont=dict(size=11, color="#e6edf3"),
         ),
         yaxis2=dict(
             showgrid=True, gridcolor=_GRID_COLOR,
             side="right",
+            tickfont=dict(size=10, color="#e6edf3"),
         ),
         dragmode="pan",
     )
