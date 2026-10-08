@@ -604,3 +604,127 @@ def parse_recs_from_report(report: str) -> list:
             }
         )
     return results
+
+
+@st.cache_data(ttl=600)
+def load_price_chart_data(stock_id: str, days: int = 120) -> pd.DataFrame:
+    """個股最近 N 日 OHLCV，供 K 線圖使用。TTL=10 分鐘。"""
+    try:
+        from sqlalchemy import select
+
+        from src.database import DailyPrice, get_session
+
+        s = get_session()
+        rows = (
+            s.execute(
+                select(DailyPrice)
+                .where(DailyPrice.stock_id == stock_id.strip())
+                .order_by(DailyPrice.date.desc())
+                .limit(days)
+            )
+            .scalars()
+            .all()
+        )
+        s.close()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(
+            [
+                {
+                    "date":       r.date,
+                    "open":       r.open,
+                    "high":       r.high,
+                    "low":        r.low,
+                    "close":      r.close,
+                    "volume":     r.volume,
+                    "change_pct": r.change_pct,
+                }
+                for r in rows
+            ]
+        )
+        df = df.sort_values("date").reset_index(drop=True)
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+    except Exception as e:
+        logger.warning(f"load_price_chart_data({stock_id}) failed: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=600)
+def load_latest_pt_analysis(stock_id: str) -> dict:
+    """讀取個股最新一筆 AnalysisResult（V2 欄位），供看盤頁顯示。TTL=10 分鐘。"""
+    try:
+        from sqlalchemy import select
+
+        from src.database import AnalysisResult, get_session
+
+        s = get_session()
+        row = (
+            s.execute(
+                select(AnalysisResult)
+                .where(AnalysisResult.stock_id == stock_id.strip())
+                .order_by(AnalysisResult.date.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        s.close()
+        if not row:
+            return {}
+        return {
+            "date":              row.date,
+            "price_trend_score": row.price_trend_score,
+            "timing_score":      row.timing_score,
+            "quality_score":     row.quality_score,
+            "behavior_score":    row.behavior_score,
+            "total_score":       row.total_score,
+            "setup_type":        getattr(row, "setup_type", None),
+            "ma20_gap":          getattr(row, "ma20_gap", None),
+            "volume_ratio":      getattr(row, "volume_ratio", None),
+            "trade_signal":      getattr(row, "trade_signal", None),
+            "rec_level":         row.rec_level,
+        }
+    except Exception as e:
+        logger.warning(f"load_latest_pt_analysis({stock_id}) failed: {e}")
+        return {}
+
+
+@st.cache_data(ttl=600)
+def load_watchable_stocks(sel_date: date) -> list[dict]:
+    """回傳看盤用股票清單：今日推薦 + Watch List，含名稱。TTL=10 分鐘。"""
+    try:
+        from sqlalchemy import select
+
+        from src.database import Recommendation, Stock, get_session
+
+        s = get_session()
+        recs = (
+            s.execute(
+                select(Recommendation)
+                .where(Recommendation.date == sel_date)
+                .order_by(Recommendation.tier, Recommendation.date.desc())
+            )
+            .scalars()
+            .all()
+        )
+        stock_names = {
+            r.stock_id: r.name
+            for r in s.execute(select(Stock)).scalars().all()
+            if r.name
+        }
+        s.close()
+        seen = set()
+        result = []
+        for r in recs:
+            if r.stock_id not in seen:
+                seen.add(r.stock_id)
+                result.append({
+                    "sid":  r.stock_id,
+                    "name": r.stock_name or stock_names.get(r.stock_id, ""),
+                    "tier": r.tier or "recommend",
+                })
+        return result
+    except Exception as e:
+        logger.warning(f"load_watchable_stocks failed: {e}")
+        return []
