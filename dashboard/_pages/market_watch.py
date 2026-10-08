@@ -262,7 +262,7 @@ def _render_setup_banner(analysis: dict, stock_id: str, stock_name: str) -> None
 
     st.markdown(
         f"""
-<div style="
+<div class="setup-banner" style="
     background: {sm['bg']}22;
     border: 1px solid {sm['color']}66;
     border-left: 4px solid {sm['color']};

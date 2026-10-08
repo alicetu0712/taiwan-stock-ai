@@ -62,14 +62,9 @@ html, body, [class*="css"] {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 #MainMenu, footer { visibility: hidden; }
-[data-testid="stMarkdownContainer"] span[style*="color:#000000"],
-[data-testid="stMarkdownContainer"] span[style*="color: #000000"] {
-    color: #000000 !important;
-}
-[data-testid="stMarkdownContainer"] [style*="color:#111827"],
-[data-testid="stMarkdownContainer"] [style*="color: #111827"] {
-    color: #111827 !important;
-}
+.setup-banner { color: #000000 !important; }
+.setup-banner span { color: #000000 !important; }
+.setup-banner span[style*="background"] { color: inherit !important; }
 
 /* ══ 版面 ══ */
 .block-container { padding: 1.5rem 2rem 2rem 2rem !important; max-width: 100% !important; }
