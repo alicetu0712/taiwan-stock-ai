@@ -173,9 +173,6 @@ class PriceTrendAnalyzer:
             if cur > ma20 or cur > ma60:          return 4.0,  "neutral"
             if cur < ma5 < ma10 < ma20 < ma60:   return 0.0,  "bearish"
             if cur < ma20 < ma60:                 return 1.0,  "bearish"
-            # MA60 support zone (from below): slightly below MA60 (within 5%), MA20 > MA60, MA60 rising
-            if cur < ma20 and ma20 > ma60 and ma60_slope == "up" and abs((cur - ma60) / ma60) <= 0.05:
-                return 4.0, "neutral"
             if cur < ma20:                        return 2.0,  "bearish"
             return 3.0, "neutral"
 
