@@ -168,9 +168,9 @@ html, body, [class*="css"] {
 .stat-box .stat-lbl { font-size: 0.72rem; color: #888; margin-top: 5px; }
 
 .rec-card {
-    background: white; border-radius: 16px; padding: 18px; margin-bottom: 14px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.08); border: 1px solid #f0f0f0;
-    position: relative; overflow: hidden;
+    background: #ffffff !important; border-radius: 16px; padding: 18px; margin-bottom: 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12); border: 1px solid #e5e7eb;
+    position: relative; overflow: hidden; color: #111827 !important;
 }
 .rec-card::before {
     content: ''; position: absolute; left: 0; top: 0; bottom: 0;
@@ -182,8 +182,8 @@ html, body, [class*="css"] {
 .rec-card.grade-C::before     { background: #ff8800; }
 
 .rec-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
-.rec-name   { font-size: 1.15rem; font-weight: 800; color: #1a1a2e; }
-.rec-sid    { font-size: 0.8rem; color: #888; margin-top: 3px; }
+.rec-name   { font-size: 1.25rem; font-weight: 900; color: #111827; letter-spacing: -0.01em; }
+.rec-sid    { font-size: 0.82rem; color: #555; margin-top: 3px; font-weight: 600; }
 .rec-badge  { display: inline-block; padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 700; color: white; }
 .badge-Aplus { background: #00c851; }
 .badge-A     { background: #33b5e5; }
