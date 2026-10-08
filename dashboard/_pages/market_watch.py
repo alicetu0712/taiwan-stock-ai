@@ -94,15 +94,22 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         row_heights=[0.75, 0.25],
     )
 
-    # ── 收盤價線 ─────────────────────────────────────────────────
-    price_color = "#43a047" if df["close"].iloc[-1] >= df["close"].iloc[-2] else "#ef5350"
+    # ── K 線 ──────────────────────────────────────────────────────
     fig.add_trace(
-        go.Scatter(
-            x=df["date"], y=df["close"],
-            name="收盤",
-            line=dict(color=price_color, width=2),
-            mode="lines",
-            hovertemplate="<b>%{x|%m/%d}</b><br>收盤 %{y:.1f}<extra></extra>",
+        go.Candlestick(
+            x=df["date"],
+            open=df["open"],
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            name="K線",
+            increasing=dict(line=dict(color="#ef5350", width=1), fillcolor="#ef5350"),
+            decreasing=dict(line=dict(color="#26a69a", width=1), fillcolor="#26a69a"),
+            hovertext=[
+                f"開 {o:.1f}　高 {h:.1f}　低 {l:.1f}　收 {c:.1f}"
+                for o, h, l, c in zip(df["open"], df["high"], df["low"], df["close"])
+            ],
+            hoverinfo="x+text",
         ),
         row=1, col=1,
     )
@@ -197,7 +204,7 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             showgrid=True, gridcolor=_GRID_COLOR,
             showticklabels=True, tickformat="%m/%d",
         ),
-        xaxis=dict(showgrid=False, showticklabels=False),
+        xaxis=dict(showgrid=False, showticklabels=False, rangeslider=dict(visible=False)),
         yaxis=dict(
             showgrid=True, gridcolor=_GRID_COLOR,
             side="right",
