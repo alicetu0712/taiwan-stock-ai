@@ -32,14 +32,18 @@ FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 # 防止 shell 殘留的舊 DATABASE_URL 污染連線
 _raw_db_url = os.getenv("DATABASE_URL", "")
 _neon_url = os.getenv("NEON_URL", "")
+def _to_psycopg2_url(url: str) -> str:
+    url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://") and "+psycopg" not in url:
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
+
 if DB_PATH.exists():
     DATABASE_URL = f"sqlite:///{DB_PATH}"
 elif _neon_url:
-    DATABASE_URL = _neon_url.replace("postgres://", "postgresql://", 1)
-elif _raw_db_url.startswith("postgres://"):
-    DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql://", 1)
-elif _raw_db_url.startswith("postgresql://"):
-    DATABASE_URL = _raw_db_url
+    DATABASE_URL = _to_psycopg2_url(_neon_url)
+elif _raw_db_url.startswith("postgres"):
+    DATABASE_URL = _to_psycopg2_url(_raw_db_url)
 else:
     DATABASE_URL = f"sqlite:///{DB_PATH}"
 
