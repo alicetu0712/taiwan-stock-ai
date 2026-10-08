@@ -71,29 +71,19 @@ html, body, [class*="css"] {
     background: transparent !important; border-bottom: 2px solid #f0f0f0 !important;
     border-radius: 0 !important; padding: 0 !important; gap: 0 !important; margin-bottom: 1.5rem;
     display: flex !important; flex-wrap: nowrap !important;
-    overflow-x: auto !important; overflow-y: visible !important;
-    -webkit-overflow-scrolling: touch;
+    overflow-x: auto !important;
+    min-height: 48px !important;   /* overflow-x:auto が overflow-y:visible を auto に変換するため高さ確保 */
+    align-items: stretch !important;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
 }
 .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar { display: none; }
 .stTabs [data-baseweb="tab"] {
     border-radius: 0 !important; font-size: 0.85rem !important; font-weight: 600 !important;
-    padding: 8px 10px !important; height: auto !important;
+    padding: 8px 10px !important;
     border-bottom: 3px solid transparent !important;
     flex-shrink: 0 !important;
-    max-width: none !important;
-    width: auto !important;
-    overflow: visible !important;
-    clip-path: none !important;
-}
-/* 內層元素（BaseWeb button 直下 div/span）的截斷修正 */
-.stTabs [data-baseweb="tab"] > div,
-.stTabs [data-baseweb="tab"] > span,
-.stTabs [data-baseweb="tab"] * {
     white-space: nowrap !important;
-    overflow: visible !important;
-    text-overflow: clip !important;
-    max-width: none !important;
 }
 .stTabs [aria-selected="true"] {
     background: transparent !important; box-shadow: none !important;
