@@ -191,7 +191,7 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         legend=dict(
             orientation="h", x=0, y=1.02,
             bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10),
+            font=dict(size=10, color="#ffffff"),
         ),
         hovermode="x",
         margin=dict(l=0, r=0, t=10, b=0),
