@@ -142,11 +142,7 @@ class ResearchBacktestService:
           n_total_candidates  — cutoff 前 analysis_results 總筆數
           n_usable            — 有 20D forward return 的筆數
         """
-        try:
-            raw_df, n_total = self._build_raw_df()
-        except Exception:
-            logger.exception("ResearchBacktestService.compute failed")
-            return {}
+        raw_df, n_total = self._build_raw_df()
 
         if raw_df.empty:
             return {
