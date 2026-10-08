@@ -70,8 +70,8 @@ html, body, [class*="css"] {
 .stTabs [data-baseweb="tab-list"] {
     background: transparent !important; border-bottom: 2px solid #f0f0f0 !important;
     border-radius: 0 !important; padding: 0 !important; gap: 0 !important; margin-bottom: 1.5rem;
+    display: flex !important; flex-wrap: nowrap !important;
     overflow-x: auto !important; overflow-y: visible !important;
-    flex-wrap: nowrap !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
 }
@@ -80,11 +80,20 @@ html, body, [class*="css"] {
     border-radius: 0 !important; font-size: 0.85rem !important; font-weight: 600 !important;
     padding: 8px 10px !important; height: auto !important;
     border-bottom: 3px solid transparent !important;
-    white-space: nowrap !important;
     flex-shrink: 0 !important;
-    min-width: fit-content !important;
+    max-width: none !important;
+    width: auto !important;
     overflow: visible !important;
     clip-path: none !important;
+}
+/* 內層元素（BaseWeb button 直下 div/span）的截斷修正 */
+.stTabs [data-baseweb="tab"] > div,
+.stTabs [data-baseweb="tab"] > span,
+.stTabs [data-baseweb="tab"] * {
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    max-width: none !important;
 }
 .stTabs [aria-selected="true"] {
     background: transparent !important; box-shadow: none !important;
