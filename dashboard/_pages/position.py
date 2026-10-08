@@ -76,9 +76,9 @@ def load_positions(status: str = "active") -> list:
             logger.warning(f"load_positions SQLite failed: {e}")
             return []
     try:
-        import psycopg2
+        import psycopg
 
-        conn = psycopg2.connect(neon_url)
+        conn = psycopg.connect(neon_url)
         cur = conn.cursor()
         cur.execute(
             """

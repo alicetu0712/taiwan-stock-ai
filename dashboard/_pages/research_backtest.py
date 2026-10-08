@@ -89,10 +89,10 @@ def _load_forward():
         from dotenv import load_dotenv
         load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env", override=True)
 
-        import psycopg2
+        import psycopg
         url = os.getenv("NEON_URL") or os.getenv("DATABASE_URL") or ""
         if url.startswith("postgresql"):
-            conn = psycopg2.connect(url)
+            conn = psycopg.connect(url)
             cur = conn.cursor()
             cur.execute("""
                 SELECT trade_date, stock_id, stock_name,
