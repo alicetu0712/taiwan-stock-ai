@@ -76,15 +76,21 @@ html, body, [class*="css"] {
     border-radius: 0 !important;
     gap: 0 !important;
     margin-bottom: 1.5rem !important;
+    padding-bottom: 0 !important;
     display: flex !important;
     flex-wrap: nowrap !important;
-    align-items: flex-end !important;
+    overflow: visible !important;
+    align-items: center !important;
 }
 .stTabs [data-baseweb="tab"] {
     border-radius: 0 !important;
     font-size: 0.85rem !important;
     font-weight: 600 !important;
     padding: 8px 10px !important;
+    height: auto !important;
+    min-height: 36px !important;
+    overflow: visible !important;
+    line-height: 1.5 !important;
     border-bottom: 3px solid transparent !important;
     flex-shrink: 0 !important;
     white-space: nowrap !important;
