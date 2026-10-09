@@ -282,10 +282,81 @@ class TestComputeSignalQuality:
     def test_returns_empty_dict_on_db_error(self, monkeypatch):
         import src.services.backtest_service as svc
 
-        def _bad_session():
-            raise RuntimeError("DB down")
-
         monkeypatch.setattr("src.services.backtest_service.BacktestService.compute_signal_quality",
                             lambda min_obs=10: {})
         result = svc.BacktestService.compute_signal_quality()
         assert result == {}
+
+
+# ── compute_v1_v2_comparison regression tests ────────────────
+# 防止 stale .pyc 或重構誤刪 method 造成 Dashboard AttributeError
+
+
+class TestV1V2ComparisonRegression:
+    """
+    Regression guard: compute_v1_v2_comparison 必須留在 BacktestService。
+    若因重構被誤移或刪除，這些 tests 會在 CI 最先失敗。
+    """
+
+    def test_method_exists_on_backtest_service(self):
+        from src.services.backtest_service import BacktestService
+        assert hasattr(BacktestService, "compute_v1_v2_comparison"), (
+            "compute_v1_v2_comparison 已從 BacktestService 消失！"
+            "請確認是否被誤刪或 rename。"
+        )
+
+    def test_method_is_callable(self):
+        from src.services.backtest_service import BacktestService
+        assert callable(BacktestService.compute_v1_v2_comparison)
+
+    def test_method_is_static(self):
+        """應為 @staticmethod，可直接用 Class.method() 呼叫，不需要 instance。"""
+        from src.services.backtest_service import BacktestService
+        import inspect
+        # staticmethod 在 class.__dict__ 裡是 staticmethod 物件
+        raw = BacktestService.__dict__.get("compute_v1_v2_comparison")
+        assert isinstance(raw, staticmethod), (
+            "compute_v1_v2_comparison 應為 @staticmethod"
+        )
+
+    def test_returns_dict_on_db_error(self, monkeypatch):
+        """DB 不可用時必須回傳 {} 而非拋出例外。"""
+        # get_session 在 method 內部 local import，patch src.database
+        import src.database as db_mod
+
+        def _raise(*a, **kw):
+            raise RuntimeError("no DB in test")
+
+        monkeypatch.setattr(db_mod, "get_session", _raise)
+        from src.services.backtest_service import BacktestService
+        result = BacktestService.compute_v1_v2_comparison()
+        assert isinstance(result, dict), "DB 失敗時應回傳 dict（可為空）"
+
+    def test_dashboard_wrapper_exists_and_callable(self):
+        """dashboard/_pages/backtest.py 的 compute_v1_v2() 必須存在且可呼叫。"""
+        from dashboard._pages.backtest import compute_v1_v2
+        assert callable(compute_v1_v2)
+
+    def test_dashboard_wrapper_calls_backtest_service(self, monkeypatch):
+        """compute_v1_v2() 必須委託給 BacktestService.compute_v1_v2_comparison。"""
+        from src.services import backtest_service as svc_mod
+        called = []
+
+        def _mock():
+            called.append(True)
+            return {"summary": None}
+
+        monkeypatch.setattr(svc_mod.BacktestService, "compute_v1_v2_comparison", _mock)
+        # 繞過 st.cache_data 直接呼叫底層函數
+        from dashboard._pages import backtest as bt_mod
+        # 找到被 cache 包裝的原始函數
+        raw_fn = bt_mod.compute_v1_v2.__wrapped__
+        raw_fn()
+        assert called, "compute_v1_v2() 未呼叫 BacktestService.compute_v1_v2_comparison"
+
+    def test_no_other_service_has_same_method(self):
+        """ResearchBacktestService 不應有 compute_v1_v2_comparison（防止 coupling）。"""
+        from src.services.research_backtest_service import ResearchBacktestService
+        assert not hasattr(ResearchBacktestService, "compute_v1_v2_comparison"), (
+            "compute_v1_v2_comparison 不應存在於 ResearchBacktestService"
+        )
