@@ -241,6 +241,39 @@ def page_positions() -> None:
                 f"{weighted_cur:+.2f}%",
                 help="各持倉現價損益按持倉比例加權平均",
             )
+
+            # ── 組合風險：產業集中度 ───────────────────────────────────
+            try:
+                from src.services.portfolio_risk_service import compute_portfolio_exposure
+                exposure = compute_portfolio_exposure(positions)
+                if exposure and exposure.get("industry_weights"):
+                    level_map = {"high": ("🔴", "#ffebee", "#c62828"),
+                                 "medium": ("🟡", "#fff8e1", "#f57f17"),
+                                 "low": ("🟢", "#e8f5e9", "#2e7d32")}
+                    c_icon, c_bg, c_color = level_map.get(exposure["concentration_level"], ("🟢", "#e8f5e9", "#2e7d32"))
+                    sorted_ind = sorted(exposure["industry_weights"].items(), key=lambda x: -x[1])
+                    ind_bars = "".join(
+                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">'
+                        f'<div style="width:90px;font-size:0.72rem;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{ind}</div>'
+                        f'<div style="flex:1;background:#e0e0e0;border-radius:3px;height:10px">'
+                        f'<div style="width:{min(pct,100):.0f}%;background:{"#e53935" if pct>=50 else "#f57f17" if pct>=35 else "#43a047"};height:10px;border-radius:3px"></div>'
+                        f'</div>'
+                        f'<div style="font-size:0.72rem;color:#555;width:35px;text-align:right">{pct:.0f}%</div>'
+                        f'</div>'
+                        for ind, pct in sorted_ind
+                    )
+                    st.markdown(
+                        f"""
+<div style="background:{c_bg};border:1px solid {c_color}44;border-radius:8px;padding:10px 14px;margin:10px 0">
+  <div style="font-size:0.78rem;font-weight:700;color:{c_color};margin-bottom:8px">{c_icon} 組合產業集中度</div>
+  {ind_bars}
+  {f'<div style="font-size:0.68rem;color:{c_color};margin-top:6px">最高集中度：{exposure["top_industry"]} {exposure["top_industry_pct"]:.0f}% — 再加碼同產業需留意集中風險</div>' if exposure["concentration_level"] in ("high","medium") else ""}
+</div>""",
+                        unsafe_allow_html=True,
+                    )
+            except Exception as _pe:
+                logger.debug(f"portfolio risk panel: {_pe}")
+
             st.divider()
 
             prices_now = load_stock_prices()

@@ -392,7 +392,25 @@ class ForwardSignal(Base):
     close_at_signal         = Column(Float)        # 進場收盤價（免事後猜 entry）
     candidate_rank          = Column(Integer)      # 當日 candidates 中的排名（1=最高分）
 
+    # ── 決策快照（Recommendation ATR plan 凍結，表示當時網站說什麼）──
+    entry_low      = Column(Float)        # 建議進場區間下緣
+    entry_high     = Column(Float)        # 建議進場區間上緣
+    stop_price     = Column(Float)        # 停損價（凍結值）
+    target1        = Column(Float)        # 目標價 T1
+    target2        = Column(Float)        # 目標價 T2
+    decision_label = Column(String(30))   # "BUY★" / "BUY" / "WAIT FOR PULLBACK" / "WAIT" / "REDUCE" / "SELL/AVOID"
+
     locked_at = Column(DateTime, default=datetime.utcnow)
+
+    # ── 事後填入的績效結果（signal 成熟後逐步回填）─────────────────
+    fwd_return_20d       = Column(Float)    # 20 交易日後報酬率（%）
+    alpha_20d            = Column(Float)    # 超額報酬 vs 0050（%），20 交易日
+    fwd_return_60d       = Column(Float)    # 60 交易日後報酬率（%）
+    alpha_60d            = Column(Float)    # 超額報酬 vs 0050（%），60 交易日
+    stop_triggered_day   = Column(Integer)  # 第幾個交易日收盤跌破停損（NULL = 未觸發）
+    t1_hit_day           = Column(Integer)  # 第幾個交易日收盤首次達到 T1
+    outcome_note         = Column(String(20))  # T1_HIT / STOP_TRIGGERED / EXPIRED / null
+    outcomes_computed_at = Column(DateTime)
 
 
 class PipelineFunnel(Base):
@@ -454,6 +472,22 @@ def _migrate_forward_signals(engine) -> None:
         ("market_regime_at_signal", "VARCHAR(10)"),
         ("close_at_signal",         "FLOAT"),
         ("candidate_rank",          "INTEGER"),
+        # 決策快照（Audit Trail — 凍結）
+        ("entry_low",               "FLOAT"),
+        ("entry_high",              "FLOAT"),
+        ("stop_price",              "FLOAT"),
+        ("target1",                 "FLOAT"),
+        ("target2",                 "FLOAT"),
+        ("decision_label",          "VARCHAR(30)"),
+        # 績效結果（事後回填）
+        ("fwd_return_20d",          "FLOAT"),
+        ("alpha_20d",               "FLOAT"),
+        ("fwd_return_60d",          "FLOAT"),
+        ("alpha_60d",               "FLOAT"),
+        ("stop_triggered_day",      "INTEGER"),
+        ("t1_hit_day",              "INTEGER"),
+        ("outcome_note",            "VARCHAR(20)"),
+        ("outcomes_computed_at",    "DATETIME"),
     ]
     try:
         existing = {c["name"] for c in inspect(engine).get_columns("forward_signals")}

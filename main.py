@@ -678,6 +678,14 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
                     f"[Step 9c] Forward signal 凍結完成："
                     f"{inserted} 筆新增，{len(today_ars) - inserted} 筆已存在（skip）"
                 )
+                # 回填已成熟信號的績效
+                try:
+                    from src.services.research_backtest_service import compute_signal_outcomes
+                    outcomes_updated = compute_signal_outcomes(session, trade_date)
+                    if outcomes_updated:
+                        logger.info(f"[Step 9c] 績效回填：{outcomes_updated} 筆更新")
+                except Exception as oe:
+                    logger.warning(f"[Step 9c] 績效回填失敗：{oe}")
             except Exception as e:
                 logger.warning(f"[Step 9c] Forward signal 凍結失敗（不影響主流程）：{e}")
 

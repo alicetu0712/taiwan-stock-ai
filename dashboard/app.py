@@ -268,6 +268,7 @@ def main() -> None:
             "🔬驗證",
             "🧪回測",
             "🗂交易",
+            "📋成績單",
             "🩺健康",
             "📖說明",
             "⚙️設定",
@@ -292,10 +293,13 @@ def main() -> None:
     with tabs[7]:
         page_my_trades()
     with tabs[8]:
-        page_data_health()
+        from dashboard._pages.scorecard import page_scorecard
+        page_scorecard()
     with tabs[9]:
-        page_guide()
+        page_data_health()
     with tabs[10]:
+        page_guide()
+    with tabs[11]:
         page_settings(sel_date)
 
     st.markdown(

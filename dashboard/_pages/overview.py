@@ -17,6 +17,7 @@ from dashboard.loaders import (
     load_market_health,
     load_opportunity_recs,
     load_pipeline_funnel,
+    load_portfolio_exposure,
     load_report,
     load_stock_names,
     load_stock_prices,
@@ -28,7 +29,7 @@ from dashboard.loaders import (
 logger = logging.getLogger(__name__)
 
 
-def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
+def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure: dict = None) -> None:
     from src.engines.decision import decision_label, entry_quality_label, tomorrow_triggers
 
     dl         = decision_label(r)
@@ -181,6 +182,24 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
   <div style="font-size:0.6rem;color:#9c27b0;margin-top:4px">⚠ 試算值，實際下單請考慮整體帳戶曝險與流動性。</div>
 </div>"""
 
+    # ── Portfolio context (only for BUY signals when exposure data available) ──
+    portfolio_html = ""
+    if portfolio_exposure and r.get("trade_signal") in ("strong_buy", "buy"):
+        try:
+            from src.services.portfolio_risk_service import portfolio_context_for_stock
+            ctx = portfolio_context_for_stock(r.get("industry"), portfolio_exposure)
+            if ctx.get("message"):
+                warn_bg    = "#fff3cd" if ctx["should_warn"] else "#e8f5e9"
+                warn_border = "#ff8f00" if ctx["should_warn"] else "#43a047"
+                warn_color  = "#bf360c" if ctx["should_warn"] else "#2e7d32"
+                portfolio_html = f"""
+<div style="background:{warn_bg};border-left:3px solid {warn_border};padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:0.63rem;color:{warn_color};font-weight:600;margin-bottom:1px">組合角度</div>
+  <div style="font-size:0.73rem;color:{warn_color}">{ctx['message']}</div>
+</div>"""
+        except Exception:
+            pass
+
     # ── Why bullets ────────────────────────────────────────────
     adv_items  = "".join(f"<li style='color:#2e7d32'>✓ {a}</li>" for a in advantages[:3])
     risk_items = "".join(f"<li style='color:#c62828'>⚠ {r2}</li>" for r2 in risks[:2])
@@ -234,6 +253,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
   {thesis_html}
   {rr_html}
   {ps_html}
+  {portfolio_html}
   {why_html}
   {trig_html}
   <div style="font-size:0.7rem;color:#aaa;margin-top:6px">信心度 {conf}% · {level} 級 · {setup} {ma20_note}</div>
@@ -562,15 +582,16 @@ def page_today(selected_date: date) -> None:
                 f'<div class="section-title">Core Picks（{len(recs)} 檔）</div>',
                 unsafe_allow_html=True,
             )
-        current_regime = load_current_regime()
+        current_regime    = load_current_regime()
+        portfolio_exposure = load_portfolio_exposure()
         cols_data = [recs[i::2] for i in range(2)]
         col_left, col_right = st.columns(2)
         for rec in cols_data[0]:
             with col_left:
-                render_rec_card(rec, current_regime)
+                render_rec_card(rec, current_regime, portfolio_exposure)
         for rec in cols_data[1]:
             with col_right:
-                render_rec_card(rec, current_regime)
+                render_rec_card(rec, current_regime, portfolio_exposure)
     else:
         st.info("今日尚無分析資料，請先執行分析。")
 

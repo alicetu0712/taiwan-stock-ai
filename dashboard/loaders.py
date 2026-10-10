@@ -911,3 +911,72 @@ def load_market_health(target_date) -> dict:
         logger.warning(f"load_market_health: {e}")
         return {"level": "unknown", "conditions": [], "regime": "neutral",
                 "universe": 0, "pass_rate": 0, "recs_count": 0}
+
+
+@st.cache_data(ttl=120)
+def load_portfolio_exposure() -> dict:
+    """Active PositionMonitor → 組合產業集中度分析。"""
+    try:
+        from dashboard._pages.position import load_positions
+        from src.services.portfolio_risk_service import compute_portfolio_exposure
+
+        positions = load_positions("active")
+        if not positions:
+            return {}
+        return compute_portfolio_exposure(positions)
+    except Exception as e:
+        logger.warning(f"load_portfolio_exposure: {e}")
+        return {}
+
+
+@st.cache_data(ttl=300)
+def load_forward_signals_scorecard(limit: int = 200) -> list:
+    """
+    讀取 ForwardSignal 中有 decision_label 的記錄（Audit Trail）。
+    Returns: list of dicts, 依 trade_date DESC 排序。
+    """
+    try:
+        from src.database import ForwardSignal, get_session
+        from sqlalchemy import desc
+
+        s = get_session()
+        rows = (
+            s.query(ForwardSignal)
+            .filter(ForwardSignal.decision_label.isnot(None))
+            .order_by(desc(ForwardSignal.trade_date), ForwardSignal.candidate_rank)
+            .limit(limit)
+            .all()
+        )
+        s.close()
+        return [
+            {
+                "trade_date":       str(r.trade_date),
+                "stock_id":         r.stock_id,
+                "stock_name":       r.stock_name or r.stock_id,
+                "setup_type":       r.setup_type,
+                "trade_signal":     r.trade_signal,
+                "decision_label":   r.decision_label,
+                "industry":         r.industry,
+                "market_regime":    r.market_regime_at_signal,
+                "close_at_signal":  r.close_at_signal,
+                "entry_low":        r.entry_low,
+                "entry_high":       r.entry_high,
+                "stop_price":       r.stop_price,
+                "target1":          r.target1,
+                "target2":          r.target2,
+                "fwd_return_20d":   r.fwd_return_20d,
+                "alpha_20d":        r.alpha_20d,
+                "fwd_return_60d":   r.fwd_return_60d,
+                "alpha_60d":        r.alpha_60d,
+                "stop_triggered_day": r.stop_triggered_day,
+                "t1_hit_day":       r.t1_hit_day,
+                "outcome_note":     r.outcome_note,
+                "pt_score":         r.pt_score,
+                "total_score":      r.total_score,
+                "confidence":       r.confidence,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning(f"load_forward_signals_scorecard: {e}")
+        return []

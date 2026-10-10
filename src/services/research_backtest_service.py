@@ -463,7 +463,7 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     Append-only：(trade_date, stock_id) 已存在則 skip，永不 UPDATE。
     Returns: 實際插入筆數
     """
-    from src.database import DailyPrice, ForwardSignal, MODEL_VERSION, Stock
+    from src.database import DailyPrice, ForwardSignal, MODEL_VERSION, Recommendation, Stock
     from datetime import timedelta
 
     if not today_ars:
@@ -541,6 +541,29 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     sorted_ars = sorted(today_ars, key=lambda x: (x.total_score or 0.0), reverse=True)
     rank_map = {ar.stock_id: i + 1 for i, ar in enumerate(sorted_ars)}
 
+    # Recommendation 快照：Audit Trail 用（_save_recommendations 已先執行）
+    rec_snap: dict = {
+        r.stock_id: r
+        for r in session.query(Recommendation)
+        .filter(
+            Recommendation.date == trade_date,
+            Recommendation.stock_id.in_(stock_ids),
+        )
+        .all()
+    }
+
+    def _decision_label_for(ar) -> str | None:
+        try:
+            from src.engines.decision import decision_label as _dl
+            label_result = _dl({
+                "trade_signal": ar.trade_signal,
+                "setup_type":   ar.setup_type,
+                "ma20_gap":     ar.ma20_gap,
+            })
+            return label_result.get("label")
+        except Exception:
+            return None
+
     # 查已存在的 (trade_date, stock_id) 以避免衝突
     existing = {
         r.stock_id
@@ -555,6 +578,7 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
             continue  # append-only: 永不覆寫
 
         ma60_gap_v, ma60_slope_v = _ma60_features(ar.stock_id)
+        rec = rec_snap.get(ar.stock_id)
 
         session.add(ForwardSignal(
             trade_date              = trade_date,
@@ -577,9 +601,152 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
             market_regime_at_signal = regime_today,
             close_at_signal         = close_on_day.get(ar.stock_id),
             candidate_rank          = rank_map.get(ar.stock_id),
+            # ── 決策快照 ─────────────────────────────────────────
+            entry_low               = rec.entry_low   if rec else None,
+            entry_high              = rec.entry_high  if rec else None,
+            stop_price              = rec.stop_price  if rec else None,
+            target1                 = rec.target1     if rec else None,
+            target2                 = rec.target2     if rec else None,
+            decision_label          = _decision_label_for(ar),
         ))
         inserted += 1
 
     if inserted:
         session.commit()
     return inserted
+
+
+def compute_signal_outcomes(session, as_of_date: date) -> int:
+    """
+    回填已成熟 ForwardSignal 的績效結果。
+
+    成熟條件：trade_date + 30 calendar days <= as_of_date（約等於 20 trading days）
+    僅處理 outcomes_computed_at IS NULL 的記錄。
+    只計算有 decision_label（有進入推薦流程）的信號。
+    Returns: 更新筆數
+    """
+    from datetime import datetime, timedelta
+
+    from src.database import DailyPrice, ForwardSignal
+
+    cutoff = as_of_date - timedelta(days=30)
+
+    pending = (
+        session.query(ForwardSignal)
+        .filter(
+            ForwardSignal.trade_date <= cutoff,
+            ForwardSignal.outcomes_computed_at.is_(None),
+            ForwardSignal.decision_label.isnot(None),
+            ForwardSignal.close_at_signal.isnot(None),
+        )
+        .all()
+    )
+    if not pending:
+        return 0
+
+    stock_ids = list({r.stock_id for r in pending})
+    min_date = min(r.trade_date for r in pending)
+    max_date = max(r.trade_date for r in pending) + timedelta(days=150)
+
+    price_rows = (
+        session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.close)
+        .filter(
+            DailyPrice.stock_id.in_(stock_ids + ["0050"]),
+            DailyPrice.date >= min_date,
+            DailyPrice.date <= max_date,
+            DailyPrice.close.isnot(None),
+        )
+        .order_by(DailyPrice.stock_id, DailyPrice.date)
+        .all()
+    )
+
+    price_map: dict = {}
+    for sid, d, c in price_rows:
+        if sid not in price_map:
+            price_map[sid] = {}
+        price_map[sid][d] = c
+    sorted_dates_map = {sid: sorted(dm.keys()) for sid, dm in price_map.items()}
+    p0050 = price_map.get("0050", {})
+    sorted_0050 = sorted(p0050.keys())
+
+    import bisect
+
+    updated = 0
+    for fs in pending:
+        sdates = sorted_dates_map.get(fs.stock_id, [])
+        idx_s = bisect.bisect_right(sdates, fs.trade_date)
+        if idx_s == 0:
+            continue
+
+        idx_0050 = bisect.bisect_right(sorted_0050, fs.trade_date)
+        if idx_0050 == 0:
+            continue
+        p0_entry = p0050.get(sorted_0050[idx_0050 - 1])
+        if not p0_entry:
+            continue
+
+        entry = fs.close_at_signal
+        stop  = fs.stop_price
+        t1    = fs.target1
+
+        def _return_at(n_days):
+            target_idx = idx_s + n_days - 1
+            if target_idx >= len(sdates):
+                return None, None
+            fwd_close = price_map.get(fs.stock_id, {}).get(sdates[target_idx])
+            if not fwd_close:
+                return None, None
+            t0050_idx = idx_0050 + n_days - 1
+            if t0050_idx >= len(sorted_0050):
+                return None, None
+            fwd_0050 = p0050.get(sorted_0050[t0050_idx])
+            if not fwd_0050:
+                return None, None
+            ret = round((fwd_close - entry) / entry * 100, 2)
+            alpha = round(ret - (fwd_0050 - p0_entry) / p0_entry * 100, 2)
+            return ret, alpha
+
+        ret_20, alpha_20 = _return_at(20)
+        ret_60, alpha_60 = _return_at(60)
+
+        # stop_triggered_day: first trading day (1-indexed) where close < stop
+        stop_day = None
+        if stop and stop > 0:
+            for i in range(idx_s, min(idx_s + 20, len(sdates))):
+                c = price_map.get(fs.stock_id, {}).get(sdates[i])
+                if c and c < stop:
+                    stop_day = i - idx_s + 1
+                    break
+
+        # t1_hit_day: first trading day (1-indexed) where close >= t1
+        t1_day = None
+        if t1 and t1 > 0:
+            for i in range(idx_s, min(idx_s + 20, len(sdates))):
+                c = price_map.get(fs.stock_id, {}).get(sdates[i])
+                if c and c >= t1:
+                    t1_day = i - idx_s + 1
+                    break
+
+        if t1_day:
+            note = "T1_HIT"
+        elif stop_day:
+            note = "STOP_TRIGGERED"
+        elif ret_20 is not None:
+            note = "EXPIRED"
+        else:
+            note = None  # not enough data yet
+
+        fs.fwd_return_20d     = ret_20
+        fs.alpha_20d          = alpha_20
+        fs.fwd_return_60d     = ret_60
+        fs.alpha_60d          = alpha_60
+        fs.stop_triggered_day = stop_day
+        fs.t1_hit_day         = t1_day
+        fs.outcome_note       = note
+        if note:  # only mark computed when we got a result
+            fs.outcomes_computed_at = datetime.utcnow()
+        updated += 1
+
+    if updated:
+        session.commit()
+    return updated
