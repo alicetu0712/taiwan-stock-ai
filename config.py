@@ -232,3 +232,13 @@ EXCLUDE_PATTERNS = [
 ENTRY_QUALITY = {
     "chase_gap_pct": 5.0,   # ma20_gap > 5% → show "WAIT FOR PULLBACK" warning
 }
+
+# ── Position Sizing 預設值（個人風控設定）────────────────────────────────────
+# 個人資金管理參數，不是策略參數，不影響選股邏輯。
+# 可在「設定」頁面覆蓋，暫存於 st.session_state。
+POSITION_SIZING = {
+    "capital_ntd":    1_000_000,  # 總投資資金（新台幣）
+    "max_risk_pct":   1.0,        # 單筆最大風險（佔資金 %）
+    "max_single_pct": 20.0,       # 單一股票最大曝險上限（佔資金 %）
+    "lot_size":       1000,       # 台股每張股數
+}

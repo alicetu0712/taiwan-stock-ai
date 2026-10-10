@@ -14,6 +14,7 @@ from dashboard.loaders import (
     load_db_recommendations,
     load_evidence_stats,
     load_exec_logs,
+    load_market_health,
     load_opportunity_recs,
     load_pipeline_funnel,
     load_report,
@@ -86,6 +87,25 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
   <div style="font-size:0.73rem;color:#33691e">{cond_str}</div>
 </div>"""
 
+    # ── Trade thesis + invalidation (BUY only) ──────────────────
+    from src.engines.decision import trade_thesis, position_sizing as _ps
+    thesis      = trade_thesis(r)
+    thesis_html = ""
+    if r.get("trade_signal") in ("strong_buy", "buy") and thesis.get("assumption"):
+        inv_items = "".join(
+            f'<li style="color:#c62828">❌ {inv}</li>'
+            for inv in thesis["invalidations"]
+        )
+        thesis_html = f"""
+<div style="background:#fff3e0;border-left:3px solid #ff8f00;padding:7px 11px;margin:6px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:0.63rem;color:#e65100;font-weight:600;margin-bottom:3px">核心假設</div>
+  <div style="font-size:0.76rem;color:#bf360c;margin-bottom:5px">{thesis['assumption']}</div>
+  <div style="font-size:0.63rem;color:#e65100;font-weight:600;margin-bottom:3px">交易失效條件</div>
+  <ul style="margin:0;padding-left:14px;font-size:0.74rem;line-height:1.65">
+    {inv_items}
+  </ul>
+</div>"""
+
     # ── R/R ratio and trading plan ─────────────────────────────
     rr_html = ""
     if price and stop_p and t1:
@@ -121,6 +141,44 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
       <div style="font-size:0.88rem;font-weight:800;color:{rr_color}">{rr}x</div>
     </div>
   </div>
+</div>"""
+
+    # ── Position sizing ─────────────────────────────────────────
+    ps_html = ""
+    if price and stop_p and t1 and price > stop_p:
+        from config import POSITION_SIZING as _PS_CFG
+        capital      = st.session_state.get("ps_capital",      _PS_CFG["capital_ntd"])
+        max_risk_pct = st.session_state.get("ps_max_risk_pct", _PS_CFG["max_risk_pct"])
+        ps = _ps(
+            entry=price, stop=stop_p, capital=capital,
+            max_risk_pct=max_risk_pct,
+            max_single_pct=_PS_CFG["max_single_pct"],
+            lot_size=_PS_CFG["lot_size"],
+        )
+        if ps and ps.get("lots", 0) > 0:
+            cap_note = '<span style="color:#e65100">（已達曝險上限）</span>' if ps["capped"] else ""
+            ps_html = f"""
+<div style="background:#f3e5f5;border-radius:8px;padding:8px 12px;margin:4px 0">
+  <div style="font-size:0.65rem;color:#6a1b9a;font-weight:600;margin-bottom:5px">部位試算（風控 {max_risk_pct}% / NT${capital:,.0f}）</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <div style="flex:1;min-width:60px;text-align:center">
+      <div style="font-size:0.6rem;color:#7b1fa2">每股風險</div>
+      <div style="font-size:0.85rem;font-weight:700;color:#4a148c">${ps['risk_per_share']:.2f}</div>
+    </div>
+    <div style="flex:1;min-width:60px;text-align:center">
+      <div style="font-size:0.6rem;color:#7b1fa2">建議張數</div>
+      <div style="font-size:0.85rem;font-weight:700;color:#4a148c">{ps['lots']} 張{cap_note}</div>
+    </div>
+    <div style="flex:1;min-width:60px;text-align:center">
+      <div style="font-size:0.6rem;color:#7b1fa2">部位金額</div>
+      <div style="font-size:0.85rem;font-weight:700;color:#4a148c">NT${ps['position_ntd']:,}</div>
+    </div>
+    <div style="flex:1;min-width:60px;text-align:center">
+      <div style="font-size:0.6rem;color:#7b1fa2">實際風險</div>
+      <div style="font-size:0.85rem;font-weight:700;color:#c62828">NT${ps['actual_risk_ntd']:,} ({ps['actual_risk_pct']}%)</div>
+    </div>
+  </div>
+  <div style="font-size:0.6rem;color:#9c27b0;margin-top:4px">⚠ 試算值，實際下單請考慮整體帳戶曝險與流動性。</div>
 </div>"""
 
     # ── Why bullets ────────────────────────────────────────────
@@ -173,7 +231,9 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
   </div>
   <div style="font-size:0.78rem;color:#555;margin-bottom:6px">{dl['reason']}</div>
   {why_again_html}
+  {thesis_html}
   {rr_html}
+  {ps_html}
   {why_html}
   {trig_html}
   <div style="font-size:0.7rem;color:#aaa;margin-top:6px">信心度 {conf}% · {level} 級 · {setup} {ma20_note}</div>
@@ -405,6 +465,31 @@ def page_today(selected_date: date) -> None:
   → 有價格 <b>{with_price:,}</b>
   → 通過初篩 <b>{hf_pass}</b>
   → Core Picks <b>{final_rec}</b>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+    # No-Trade Today banner
+    health = load_market_health(selected_date)
+    _h_level = health.get("level", "green")
+    if _h_level in ("red", "yellow"):
+        _h_regime  = health.get("regime", "neutral")
+        _h_pass    = health.get("pass_rate", 0.0)
+        _h_conds   = health.get("conditions", [])
+        _h_color   = "#c62828" if _h_level == "red" else "#f57f17"
+        _h_bg      = "#ffebee" if _h_level == "red" else "#fff8e1"
+        _h_border  = "#ef9a9a" if _h_level == "red" else "#ffe082"
+        _h_icon    = "🔴" if _h_level == "red" else "🟡"
+        _h_title   = "今日不建議交易" if _h_level == "red" else "今日交易需審慎"
+        _cond_html = "".join(f'<li style="font-size:0.77rem;margin-bottom:2px">{c}</li>' for c in _h_conds)
+        st.markdown(
+            f"""
+<div style="background:{_h_bg};border:1.5px solid {_h_border};border-radius:10px;padding:12px 16px;margin:8px 0 12px">
+  <div style="font-size:1.05rem;font-weight:800;color:{_h_color};margin-bottom:6px">{_h_icon} {_h_title}</div>
+  <ul style="margin:0;padding-left:16px;color:{_h_color}">
+    {_cond_html}
+  </ul>
+  <div style="font-size:0.65rem;color:#888;margin-top:6px">通過率 {_h_pass:.1f}% · 市場趨勢 {_h_regime}</div>
 </div>""",
             unsafe_allow_html=True,
         )

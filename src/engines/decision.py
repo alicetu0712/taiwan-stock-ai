@@ -197,6 +197,94 @@ def tomorrow_triggers(r: dict) -> list:
     return triggers
 
 
+def trade_thesis(r: dict) -> dict:
+    """
+    Return core assumption (why BUY) and invalidation conditions for a BUY signal.
+    Pure translation from setup_type + stop_price. Display only — does NOT affect decision.
+    """
+    signal = r.get("trade_signal") or "wait"
+    setup  = r.get("setup_type") or "none"
+    stop_p = r.get("stop_price")
+    price  = r.get("price")
+
+    if signal not in ("strong_buy", "buy"):
+        return {"assumption": "", "invalidations": []}
+
+    assumptions = {
+        "breakout":      "股價突破關鍵壓力且量能配合，預期延續上升趨勢。",
+        "pullback_buy":  "中期趨勢向上，目前回測至支撐區，預期重新轉強。",
+        "pullback_hold": "上升趨勢完整，正處於健康回測階段，MA60 仍向上。",
+        "trending":      "強勢多頭趨勢持續，目前無明顯轉弱跡象，順勢追蹤。",
+    }
+
+    struct_invalidations = {
+        "breakout": [
+            "突破後縮量且收回壓力區（假突破）",
+            "MA20 由上升轉下降",
+        ],
+        "pullback_buy": [
+            "跌破支撐後未見反彈（Support Fail）",
+            "MA60 由上升轉下降",
+        ],
+        "pullback_hold": [
+            "收盤跌破 MA20 且次日無回補",
+            "MA60 斜率由正轉負",
+        ],
+        "trending": [
+            "爆量急跌收在當日低點（分配出貨訊號）",
+            "MA20 由上升轉下降",
+        ],
+    }
+
+    invalidations = []
+    if stop_p and price and stop_p < price:
+        invalidations.append(f"收盤跌破 ${stop_p:.2f}（止損觸發）")
+    invalidations.extend(struct_invalidations.get(setup, ["跌破近期支撐低點"]))
+
+    return {
+        "assumption": assumptions.get(setup, "目前條件符合買進標準。"),
+        "invalidations": invalidations,
+    }
+
+
+def position_sizing(
+    entry: float,
+    stop: float,
+    capital: float,
+    max_risk_pct: float,
+    max_single_pct: float = 20.0,
+    lot_size: int = 1000,
+) -> dict:
+    """
+    Calculate lot size based on fixed-fractional risk management.
+    Returns empty dict if inputs are invalid.
+    Display only — does NOT affect decision or selection logic.
+    """
+    if not (entry and stop and capital and entry > stop > 0 and capital > 0):
+        return {}
+    risk_per_share = entry - stop
+    if risk_per_share <= 0:
+        return {}
+    max_risk_ntd     = capital * max_risk_pct / 100
+    risk_based_ntd   = (max_risk_ntd / risk_per_share) * entry
+    max_exposure_ntd = capital * max_single_pct / 100
+    capped           = risk_based_ntd > max_exposure_ntd
+    final_ntd        = min(risk_based_ntd, max_exposure_ntd)
+    final_lots       = max(1, int(final_ntd / (lot_size * entry)))
+    actual_ntd       = final_lots * lot_size * entry
+    actual_risk      = final_lots * lot_size * risk_per_share
+    return {
+        "lots":             final_lots,
+        "shares":           final_lots * lot_size,
+        "position_ntd":     round(actual_ntd),
+        "actual_risk_ntd":  round(actual_risk),
+        "actual_risk_pct":  round(actual_risk / capital * 100, 2),
+        "risk_per_share":   round(risk_per_share, 2),
+        "max_risk_ntd":     round(max_risk_ntd),
+        "capped":           capped,
+    }
+
+
 class DecisionEngine:
     """
     AI 決策引擎（CIO AI）。

@@ -293,6 +293,33 @@ def page_settings(selected_date: date) -> None:
                     _run_analysis(dry_run=False)
 
     st.divider()
+    st.markdown('<div class="section-title">部位試算設定</div>', unsafe_allow_html=True)
+    st.caption("設定你的資金與風控參數，Decision Center 的「部位試算」區塊將依此計算建議張數。此設定暫存於瀏覽器 session，重新開啟頁面後回到預設值。")
+    from config import POSITION_SIZING as _PS_CFG
+    ps_col1, ps_col2 = st.columns(2)
+    with ps_col1:
+        cap = st.number_input(
+            "可用資金（新台幣）",
+            min_value=100_000,
+            max_value=100_000_000,
+            value=st.session_state.get("ps_capital", _PS_CFG["capital_ntd"]),
+            step=100_000,
+            format="%d",
+        )
+        st.session_state["ps_capital"] = cap
+    with ps_col2:
+        risk = st.slider(
+            "單筆最大風險（%）",
+            min_value=0.5,
+            max_value=3.0,
+            value=float(st.session_state.get("ps_max_risk_pct", _PS_CFG["max_risk_pct"])),
+            step=0.5,
+        )
+        st.session_state["ps_max_risk_pct"] = risk
+        max_loss = round(cap * risk / 100)
+        st.caption(f"每筆最多虧損：NT$ {max_loss:,}")
+
+    st.divider()
     st.markdown('<div class="section-title">資料庫狀態</div>', unsafe_allow_html=True)
     try:
         from dashboard.loaders import load_db_stats

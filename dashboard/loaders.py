@@ -850,3 +850,64 @@ def load_pipeline_funnel(target_date: date) -> dict:
     except Exception as e:
         logger.warning(f"load_pipeline_funnel: {e}")
         return {}
+
+
+@st.cache_data(ttl=300)
+def load_market_health(target_date) -> dict:
+    """
+    Assess today's trading environment for the No-Trade-Today banner.
+    Combines: 0050 regime + pipeline pass rate + Core Picks count.
+    level: "green" (normal) / "yellow" (caution) / "red" (avoid new positions)
+    """
+    try:
+        from src.services.evidence_service import get_current_regime
+        from src.database import PipelineFunnel, Recommendation, get_session
+        from sqlalchemy import select, func as _func
+        s = get_session()
+        funnel_row = s.execute(
+            select(PipelineFunnel).where(PipelineFunnel.date == target_date)
+        ).scalar_one_or_none()
+        recs_count = s.execute(
+            select(_func.count()).select_from(Recommendation).where(
+                Recommendation.date == target_date,
+                Recommendation.tier == "recommend",
+            )
+        ).scalar() or 0
+        s.close()
+
+        regime    = get_current_regime()
+        universe  = funnel_row.universe if funnel_row else 0
+        hf_pass   = funnel_row.hard_filter_pass if funnel_row else 0
+        pass_rate = round((hf_pass / universe * 100), 1) if universe > 0 else 0.0
+
+        conditions = []
+        level = "green"
+
+        if regime == "bear":
+            conditions.append("0050 跌破 MA60 且 MA60 轉弱（確認空頭 Regime）")
+            level = "red"
+
+        if 0 < universe < 200:
+            conditions.append(f"今日有效股價資料僅 {universe} 檔（可能資料蒐集異常）")
+            level = "red"
+
+        if universe >= 200 and pass_rate < 3.0 and level == "green":
+            conditions.append(f"通過趨勢條件比例偏低（{pass_rate}%），市場整體動能弱")
+            level = "yellow"
+
+        if recs_count == 0 and level == "green":
+            conditions.append("今日無股票通過完整篩選條件（V2 + DQ Gate）")
+            level = "yellow"
+
+        return {
+            "level": level,
+            "regime": regime,
+            "universe": universe,
+            "pass_rate": pass_rate,
+            "recs_count": recs_count,
+            "conditions": conditions,
+        }
+    except Exception as e:
+        logger.warning(f"load_market_health: {e}")
+        return {"level": "unknown", "conditions": [], "regime": "neutral",
+                "universe": 0, "pass_rate": 0, "recs_count": 0}
