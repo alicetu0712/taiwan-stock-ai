@@ -295,17 +295,14 @@ def page_settings(selected_date: date) -> None:
     st.divider()
     st.markdown('<div class="section-title">部位試算設定</div>', unsafe_allow_html=True)
     st.caption("設定你的資金與風控參數，Decision Center 的「部位試算」區塊將依此計算建議張數。此設定暫存於瀏覽器 session，重新開啟頁面後回到預設值。")
-    import sys as _sys
-    _cfg = _sys.modules.get("config")
-    _PS_CFG = getattr(_cfg, "POSITION_SIZING", None) or \
-              {"capital_ntd": 1_000_000, "max_risk_pct": 1.0, "max_single_pct": 20.0, "lot_size": 1000}
+    _PS_DEFAULTS = {"capital_ntd": 1_000_000, "max_risk_pct": 1.0, "max_single_pct": 20.0, "lot_size": 1000}
     ps_col1, ps_col2 = st.columns(2)
     with ps_col1:
         cap = st.number_input(
             "可用資金（新台幣）",
             min_value=100_000,
             max_value=100_000_000,
-            value=st.session_state.get("ps_capital", _PS_CFG["capital_ntd"]),
+            value=st.session_state.get("ps_capital", _PS_DEFAULTS["capital_ntd"]),
             step=100_000,
             format="%d",
         )
@@ -315,7 +312,7 @@ def page_settings(selected_date: date) -> None:
             "單筆最大風險（%）",
             min_value=0.5,
             max_value=3.0,
-            value=float(st.session_state.get("ps_max_risk_pct", _PS_CFG["max_risk_pct"])),
+            value=float(st.session_state.get("ps_max_risk_pct", _PS_DEFAULTS["max_risk_pct"])),
             step=0.5,
         )
         st.session_state["ps_max_risk_pct"] = risk

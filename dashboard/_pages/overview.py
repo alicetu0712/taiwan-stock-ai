@@ -17,7 +17,6 @@ from dashboard.loaders import (
     load_market_health,
     load_opportunity_recs,
     load_pipeline_funnel,
-    load_portfolio_exposure,
     load_report,
     load_stock_names,
     load_stock_prices,
@@ -585,8 +584,12 @@ def page_today(selected_date: date) -> None:
                 f'<div class="section-title">Core Picks（{len(recs)} 檔）</div>',
                 unsafe_allow_html=True,
             )
-        current_regime    = load_current_regime()
-        portfolio_exposure = load_portfolio_exposure()
+        current_regime = load_current_regime()
+        try:
+            from dashboard.loaders import load_portfolio_exposure as _lpe
+            portfolio_exposure = _lpe()
+        except Exception:
+            portfolio_exposure = {}
         cols_data = [recs[i::2] for i in range(2)]
         col_left, col_right = st.columns(2)
         for rec in cols_data[0]:
