@@ -402,7 +402,7 @@ class ForwardSignal(Base):
     stop_price     = Column(Float)        # 停損價（凍結值）
     target1        = Column(Float)        # 目標價 T1
     target2        = Column(Float)        # 目標價 T2
-    decision_label = Column(String(30))   # "BUY ★" / "BUY" / "WAIT FOR PULLBACK" / "WAIT" / "REDUCE" / "SELL / AVOID"
+    decision_label = Column(String(30))   # stable code: strong_buy/buy/wait_pullback/wait/reduce/sell
 
     locked_at = Column(DateTime, default=datetime.utcnow)
 
@@ -550,12 +550,31 @@ def _migrate_recommendations(engine) -> None:
                     logger.warning(f"recommendations migration {col_name}: {exc}")
 
 
+def _migrate_decision_label_to_codes(engine) -> None:
+    """One-time data migration: forward_signals.decision_label display strings → stable codes."""
+    from sqlalchemy import text
+    from src.core.decision_codes import _LEGACY_DISPLAY_TO_CODE
+
+    with engine.begin() as conn:
+        for display, code in _LEGACY_DISPLAY_TO_CODE.items():
+            try:
+                result = conn.execute(
+                    text("UPDATE forward_signals SET decision_label = :code WHERE decision_label = :display"),
+                    {"code": code, "display": display},
+                )
+                if result.rowcount:
+                    logger.info(f"Migrated decision_label: {repr(display)} → {repr(code)} ({result.rowcount} rows)")
+            except Exception as exc:
+                logger.warning(f"decision_label migration {display!r}: {exc}")
+
+
 def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
     _migrate_forward_signals(engine)
     _migrate_recommendations(engine)
+    _migrate_decision_label_to_codes(engine)
     from config import DATABASE_URL
 
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")

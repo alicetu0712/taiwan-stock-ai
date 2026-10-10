@@ -9,6 +9,8 @@ import logging
 
 import streamlit as st
 
+from src.core.decision_codes import buy_codes, to_color, to_display
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,18 +64,9 @@ def _load_scorecard_rows(limit: int = 300) -> list:
         logger.warning(f"_load_scorecard_rows: {e}")
         return []
 
-# Label strings must match decision.py exactly: "BUY ★" (space), "SELL / AVOID" (spaces)
-_LABEL_COLOR = {
-    "BUY ★":            "#1a7f4b",
-    "BUY":               "#2ecc71",
-    "WAIT FOR PULLBACK": "#f39c12",
-    "WAIT":              "#95a5a6",
-    "REDUCE":            "#e67e22",
-    "SELL / AVOID":      "#e74c3c",
-}
-
-# Preferred defaults for decision_label multiselect — must exist in actual data to be selected
-_PREFERRED_LABEL_DEFAULTS = ["BUY ★", "BUY"]
+# DB stores stable codes; UI translates via to_display() / to_color()
+# Preferred default codes for the decision_label multiselect
+_PREFERRED_CODE_DEFAULTS = list(buy_codes())  # ["strong_buy", "buy"]
 
 _OUTCOME_ICON = {
     "T1_HIT":         "🎯",
@@ -100,7 +93,7 @@ def _fmt(v, suffix="", places=1, plus=False):
 
 
 def _summary_stats(rows: list) -> dict:
-    buy_rows = [r for r in rows if r["decision_label"] in ("BUY ★", "BUY")]
+    buy_rows = [r for r in rows if r["decision_label"] in buy_codes()]
     matured  = [r for r in buy_rows if r["alpha_20d"] is not None]
     if not matured:
         return {"n_buy": len(buy_rows), "matured": 0, "winrate": None, "avg_alpha": None, "t1_rate": None, "stop_rate": None}
@@ -139,23 +132,29 @@ def page_scorecard() -> None:
 
     # ── 篩選控制 ──────────────────────────────────────────────
     col_f1, col_f2, col_f3 = st.columns(3)
-    all_labels = sorted({r["decision_label"] for r in rows if r["decision_label"]})
+    all_codes_in_data = sorted({r["decision_label"] for r in rows if r["decision_label"]})
     all_setups = sorted({r["setup_type"] for r in rows if r["setup_type"]})
 
-    # Sanitize stale session_state values (e.g. old label strings after code rename)
+    # Sanitize stale session_state (handles old display-string values from pre-migration)
     if "sc_labels" in st.session_state:
         st.session_state["sc_labels"] = [
-            v for v in st.session_state["sc_labels"] if v in all_labels
+            v for v in st.session_state["sc_labels"] if v in all_codes_in_data
         ]
     if "sc_setups" in st.session_state:
         st.session_state["sc_setups"] = [
             v for v in st.session_state["sc_setups"] if v in all_setups
         ]
 
-    # Default: prefer BUY ★ / BUY, but only if they actually exist in the data
-    default_labels = [x for x in _PREFERRED_LABEL_DEFAULTS if x in all_labels]
+    # Default: prefer strong_buy / buy, only if they exist in current data
+    default_codes = [x for x in _PREFERRED_CODE_DEFAULTS if x in all_codes_in_data]
 
-    sel_labels = col_f1.multiselect("決策標籤", all_labels, default=default_labels, key="sc_labels")
+    sel_labels = col_f1.multiselect(
+        "決策標籤",
+        all_codes_in_data,
+        default=default_codes,
+        format_func=to_display,   # show "BUY ★" but value is "strong_buy"
+        key="sc_labels",
+    )
     sel_setups = col_f2.multiselect("型態", all_setups, default=all_setups, key="sc_setups")
     outcome_opts = ["全部", "已有結果", "待成熟"]
     sel_outcome = col_f3.selectbox("結果", outcome_opts, key="sc_outcome")
@@ -174,7 +173,7 @@ def page_scorecard() -> None:
     stats = _summary_stats(filtered)
     st.markdown("---")
     sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-    sc1.metric("BUY/BUY ★ 信號", stats["n_buy"])
+    sc1.metric("BUY / BUY ★ 信號", stats["n_buy"])
     sc2.metric("已成熟（20D）", stats["matured"])
     if stats["winrate"] is not None:
         sc3.metric("勝率（Alpha > 0）", f"{stats['winrate']}%")
@@ -192,8 +191,9 @@ def page_scorecard() -> None:
 
     # ── 逐筆展示 ──────────────────────────────────────────────
     for r in filtered:
-        label = r["decision_label"] or "WAIT"
-        lc = _LABEL_COLOR.get(label, "#666")
+        code  = r["decision_label"] or "wait"
+        label = to_display(code)
+        lc    = to_color(code)
         outcome_icon = _OUTCOME_ICON.get(r["outcome_note"], "⏳" if r["outcome_note"] is None else "")
         alpha_20 = r["alpha_20d"]
         ret_20   = r["fwd_return_20d"]

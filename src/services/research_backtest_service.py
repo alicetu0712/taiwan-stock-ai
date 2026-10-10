@@ -560,7 +560,7 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
                 "setup_type":   ar.setup_type,
                 "ma20_gap":     ar.ma20_gap,
             })
-            return label_result.get("label")
+            return label_result.get("code")   # store stable code, not display string
         except Exception:
             return None
 

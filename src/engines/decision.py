@@ -109,16 +109,19 @@ def decision_label(r: dict) -> dict:
     ma20_gap        = r.get("ma20_gap") or 0.0
     chase_threshold = ENTRY_QUALITY["chase_gap_pct"]
 
+    from src.core.decision_codes import DecisionCode, to_display, to_color
+
     # Thesis invalidated: sell signal OR confirmed breakdown
     if signal == "sell" or setup == "breakdown":
         reason = "技術結構已破壞" if setup == "breakdown" else "賣出訊號確立"
-        return {"label": "SELL / AVOID", "color": "#e53935", "reason": reason, "is_override": False}
+        code = DecisionCode.SELL.value
+        return {"code": code, "label": to_display(code), "color": to_color(code), "reason": reason, "is_override": False}
 
     # Deteriorating signal (thesis not failed)
     if signal == "reduce":
+        code = DecisionCode.REDUCE.value
         return {
-            "label": "REDUCE",
-            "color": "#fb8c00",
+            "code": code, "label": to_display(code), "color": to_color(code),
             "reason": "訊號轉弱，動能減退，考慮縮減部位",
             "is_override": False,
         }
@@ -126,20 +129,20 @@ def decision_label(r: dict) -> dict:
     # Buy signals — apply entry quality check (presentation only)
     if signal in ("strong_buy", "buy"):
         if ma20_gap > chase_threshold:
+            code = DecisionCode.WAIT_PULLBACK.value
             return {
-                "label": "WAIT FOR PULLBACK",
-                "color": "#ffb300",
+                "code": code, "label": to_display(code), "color": to_color(code),
                 "reason": f"模型看多，但現價偏離 MA20 達 {ma20_gap:.1f}%（>{chase_threshold:.0f}%），建議等回測",
                 "is_override": True,
             }
-        label = "BUY ★" if signal == "strong_buy" else "BUY"
+        code = DecisionCode.STRONG_BUY.value if signal == "strong_buy" else DecisionCode.BUY.value
         reason = "強烈買進訊號，型態與量能均佳" if signal == "strong_buy" else "買進訊號，進場條件成立"
-        return {"label": label, "color": "#00897b", "reason": reason, "is_override": False}
+        return {"code": code, "label": to_display(code), "color": to_color(code), "reason": reason, "is_override": False}
 
     # Default: wait
+    code = DecisionCode.WAIT.value
     return {
-        "label": "WAIT",
-        "color": "#7e57c2",
+        "code": code, "label": to_display(code), "color": to_color(code),
         "reason": "尚無明確進場訊號，持續觀察",
         "is_override": False,
     }
