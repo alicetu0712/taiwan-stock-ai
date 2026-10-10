@@ -179,24 +179,24 @@ def tomorrow_triggers(r: dict) -> list:
 
     triggers = []
     if setup == "breakout":
-        triggers.append("量能 > 昨日 1.5x 且收在高點 → 確認突破，可追進")
-        triggers.append("縮量整理未破支撐 → 健康，持續觀察")
+        triggers.append("突破後若量能同步增強且收在高位 → 買進條件增強")
+        triggers.append("縮量整理未破突破位 → 正常鞏固，持續觀察")
     elif setup == "pullback_buy":
-        triggers.append("守住支撐（> 進場低點）+ 出現量縮 → 可考慮進場")
-        triggers.append("跌破支撐且無反彈 → 暫緩，等下一個支撐")
+        triggers.append("守住支撐區域且出現量縮回測 → 進場條件趨於成熟")
+        triggers.append("跌破支撐且無收復跡象 → 訊號弱化，暫緩觀察")
     elif setup == "pullback_hold":
-        triggers.append("維持現有部位，觀察是否守住 MA20")
-        triggers.append("跌破 MA20 收盤 → 考慮縮減部位")
+        triggers.append("觀察能否守住 MA20")
+        triggers.append("跌破 MA20 收盤 → 趨勢考驗，留意部位風險")
     elif setup == "trending":
-        triggers.append("緊貼趨勢線，量縮即為健康回測")
-        triggers.append("爆量急跌 → 注意高點出貨訊號，可減碼")
+        triggers.append("緊貼趨勢線且量縮 → 健康回測型態")
+        triggers.append("爆量急跌 → 注意高檔出貨特徵，動能轉弱訊號")
     elif setup == "breakdown":
-        triggers.append("技術結構已破壞，避免逢低承接")
-        triggers.append("若要觀察：等 MA20 重新翻多再評估")
+        triggers.append("技術結構已破壞，逢低承接風險高")
+        triggers.append("若要繼續追蹤：等 MA20 重新站穩再評估")
     if signal == "strong_buy" and not triggers:
-        triggers.append("強勢多頭型態，量能配合即可進場")
+        triggers.append("型態強勢，觀察量能是否持續配合")
     if not triggers:
-        triggers.append("目前無明確觸發條件，持續觀察量價變化")
+        triggers.append("目前無明確觸發條件，持續觀察量價結構")
     return triggers
 
 
