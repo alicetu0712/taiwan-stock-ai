@@ -213,6 +213,14 @@ class Recommendation(Base):
     ma20_gap = Column(Float)
     trade_signal = Column(String(20))   # strong_buy/buy/wait/reduce/sell
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Decision Center 欄位（ATR-based entry/exit，由 DecisionEngine 計算）
+    entry_low   = Column(Float)
+    entry_high  = Column(Float)
+    stop_price  = Column(Float)
+    target1     = Column(Float)
+    target2     = Column(Float)
+    atr         = Column(Float)
+    vol_ratio   = Column(Float)
 
 
 class DecisionJournal(Base):
@@ -463,11 +471,41 @@ def _migrate_forward_signals(engine) -> None:
                     logger.warning(f"forward_signals migration {col_name}: {exc}")
 
 
+def _migrate_recommendations(engine) -> None:
+    """recommendations に新カラムを追加（自動マイグレーション）。"""
+    from sqlalchemy import inspect, text
+
+    new_cols = [
+        ("entry_low",   "FLOAT"),
+        ("entry_high",  "FLOAT"),
+        ("stop_price",  "FLOAT"),
+        ("target1",     "FLOAT"),
+        ("target2",     "FLOAT"),
+        ("atr",         "FLOAT"),
+        ("vol_ratio",   "FLOAT"),
+    ]
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns("recommendations")}
+    except Exception:
+        return
+    with engine.begin() as conn:
+        for col_name, col_type in new_cols:
+            if col_name not in existing:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE recommendations ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info(f"recommendations: added column {col_name}")
+                except Exception as exc:
+                    logger.warning(f"recommendations migration {col_name}: {exc}")
+
+
 def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
     _migrate_forward_signals(engine)
+    _migrate_recommendations(engine)
     from config import DATABASE_URL
 
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")

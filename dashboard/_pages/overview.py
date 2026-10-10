@@ -25,108 +25,142 @@ logger = logging.getLogger(__name__)
 
 
 def render_rec_card(r: dict) -> None:
-    level = r.get("level", "B")
-    grade_c = "Aplus" if level == "A+" else level
-    scores = r.get("scores", {})
-    conf = r.get("confidence", 0)
-    conf_color = "#00c851" if conf >= 80 else "#ffbb33" if conf >= 60 else "#ff4444"
+    from src.engines.decision import decision_label, entry_quality_label, tomorrow_triggers
 
-    score_bars = ""
-    for lbl, sub, key, color in [
-        ("品質", "財務體質", "quality", "#667eea"),
-        ("時機", "技術進場", "timing", "#33b5e5"),
-        ("籌碼", "法人動向", "behavior", "#ff8800"),
-        ("風險", "波動風險", "risk", "#00c851"),
-        ("綜合", "加權總分", "total", "#764ba2"),
-    ]:
-        val = scores.get(key, 0)
-        score_bars += (
-            f'<div class="score-row">'
-            f'<span class="score-lbl">{lbl}<span style="font-size:0.65rem;color:#aaa;display:block;line-height:1">{sub}</span></span>'
-            f'<div class="score-bar"><div class="score-fill" style="width:{val}%;background:{color}"></div></div>'
-            f'<span class="score-num" style="color:{color}">{val}</span>'
-            f"</div>"
-        )
+    dl         = decision_label(r)
+    eq_label   = entry_quality_label(r)
+    triggers   = tomorrow_triggers(r)
+    price      = r.get("price")
+    entry_low  = r.get("entry_low")
+    entry_high = r.get("entry_high")
+    stop_p     = r.get("stop_price") or r.get("stop_loss_price")
+    t1         = r.get("target1")
+    t2         = r.get("target2") or r.get("target_price")
+    atr        = r.get("atr")
+    scores     = r.get("scores", {})
+    conf       = r.get("confidence", 0)
+    level      = r.get("level", "B")
+    name       = r.get("name", "")
+    sid        = r.get("sid", "")
+    advantages = r.get("advantages", [])
+    risks      = r.get("risks", [])
+    setup      = r.get("setup_type") or "none"
+    ma20_gap   = r.get("ma20_gap") or 0.0
 
-    adv_tags = "".join(
-        f'<span class="tag-good">✓ {a[:18]}</span>' for a in r.get("advantages", [])[:3]
-    )
-    risk_tags = "".join(
-        f'<span class="tag-risk">⚠ {r2[:18]}</span>' for r2 in r.get("risks", [])[:2]
-    )
-    watch_tags = "".join(
-        f'<span class="tag-watch">👁 {w[:20]}</span>' for w in r.get("watch", [])[:2]
-    )
+    label_color   = dl["color"]
+    label_text    = dl["label"]
+    override_note = ""
+    if dl.get("is_override"):
+        override_note = '<span style="font-size:0.7rem;color:#888;margin-left:8px">（進場品質 override）</span>'
 
-    price = r.get("price")
+    # ── R/R ratio and trading plan ─────────────────────────────
+    rr_html = ""
+    if price and stop_p and t1:
+        risk_pts   = price - stop_p
+        reward_pts = t1 - price
+        if risk_pts > 0:
+            rr        = round(reward_pts / risk_pts, 1)
+            rr_color  = "#00897b" if rr >= 2.0 else "#ffb300" if rr >= 1.5 else "#e53935"
+            entry_str = f"{entry_low:.1f}–{entry_high:.1f}" if (entry_low and entry_high) else f"{price:.1f}"
+            t2_str    = f" / {t2:.1f}" if t2 else ""
+            stop_pct  = round((stop_p - price) / price * 100, 1)
+            t1_pct    = round((t1 - price) / price * 100, 1)
+            rr_html = f"""
+<div style="background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:8px 0">
+  <div style="font-size:0.7rem;color:#666;margin-bottom:6px;font-weight:600">交易計劃</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div style="flex:1;min-width:65px;background:#e8f5e9;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.6rem;color:#2e7d32;font-weight:600">目標一</div>
+      <div style="font-size:0.88rem;font-weight:800;color:#2e7d32">{t1:.1f}{t2_str}</div>
+      <div style="font-size:0.6rem;color:#2e7d32">+{t1_pct}%</div>
+    </div>
+    <div style="flex:1;min-width:65px;background:#fce4ec;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.6rem;color:#c62828;font-weight:600">停損</div>
+      <div style="font-size:0.88rem;font-weight:800;color:#c62828">{stop_p:.1f}</div>
+      <div style="font-size:0.6rem;color:#c62828">{stop_pct}%</div>
+    </div>
+    <div style="flex:1;min-width:65px;background:#fff8e1;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.6rem;color:#f57f17;font-weight:600">進場區間</div>
+      <div style="font-size:0.88rem;font-weight:800;color:#f57f17">{entry_str}</div>
+    </div>
+    <div style="flex:1;min-width:65px;background:#e3f2fd;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.6rem;color:#1565c0;font-weight:600">R/R</div>
+      <div style="font-size:0.88rem;font-weight:800;color:{rr_color}">{rr}x</div>
+    </div>
+  </div>
+</div>"""
+
+    # ── Why bullets ────────────────────────────────────────────
+    adv_items  = "".join(f"<li style='color:#2e7d32'>✓ {a}</li>" for a in advantages[:3])
+    risk_items = "".join(f"<li style='color:#c62828'>⚠ {r2}</li>" for r2 in risks[:2])
+    why_html   = ""
+    if adv_items or risk_items:
+        why_html = f"""
+<div style="margin:6px 0">
+  <ul style="margin:0;padding-left:16px;font-size:0.78rem;line-height:1.6">
+    {adv_items}{risk_items}
+  </ul>
+</div>"""
+
+    # ── Tomorrow triggers ───────────────────────────────────────
+    trig_items = "".join(f"<li>{t}</li>" for t in triggers)
+    trig_html  = f"""
+<div style="background:#fafafa;border-left:3px solid #90a4ae;padding:6px 10px;margin:6px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:0.65rem;color:#546e7a;font-weight:600;margin-bottom:4px">明日觀察觸發條件</div>
+  <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:#37474f;line-height:1.6">
+    {trig_items}
+  </ul>
+</div>"""
+
+    # ── Entry quality badge ─────────────────────────────────────
+    eq_color = "#e53935" if eq_label in ("追高", "避開") else "#00897b" if eq_label in ("理想進場點", "回檔機會") else "#7e57c2"
+    eq_badge  = f'<span style="font-size:0.7rem;background:{eq_color}22;color:{eq_color};padding:2px 7px;border-radius:10px;font-weight:600">{eq_label}</span>'
+
+    # ── Stock header ────────────────────────────────────────────
     price_str = f"　NT$ {price:,.1f}" if price else ""
-
-    target_price = r.get("target_price")
-    stop_loss_price = r.get("stop_loss_price")
-    position_pct = r.get("position_pct")
-    target_is_est = False
-    if price and not target_price:
-        target_price = round(price * 1.10, 1)
-        stop_loss_price = round(price * 0.93, 1)
-        target_is_est = True
-    price_block = ""
-    if price and target_price:
-        target_pct = round((target_price - price) / price * 100, 1)
-        stoploss_pct = round((stop_loss_price - price) / price * 100, 1)
-        pos_str = f"　建議部位 {position_pct:.0f}%" if position_pct else ""
-        tp_label = "目標價 (估)" if target_is_est else "目標價"
-        sl_label = "停損價 (估)" if target_is_est else "停損價"
-        price_block = f"""
-      <div style="display:flex;gap:8px;margin:8px 0 4px;flex-wrap:wrap">
-        <div style="flex:1;min-width:80px;background:#e8f5e9;border-radius:6px;padding:6px 10px;text-align:center">
-          <div style="font-size:0.65rem;color:#2e7d32;font-weight:600">{tp_label}</div>
-          <div style="font-size:0.95rem;font-weight:800;color:#2e7d32">{target_price:,.1f}</div>
-          <div style="font-size:0.65rem;color:#2e7d32">+{target_pct}%</div>
-        </div>
-        <div style="flex:1;min-width:80px;background:#fce4ec;border-radius:6px;padding:6px 10px;text-align:center">
-          <div style="font-size:0.65rem;color:#c62828;font-weight:600">{sl_label}</div>
-          <div style="font-size:0.95rem;font-weight:800;color:#c62828">{stop_loss_price:,.1f}</div>
-          <div style="font-size:0.65rem;color:#c62828">{stoploss_pct}%</div>
-        </div>
-        <div style="flex:1;min-width:80px;background:#f3e5f5;border-radius:6px;padding:6px 10px;text-align:center">
-          <div style="font-size:0.65rem;color:#6a1b9a;font-weight:600">現價</div>
-          <div style="font-size:0.95rem;font-weight:800;color:#6a1b9a">{price:,.1f}</div>
-          <div style="font-size:0.65rem;color:#6a1b9a">{pos_str.strip() or '—'}</div>
-        </div>
-      </div>"""
-
-    name = r.get("name", "")
-    sid = r.get("sid", "")
     name_html = (
-        f'<div class="rec-name">{name}</div><div class="rec-sid">{sid} · TWSE{price_str}</div>'
+        f'<div style="font-size:1.05rem;font-weight:700">{name}</div>'
+        f'<div style="font-size:0.75rem;color:#888">{sid} · TWSE{price_str}</div>'
         if name and name != sid
-        else f'<div class="rec-name">{sid}</div><div class="rec-sid">TWSE{price_str}</div>'
+        else f'<div style="font-size:1.05rem;font-weight:700">{sid}</div>'
+        f'<div style="font-size:0.75rem;color:#888">TWSE{price_str}</div>'
     )
+    ma20_note = f'<span style="font-size:0.65rem;color:#888">MA20 乖離 {ma20_gap:+.1f}%</span>' if ma20_gap else ""
+
     st.markdown(
         f"""
-    <div class="rec-card grade-{grade_c}">
-      <div class="rec-header">
-        <div>
-          {name_html}
-        </div>
-        <span class="rec-badge badge-{grade_c}">{level} 級</span>
-      </div>
-      {score_bars}
-      {price_block}
-      <div class="tags">{adv_tags}{risk_tags}</div>
-      {f'<div class="tags">{watch_tags}</div>' if watch_tags else ''}
-      <div class="confidence-row">
-        <span class="confidence-lbl">分析信心度</span>
-        <span class="confidence-val" style="color:{conf_color}">{conf}%</span>
-      </div>
+<div style="border:1px solid #e0e0e0;border-radius:10px;padding:14px 16px;margin-bottom:12px;background:#fff">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+    <div>{name_html}</div>
+    <div style="text-align:right">
+      <div style="font-size:1.3rem;font-weight:900;color:{label_color}">{label_text}</div>
+      {override_note}
+      <div style="margin-top:3px">{eq_badge}</div>
     </div>
-    """,
+  </div>
+  <div style="font-size:0.78rem;color:#555;margin-bottom:6px">{dl['reason']}</div>
+  {rr_html}
+  {why_html}
+  {trig_html}
+  <div style="font-size:0.7rem;color:#aaa;margin-top:6px">信心度 {conf}% · {level} 級 · {setup} {ma20_note}</div>
+</div>""",
         unsafe_allow_html=True,
     )
 
-    if r.get("conclusion"):
-        with st.expander("📝 AI 結論"):
-            st.markdown(f"> {r['conclusion']}")
+    with st.expander("📊 原始評分"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("綜合", f"{scores.get('total', 0):.0f}")
+            st.metric("品質", f"{scores.get('quality', 0):.0f}")
+            st.metric("時機", f"{scores.get('timing', 0):.0f}")
+        with col2:
+            st.metric("籌碼", f"{scores.get('behavior', 0):.0f}")
+            st.metric("風險", f"{scores.get('risk', 0):.0f}")
+            if atr:
+                st.metric("ATR", f"{atr:.2f}")
+        conclusion = r.get("conclusion", "")
+        if conclusion:
+            st.markdown(f"> {conclusion}")
 
 
 def page_today(selected_date: date) -> None:
@@ -258,11 +292,6 @@ def page_today(selected_date: date) -> None:
     for r in recs:
         if r["price"] is None:
             r["price"] = stock_prices.get(r["sid"])
-    for r in recs:
-        p = r.get("price")
-        if p and not r.get("target_price"):
-            r["target_price"] = round(p * 1.10, 1)
-            r["stop_loss_price"] = round(p * 0.93, 1)
 
     if not recs:
         recs_section = re.search(

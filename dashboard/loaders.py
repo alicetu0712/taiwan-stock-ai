@@ -288,6 +288,18 @@ def load_db_recommendations(target_date: date) -> list:
                     "target_price": pm.target_price if pm else None,
                     "stop_loss_price": pm.stop_loss_price if pm else None,
                     "position_pct": pm.position_pct if pm else None,
+                    # V2 Decision Center fields
+                    "trade_signal":      getattr(r, "trade_signal", None) or "wait",
+                    "setup_type":        getattr(r, "setup_type", None) or "none",
+                    "ma20_gap":          getattr(r, "ma20_gap", None),
+                    "price_trend_score": getattr(r, "price_trend_score", None),
+                    "entry_low":         getattr(r, "entry_low", None),
+                    "entry_high":        getattr(r, "entry_high", None),
+                    "stop_price":        getattr(r, "stop_price", None),
+                    "target1":           getattr(r, "target1", None),
+                    "target2":           getattr(r, "target2", None),
+                    "atr":               getattr(r, "atr", None),
+                    "vol_ratio":         getattr(r, "vol_ratio", None),
                 }
             )
         return result

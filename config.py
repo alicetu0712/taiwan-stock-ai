@@ -225,3 +225,10 @@ EXCLUDE_PATTERNS = [
     r"^\d{4}[A-Z]",  # 權證代號
     r"^7[89]\d{2}",  # 興櫃
 ]
+
+# ── Decision Center 設定（Presentation layer，非 validated trading rule）──────
+# ENTRY_QUALITY: entry quality check for UI display only.
+# chase_gap_pct is NOT a validated signal threshold — it is a presentation heuristic.
+ENTRY_QUALITY = {
+    "chase_gap_pct": 5.0,   # ma20_gap > 5% → show "WAIT FOR PULLBACK" warning
+}

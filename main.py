@@ -931,24 +931,46 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     score_change_5d   = rec.score_change_5d,
                     score_change_10d  = rec.score_change_10d,
                     tier              = "recommend",
+                    price_trend_score = rec.price_trend_score,
+                    setup_type        = rec.setup_type,
+                    ma20_gap          = rec.ma20_gap,
+                    trade_signal      = rec.trade_signal,
+                    entry_low         = rec.entry_low,
+                    entry_high        = rec.entry_high,
+                    stop_price        = rec.stop_price,
+                    target1           = rec.target1,
+                    target2           = rec.target2,
+                    atr               = rec.atr,
+                    vol_ratio         = rec.vol_ratio,
                 )
                 session.add(r)
             else:
-                existing.stock_name       = rec.name
-                existing.rec_level        = rec.rec_level
-                existing.confidence       = rec.confidence
-                existing.summary          = ai.get("ai_summary", rec.summary)
-                existing.advantages       = json.dumps(rec.advantages, ensure_ascii=False)
-                existing.risks            = json.dumps(rec.risks, ensure_ascii=False)
-                existing.watch_points     = json.dumps(rec.watch_points, ensure_ascii=False)
-                existing.ai_conclusion    = ai.get("conclusion_ai", "")
-                existing.strategy_version = "v6.0"
-                existing.total_score      = rec.total_score
-                existing.timing_score     = rec.timing_score
-                existing.behavior_score   = rec.behavior_score
-                existing.score_change_5d  = rec.score_change_5d
-                existing.score_change_10d = rec.score_change_10d
-                existing.tier             = "recommend"
+                existing.stock_name        = rec.name
+                existing.rec_level         = rec.rec_level
+                existing.confidence        = rec.confidence
+                existing.summary           = ai.get("ai_summary", rec.summary)
+                existing.advantages        = json.dumps(rec.advantages, ensure_ascii=False)
+                existing.risks             = json.dumps(rec.risks, ensure_ascii=False)
+                existing.watch_points      = json.dumps(rec.watch_points, ensure_ascii=False)
+                existing.ai_conclusion     = ai.get("conclusion_ai", "")
+                existing.strategy_version  = "v6.0"
+                existing.total_score       = rec.total_score
+                existing.timing_score      = rec.timing_score
+                existing.behavior_score    = rec.behavior_score
+                existing.score_change_5d   = rec.score_change_5d
+                existing.score_change_10d  = rec.score_change_10d
+                existing.tier              = "recommend"
+                existing.price_trend_score = rec.price_trend_score
+                existing.setup_type        = rec.setup_type
+                existing.ma20_gap          = rec.ma20_gap
+                existing.trade_signal      = rec.trade_signal
+                existing.entry_low         = rec.entry_low
+                existing.entry_high        = rec.entry_high
+                existing.stop_price        = rec.stop_price
+                existing.target1           = rec.target1
+                existing.target2           = rec.target2
+                existing.atr               = rec.atr
+                existing.vol_ratio         = rec.vol_ratio
 
         # ── 儲存 Opportunity 追蹤記錄 ────────────────────────
         for rec in (opp_recs or []):
@@ -975,6 +997,17 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     timing_change_5d   = rec.timing_change_5d,
                     behavior_change_5d = rec.behavior_change_5d,
                     tier               = "opportunity",
+                    price_trend_score  = rec.price_trend_score,
+                    setup_type         = rec.setup_type,
+                    ma20_gap           = rec.ma20_gap,
+                    trade_signal       = rec.trade_signal,
+                    entry_low          = rec.entry_low,
+                    entry_high         = rec.entry_high,
+                    stop_price         = rec.stop_price,
+                    target1            = rec.target1,
+                    target2            = rec.target2,
+                    atr                = rec.atr,
+                    vol_ratio          = rec.vol_ratio,
                 ))
 
         # ── 儲存 Watch List（當日相對最強的觀察標的）──────────
@@ -996,10 +1029,21 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     strategy_version = "v6.0",
                     total_score      = rec.total_score,
                     timing_score     = rec.timing_score,
-                    behavior_score   = rec.behavior_score,
-                    score_change_5d  = rec.score_change_5d,
-                    score_change_10d = rec.score_change_10d,
-                    tier             = "watch",
+                    behavior_score     = rec.behavior_score,
+                    score_change_5d    = rec.score_change_5d,
+                    score_change_10d   = rec.score_change_10d,
+                    tier               = "watch",
+                    price_trend_score  = rec.price_trend_score,
+                    setup_type         = rec.setup_type,
+                    ma20_gap           = rec.ma20_gap,
+                    trade_signal       = rec.trade_signal,
+                    entry_low          = rec.entry_low,
+                    entry_high         = rec.entry_high,
+                    stop_price         = rec.stop_price,
+                    target1            = rec.target1,
+                    target2            = rec.target2,
+                    atr                = rec.atr,
+                    vol_ratio          = rec.vol_ratio,
                 ))
 
         # ── 更新 Decision Journal ─────────────────────────────

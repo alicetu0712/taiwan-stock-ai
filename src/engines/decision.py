@@ -88,6 +88,115 @@ class StockRecommendation:
     vol_ratio: Optional[float] = None
 
 
+# ── Decision Center（Presentation layer）────────────────────────────────────
+# These functions translate V2 engine output (trade_signal + setup_type)
+# into plain-language decisions. They do NOT recompute scores or create
+# a parallel selection model.
+
+def decision_label(r: dict) -> dict:
+    """
+    Translate V2 model output into a human-readable decision.
+
+    Data flow: V2 engine → trade_signal/setup_type → decision_label (translate only).
+    Only legitimate override: model BUY but price chasing → WAIT FOR PULLBACK.
+
+    Returns dict with keys: label, color, reason, is_override.
+    """
+    from config import ENTRY_QUALITY
+
+    signal          = r.get("trade_signal") or "wait"
+    setup           = r.get("setup_type") or "none"
+    ma20_gap        = r.get("ma20_gap") or 0.0
+    chase_threshold = ENTRY_QUALITY["chase_gap_pct"]
+
+    # Thesis invalidated: sell signal OR confirmed breakdown
+    if signal == "sell" or setup == "breakdown":
+        reason = "技術結構已破壞" if setup == "breakdown" else "賣出訊號確立"
+        return {"label": "SELL / AVOID", "color": "#e53935", "reason": reason, "is_override": False}
+
+    # Deteriorating signal (thesis not failed)
+    if signal == "reduce":
+        return {
+            "label": "REDUCE",
+            "color": "#fb8c00",
+            "reason": "訊號轉弱，動能減退，考慮縮減部位",
+            "is_override": False,
+        }
+
+    # Buy signals — apply entry quality check (presentation only)
+    if signal in ("strong_buy", "buy"):
+        if ma20_gap > chase_threshold:
+            return {
+                "label": "WAIT FOR PULLBACK",
+                "color": "#ffb300",
+                "reason": f"模型看多，但現價偏離 MA20 達 {ma20_gap:.1f}%（>{chase_threshold:.0f}%），建議等回測",
+                "is_override": True,
+            }
+        label = "BUY ★" if signal == "strong_buy" else "BUY"
+        reason = "強烈買進訊號，型態與量能均佳" if signal == "strong_buy" else "買進訊號，進場條件成立"
+        return {"label": label, "color": "#00897b", "reason": reason, "is_override": False}
+
+    # Default: wait
+    return {
+        "label": "WAIT",
+        "color": "#7e57c2",
+        "reason": "尚無明確進場訊號，持續觀察",
+        "is_override": False,
+    }
+
+
+def entry_quality_label(r: dict) -> str:
+    """Return plain-language entry quality: 理想 / 追高 / 回檔機會 / 觀望."""
+    from config import ENTRY_QUALITY
+
+    signal          = r.get("trade_signal") or "wait"
+    setup           = r.get("setup_type") or "none"
+    ma20_gap        = r.get("ma20_gap") or 0.0
+    chase_threshold = ENTRY_QUALITY["chase_gap_pct"]
+
+    if signal in ("strong_buy", "buy"):
+        if ma20_gap > chase_threshold:
+            return "追高"
+        if setup in ("breakout", "pullback_buy"):
+            return "理想進場點"
+        return "可進場"
+    if setup == "pullback_buy":
+        return "回檔機會"
+    if signal == "reduce":
+        return "縮減部位"
+    if setup == "breakdown" or signal == "sell":
+        return "避開"
+    return "觀望"
+
+
+def tomorrow_triggers(r: dict) -> list:
+    """Return list of plain-language trigger conditions to watch for tomorrow."""
+    setup  = r.get("setup_type") or "none"
+    signal = r.get("trade_signal") or "wait"
+
+    triggers = []
+    if setup == "breakout":
+        triggers.append("量能 > 昨日 1.5x 且收在高點 → 確認突破，可追進")
+        triggers.append("縮量整理未破支撐 → 健康，持續觀察")
+    elif setup == "pullback_buy":
+        triggers.append("守住支撐（> 進場低點）+ 出現量縮 → 可考慮進場")
+        triggers.append("跌破支撐且無反彈 → 暫緩，等下一個支撐")
+    elif setup == "pullback_hold":
+        triggers.append("維持現有部位，觀察是否守住 MA20")
+        triggers.append("跌破 MA20 收盤 → 考慮縮減部位")
+    elif setup == "trending":
+        triggers.append("緊貼趨勢線，量縮即為健康回測")
+        triggers.append("爆量急跌 → 注意高點出貨訊號，可減碼")
+    elif setup == "breakdown":
+        triggers.append("技術結構已破壞，避免逢低承接")
+        triggers.append("若要觀察：等 MA20 重新翻多再評估")
+    if signal == "strong_buy" and not triggers:
+        triggers.append("強勢多頭型態，量能配合即可進場")
+    if not triggers:
+        triggers.append("目前無明確觸發條件，持續觀察量價變化")
+    return triggers
+
+
 class DecisionEngine:
     """
     AI 決策引擎（CIO AI）。
