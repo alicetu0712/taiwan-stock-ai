@@ -92,14 +92,11 @@ class TaiwanTradingCalendar:
 
     def is_trading_day(self, d: date) -> bool:
         """
-        True if d is (or is likely to be) a trading day.
-        CALENDAR_UNKNOWN is treated as OPEN to avoid blocking the pipeline
-        on an uncovered future year — the pipeline's validator is the final safety net.
+        True only if d is a confirmed TWSE trading day.
+        Fail-closed: CALENDAR_UNKNOWN returns False — do not generate formal signals
+        for years not covered by _TWSE_HOLIDAYS. Use --force to override.
         """
-        return self.market_status(d) in (
-            MarketStatus.TRADING_DAY,
-            MarketStatus.CALENDAR_UNKNOWN,
-        )
+        return self.market_status(d) == MarketStatus.TRADING_DAY
 
     def is_market_closed(self, d: date) -> bool:
         """True if we are confident the market is closed (WEEKEND or HOLIDAY)."""

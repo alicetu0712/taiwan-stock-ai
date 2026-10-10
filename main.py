@@ -53,13 +53,13 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
     trade_date = trade_date or date.today()
     start_time = datetime.now()
 
-    # Guard: 休市日不執行（除非 force=True 或 dry_run）
+    # Guard: 休市日 / 日曆未涵蓋年份不執行（fail-closed）
     if not dry_run and not force:
         from src.core.trading_calendar import market_status as _mkt_status, MarketStatus as _MktStatus
         _status = _mkt_status(trade_date)
-        if _status in (_MktStatus.WEEKEND, _MktStatus.HOLIDAY):
+        if _status in (_MktStatus.WEEKEND, _MktStatus.HOLIDAY, _MktStatus.CALENDAR_UNKNOWN):
             logger.info(
-                f"[Guard] {trade_date} 台股休市（{_status.value}），跳過分析。"
+                f"[Guard] {trade_date} 跳過分析（{_status.value}）。"
                 f"如需強制執行，使用 run_pipeline(force=True) 或 --force。"
             )
             return None
@@ -1409,6 +1409,11 @@ if __name__ == "__main__":
             logger.info(f"{trade_date} 為台股國定假日休市。使用 --force 可強制執行。")
         elif status == _MktStatus.WEEKEND:
             logger.info(f"{trade_date} 為週末休市。使用 --force 可強制執行。")
+        elif status == _MktStatus.CALENDAR_UNKNOWN:
+            logger.warning(
+                f"{trade_date} 年份不在交易日曆涵蓋範圍，無法確認是否為交易日（fail-closed）。"
+                f"更新 src/core/trading_calendar.py 的 _TWSE_HOLIDAYS 後重試，或使用 --force 強制執行。"
+            )
         else:
             logger.info(f"{trade_date} 非台股交易日（{status}）。使用 --force 可強制執行。")
         sys.exit(0)

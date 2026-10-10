@@ -195,3 +195,29 @@ class TestDataValidatorWithCalendar:
         valid, msg = validator.validate_price_data(df, date(2026, 10, 8))
         assert not valid
         assert "DATA_INCOMPLETE" in msg
+
+
+class TestCalendarUnknownFailClosed:
+    """CALENDAR_UNKNOWN must block signal generation (fail-closed)."""
+
+    _UNCOVERED_WEEKDAY = date(2027, 3, 15)  # Monday, year not in _COVERED_YEARS
+
+    def test_status_is_calendar_unknown(self):
+        assert market_status(self._UNCOVERED_WEEKDAY) == MarketStatus.CALENDAR_UNKNOWN
+
+    def test_is_trading_day_returns_false(self):
+        """Fail-closed: unknown year → not a confirmed trading day."""
+        assert is_trading_day(self._UNCOVERED_WEEKDAY) is False
+
+    def test_is_market_closed_returns_false(self):
+        """is_market_closed only returns True for WEEKEND/HOLIDAY, not UNKNOWN."""
+        assert is_market_closed(self._UNCOVERED_WEEKDAY) is False
+
+    def test_pipeline_guard_blocks_unknown(self):
+        """run_pipeline guard must block CALENDAR_UNKNOWN (fail-closed)."""
+        from src.core.trading_calendar import MarketStatus
+        blocked_statuses = {MarketStatus.WEEKEND, MarketStatus.HOLIDAY, MarketStatus.CALENDAR_UNKNOWN}
+        status = market_status(self._UNCOVERED_WEEKDAY)
+        assert status in blocked_statuses, (
+            f"Expected CALENDAR_UNKNOWN to be in blocked set, got {status}"
+        )
