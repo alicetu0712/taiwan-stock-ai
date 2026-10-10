@@ -64,7 +64,12 @@ class BacktestService:
             from src.database import DailyPrice, Recommendation, get_session
 
             s = get_session()
-            recs = s.query(Recommendation).order_by(Recommendation.date).all()
+            recs = (
+                s.query(Recommendation)
+                .filter(Recommendation.is_valid.isnot(False))  # exclude invalid records
+                .order_by(Recommendation.date)
+                .all()
+            )
             all_ids = {r.stock_id for r in recs} | {"0050", "0056"}
             all_prices_q = (
                 s.query(DailyPrice)
@@ -175,7 +180,12 @@ class BacktestService:
             from src.database import DailyPrice, Recommendation, get_session
 
             s = get_session()
-            recs = s.query(Recommendation).order_by(Recommendation.date).all()
+            recs = (
+                s.query(Recommendation)
+                .filter(Recommendation.is_valid.isnot(False))  # exclude invalid records
+                .order_by(Recommendation.date)
+                .all()
+            )
             ar_rows = s.query(_AR.date, _AR.stock_id).all()
             ar_stock_ids = {ar_sid for _, ar_sid in ar_rows}
             all_ids = {r.stock_id for r in recs} | {"0050", "0056"} | ar_stock_ids
@@ -427,6 +437,7 @@ class BacktestService:
             recs = (
                 s.query(Recommendation)
                 .filter(Recommendation.tier == "recommend")
+                .filter(Recommendation.is_valid.isnot(False))  # exclude invalid records
                 .order_by(Recommendation.date)
                 .all()
             )

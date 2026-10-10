@@ -856,9 +856,37 @@ def load_pipeline_funnel(target_date: date) -> dict:
 def load_market_health(target_date) -> dict:
     """
     Assess today's trading environment for the No-Trade-Today banner.
-    Combines: 0050 regime + pipeline pass rate + Core Picks count.
-    level: "green" (normal) / "yellow" (caution) / "red" (avoid new positions)
+    Combines: trading calendar + 0050 regime + pipeline pass rate + Core Picks count.
+
+    Returns:
+      level         : "green" / "yellow" / "red" / "closed" / "unknown"
+      market_status : "TRADING_DAY" / "WEEKEND" / "HOLIDAY" / "CALENDAR_UNKNOWN"
+      last_trading_day: date of most recent confirmed trading day
+      conditions    : list of warning strings
     """
+    from datetime import date as _date
+    from src.core.trading_calendar import (
+        market_status as _cal_status, MarketStatus as _MS,
+        prev_trading_day as _prev_td,
+    )
+
+    cal_status = _cal_status(target_date)
+    last_td    = _prev_td(target_date)
+
+    # ── 確認休市 → 直接回傳，不查 pipeline ────────────────────
+    if cal_status in (_MS.WEEKEND, _MS.HOLIDAY):
+        label = "週末" if cal_status == _MS.WEEKEND else "國定假日"
+        return {
+            "level":            "closed",
+            "market_status":    cal_status.value,
+            "last_trading_day": last_td,
+            "regime":           "neutral",
+            "universe":         0,
+            "pass_rate":        0.0,
+            "recs_count":       0,
+            "conditions":       [f"台股{label}休市"],
+        }
+
     try:
         from src.services.evidence_service import get_current_regime
         from src.database import PipelineFunnel, Recommendation, get_session
@@ -888,7 +916,15 @@ def load_market_health(target_date) -> dict:
             level = "red"
 
         if 0 < universe < 200:
-            conditions.append(f"今日有效股價資料僅 {universe} 檔（可能資料蒐集異常）")
+            # Distinguish: CALENDAR_UNKNOWN means we're not sure if it was a trading day
+            if cal_status == _MS.CALENDAR_UNKNOWN:
+                conditions.append(
+                    f"有效股價資料僅 {universe} 檔，且交易日曆無法確認當日是否開市（CALENDAR_UNKNOWN）"
+                )
+            else:
+                conditions.append(
+                    f"有效股價資料僅 {universe} 檔（DATA_INCOMPLETE：資料蒐集可能異常）"
+                )
             level = "red"
 
         if universe >= 200 and pass_rate < 3.0 and level == "green":
@@ -900,17 +936,22 @@ def load_market_health(target_date) -> dict:
             level = "yellow"
 
         return {
-            "level": level,
-            "regime": regime,
-            "universe": universe,
-            "pass_rate": pass_rate,
-            "recs_count": recs_count,
-            "conditions": conditions,
+            "level":            level,
+            "market_status":    cal_status.value,
+            "last_trading_day": last_td,
+            "regime":           regime,
+            "universe":         universe,
+            "pass_rate":        pass_rate,
+            "recs_count":       recs_count,
+            "conditions":       conditions,
         }
     except Exception as e:
         logger.warning(f"load_market_health: {e}")
-        return {"level": "unknown", "conditions": [], "regime": "neutral",
-                "universe": 0, "pass_rate": 0, "recs_count": 0}
+        return {
+            "level": "unknown", "market_status": "CALENDAR_UNKNOWN",
+            "last_trading_day": last_td, "conditions": [],
+            "regime": "neutral", "universe": 0, "pass_rate": 0, "recs_count": 0,
+        }
 
 
 @st.cache_data(ttl=120)
@@ -943,6 +984,7 @@ def load_forward_signals_scorecard(limit: int = 200) -> list:
         rows = (
             s.query(ForwardSignal)
             .filter(ForwardSignal.decision_label.isnot(None))
+            .filter(ForwardSignal.is_valid.isnot(False))  # exclude invalid records
             .order_by(desc(ForwardSignal.trade_date), ForwardSignal.candidate_rank)
             .limit(limit)
             .all()

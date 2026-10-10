@@ -23,6 +23,7 @@ def _load_scorecard_rows(limit: int = 300) -> list:
         rows = (
             s.query(ForwardSignal)
             .filter(ForwardSignal.decision_label.isnot(None))
+            .filter(ForwardSignal.is_valid.isnot(False))  # exclude invalid records
             .order_by(desc(ForwardSignal.trade_date), ForwardSignal.candidate_rank)
             .limit(limit)
             .all()
@@ -61,14 +62,18 @@ def _load_scorecard_rows(limit: int = 300) -> list:
         logger.warning(f"_load_scorecard_rows: {e}")
         return []
 
+# Label strings must match decision.py exactly: "BUY ★" (space), "SELL / AVOID" (spaces)
 _LABEL_COLOR = {
-    "BUY★":              "#1a7f4b",
+    "BUY ★":            "#1a7f4b",
     "BUY":               "#2ecc71",
     "WAIT FOR PULLBACK": "#f39c12",
     "WAIT":              "#95a5a6",
     "REDUCE":            "#e67e22",
-    "SELL/AVOID":        "#e74c3c",
+    "SELL / AVOID":      "#e74c3c",
 }
+
+# Preferred defaults for decision_label multiselect — must exist in actual data to be selected
+_PREFERRED_LABEL_DEFAULTS = ["BUY ★", "BUY"]
 
 _OUTCOME_ICON = {
     "T1_HIT":         "🎯",
@@ -95,7 +100,7 @@ def _fmt(v, suffix="", places=1, plus=False):
 
 
 def _summary_stats(rows: list) -> dict:
-    buy_rows = [r for r in rows if r["decision_label"] in ("BUY★", "BUY")]
+    buy_rows = [r for r in rows if r["decision_label"] in ("BUY ★", "BUY")]
     matured  = [r for r in buy_rows if r["alpha_20d"] is not None]
     if not matured:
         return {"n_buy": len(buy_rows), "matured": 0, "winrate": None, "avg_alpha": None, "t1_rate": None, "stop_rate": None}
@@ -135,8 +140,22 @@ def page_scorecard() -> None:
     # ── 篩選控制 ──────────────────────────────────────────────
     col_f1, col_f2, col_f3 = st.columns(3)
     all_labels = sorted({r["decision_label"] for r in rows if r["decision_label"]})
-    sel_labels = col_f1.multiselect("決策標籤", all_labels, default=["BUY★", "BUY"], key="sc_labels")
     all_setups = sorted({r["setup_type"] for r in rows if r["setup_type"]})
+
+    # Sanitize stale session_state values (e.g. old label strings after code rename)
+    if "sc_labels" in st.session_state:
+        st.session_state["sc_labels"] = [
+            v for v in st.session_state["sc_labels"] if v in all_labels
+        ]
+    if "sc_setups" in st.session_state:
+        st.session_state["sc_setups"] = [
+            v for v in st.session_state["sc_setups"] if v in all_setups
+        ]
+
+    # Default: prefer BUY ★ / BUY, but only if they actually exist in the data
+    default_labels = [x for x in _PREFERRED_LABEL_DEFAULTS if x in all_labels]
+
+    sel_labels = col_f1.multiselect("決策標籤", all_labels, default=default_labels, key="sc_labels")
     sel_setups = col_f2.multiselect("型態", all_setups, default=all_setups, key="sc_setups")
     outcome_opts = ["全部", "已有結果", "待成熟"]
     sel_outcome = col_f3.selectbox("結果", outcome_opts, key="sc_outcome")
@@ -155,7 +174,7 @@ def page_scorecard() -> None:
     stats = _summary_stats(filtered)
     st.markdown("---")
     sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-    sc1.metric("BUY/BUY★ 信號", stats["n_buy"])
+    sc1.metric("BUY/BUY ★ 信號", stats["n_buy"])
     sc2.metric("已成熟（20D）", stats["matured"])
     if stats["winrate"] is not None:
         sc3.metric("勝率（Alpha > 0）", f"{stats['winrate']}%")

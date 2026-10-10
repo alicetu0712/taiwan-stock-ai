@@ -67,13 +67,13 @@ def _is_excluded(name: str, stock_id: str) -> bool:
     return False
 
 
-def fetch_twse_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
-    """抓取上市股票當日全市場行情。"""
+def fetch_twse_daily(trade_date: Optional[date] = None) -> tuple:
+    """抓取上市股票當日全市場行情。回傳 (DataFrame, api_date)。"""
     logger.info("Fetching TWSE daily prices...")
     data = _get(TWSE_API["daily_all"])
     if not data:
         logger.error("TWSE daily_all API returned no data.")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
     records = []
     _api_date: Optional[date] = None  # 從第一筆取得 API 實際交易日
@@ -109,16 +109,16 @@ def fetch_twse_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
         df["amount"] = df["amount"] / 1_000_000  # 轉換為百萬元
         df["volume"] = df["volume"] / 1_000  # 轉換為千股
     logger.info(f"TWSE: {len(df)} stocks fetched.")
-    return df
+    return df, _api_date
 
 
-def fetch_tpex_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
-    """抓取上櫃股票當日全市場行情。"""
+def fetch_tpex_daily(trade_date: Optional[date] = None) -> tuple:
+    """抓取上櫃股票當日全市場行情。回傳 (DataFrame, api_date)。"""
     logger.info("Fetching TPEx daily prices...")
     data = _get(TPEX_API["daily_all"])
     if not data:
         logger.error("TPEx daily_all API returned no data.")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
     records = []
     _api_date_tpex: Optional[date] = None
@@ -156,7 +156,7 @@ def fetch_tpex_daily(trade_date: Optional[date] = None) -> pd.DataFrame:
         df["amount"] = df["amount"] / 1_000_000
         df["volume"] = df["volume"] / 1_000
     logger.info(f"TPEx: {len(df)} stocks fetched.")
-    return df
+    return df, _api_date_tpex
 
 
 def _fetch_yahoo_one(ticker: str, target_date: date) -> Optional[dict]:
@@ -273,20 +273,27 @@ def fetch_yfinance_daily(stale_df: pd.DataFrame, target_date: date) -> pd.DataFr
     return df
 
 
-def fetch_all_prices(trade_date: Optional[date] = None) -> pd.DataFrame:
-    """合併上市 + 上櫃當日行情；若 API 未更新則自動啟用 yfinance 備援。"""
-    twse = fetch_twse_daily(trade_date)
-    tpex = fetch_tpex_daily(trade_date)
-    all_df = pd.concat([twse, tpex], ignore_index=True)
+def fetch_all_prices(trade_date: Optional[date] = None) -> tuple:
+    """
+    合併上市 + 上櫃當日行情；若 API 未更新則自動啟用 yfinance 備援。
+    回傳 (DataFrame, source_price_date) 讓呼叫方可驗證資料日期與 trade_date 是否一致。
+    source_price_date = API 實際回傳的資料日期（可能 != trade_date）。
+    """
+    twse_df, twse_api_date = fetch_twse_daily(trade_date)
+    tpex_df, tpex_api_date = fetch_tpex_daily(trade_date)
+    all_df = pd.concat([twse_df, tpex_df], ignore_index=True)
     # 移除重複（同代號）
     all_df = all_df.drop_duplicates(subset="stock_id", keep="first")
     # 過濾收盤價為 0 或 NaN
     all_df = all_df[all_df["close"].notna() & (all_df["close"] > 0)]
 
+    # 取 TWSE 的 API 日期作為 source_price_date（代表性更強；TPEX 為備選）
+    source_price_date = twse_api_date or tpex_api_date
+
     # yfinance 備援：API 回傳日期 < 今天 → 嘗試抓今日資料
     today = date.today()
     if trade_date is None and not all_df.empty:
-        api_date = all_df["date"].iloc[0]
+        api_date = source_price_date or all_df["date"].iloc[0]
         if isinstance(api_date, str):
             api_date = date.fromisoformat(api_date)
         if hasattr(api_date, "date"):
@@ -302,11 +309,11 @@ def fetch_all_prices(trade_date: Optional[date] = None) -> pd.DataFrame:
                     yf_date = yf_date.date()
                 if yf_date == today:
                     logger.info(f"yfinance 備援成功：{len(yf_df)} 筆 ({today})")
-                    return yf_df
+                    return yf_df, today
             logger.warning("yfinance 備援無今日資料，仍使用 TWSE/TPEx 舊資料。")
 
     logger.info(f"Total stocks fetched: {len(all_df)}")
-    return all_df
+    return all_df, source_price_date
 
 
 def fetch_stock_info() -> dict:

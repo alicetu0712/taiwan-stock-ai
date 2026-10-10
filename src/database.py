@@ -221,6 +221,10 @@ class Recommendation(Base):
     target2     = Column(Float)
     atr         = Column(Float)
     vol_ratio   = Column(Float)
+    # Data Integrity — validity gate
+    is_valid          = Column(Boolean, default=True)    # False = 此紀錄不得參與任何績效統計
+    invalid_reason    = Column(String(60))               # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH / etc.
+    source_price_date = Column(Date)                     # 實際股價資料日期（vs date 欄位）
 
 
 class DecisionJournal(Base):
@@ -398,7 +402,7 @@ class ForwardSignal(Base):
     stop_price     = Column(Float)        # 停損價（凍結值）
     target1        = Column(Float)        # 目標價 T1
     target2        = Column(Float)        # 目標價 T2
-    decision_label = Column(String(30))   # "BUY★" / "BUY" / "WAIT FOR PULLBACK" / "WAIT" / "REDUCE" / "SELL/AVOID"
+    decision_label = Column(String(30))   # "BUY ★" / "BUY" / "WAIT FOR PULLBACK" / "WAIT" / "REDUCE" / "SELL / AVOID"
 
     locked_at = Column(DateTime, default=datetime.utcnow)
 
@@ -411,6 +415,10 @@ class ForwardSignal(Base):
     t1_hit_day           = Column(Integer)  # 第幾個交易日收盤首次達到 T1
     outcome_note         = Column(String(20))  # T1_HIT / STOP_TRIGGERED / EXPIRED / null
     outcomes_computed_at = Column(DateTime)
+    # Data Integrity — validity gate
+    is_valid          = Column(Boolean, default=True)    # False = 此紀錄不得參與任何績效統計
+    invalid_reason    = Column(String(60))               # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH
+    source_price_date = Column(Date)                     # 實際股價資料日期（vs trade_date 欄位）
 
 
 class PipelineFunnel(Base):
@@ -488,6 +496,10 @@ def _migrate_forward_signals(engine) -> None:
         ("t1_hit_day",              "INTEGER"),
         ("outcome_note",            "VARCHAR(20)"),
         ("outcomes_computed_at",    "DATETIME"),
+        # Data Integrity validity gate
+        ("is_valid",                "BOOLEAN DEFAULT 1"),
+        ("invalid_reason",          "VARCHAR(60)"),
+        ("source_price_date",       "DATE"),
     ]
     try:
         existing = {c["name"] for c in inspect(engine).get_columns("forward_signals")}
@@ -510,13 +522,17 @@ def _migrate_recommendations(engine) -> None:
     from sqlalchemy import inspect, text
 
     new_cols = [
-        ("entry_low",   "FLOAT"),
-        ("entry_high",  "FLOAT"),
-        ("stop_price",  "FLOAT"),
-        ("target1",     "FLOAT"),
-        ("target2",     "FLOAT"),
-        ("atr",         "FLOAT"),
-        ("vol_ratio",   "FLOAT"),
+        ("entry_low",         "FLOAT"),
+        ("entry_high",        "FLOAT"),
+        ("stop_price",        "FLOAT"),
+        ("target1",           "FLOAT"),
+        ("target2",           "FLOAT"),
+        ("atr",               "FLOAT"),
+        ("vol_ratio",         "FLOAT"),
+        # Data Integrity validity gate
+        ("is_valid",          "BOOLEAN DEFAULT 1"),
+        ("invalid_reason",    "VARCHAR(60)"),
+        ("source_price_date", "DATE"),
     ]
     try:
         existing = {c["name"] for c in inspect(engine).get_columns("recommendations")}

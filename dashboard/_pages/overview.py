@@ -489,9 +489,36 @@ def page_today(selected_date: date) -> None:
         )
 
     # No-Trade Today banner
-    health = load_market_health(selected_date)
-    _h_level = health.get("level", "green")
-    if _h_level in ("red", "yellow"):
+    health    = load_market_health(selected_date)
+    _h_level  = health.get("level", "green")
+    _h_mstatus = health.get("market_status", "TRADING_DAY")
+    _h_last_td = health.get("last_trading_day")
+
+    if _h_level == "closed":
+        # ── 休市日專用 banner ───────────────────────────────────
+        _is_holiday = _h_mstatus == "HOLIDAY"
+        _closed_label = "國定假日" if _is_holiday else "週末"
+        _last_td_str  = _h_last_td.strftime("%Y/%m/%d") if _h_last_td else "—"
+        _note = ""
+        if recs:
+            _note = (
+                f'<div style="font-size:0.74rem;color:#5d4037;margin-top:8px;'
+                f'background:#fff3e0;border-radius:6px;padding:5px 10px">'
+                f'⚠️ 以下顯示的是 <b>{_last_td_str}</b> 的歷史收盤分析，'
+                f'<b>不是 {selected_date} 的新交易訊號</b>。</div>'
+            )
+        st.markdown(
+            f"""
+<div style="background:#e8f5e9;border:1.5px solid #a5d6a7;border-radius:10px;padding:12px 16px;margin:8px 0 12px">
+  <div style="font-size:1.05rem;font-weight:800;color:#2e7d32;margin-bottom:4px">🟢 今日台股{_closed_label}休市</div>
+  <div style="font-size:0.82rem;color:#388e3c">最近有效交易日：<b>{_last_td_str}</b></div>
+  {_note}
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+    elif _h_level in ("red", "yellow"):
+        # ── 交易日異常 banner ───────────────────────────────────
         _h_regime  = health.get("regime", "neutral")
         _h_pass    = health.get("pass_rate", 0.0)
         _h_conds   = health.get("conditions", [])

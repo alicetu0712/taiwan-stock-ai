@@ -3,6 +3,12 @@ data_validator.py — 資料驗證層（PRD Chapter 2.4）
 
 AI 不得直接分析未驗證資料。
 本模組確認資料完整性、合理性後，才允許進入分析流程。
+
+Data Quality Gate statuses (returned in message prefix):
+  DATA_OK            — 交易日，資料完整
+  DATA_INCOMPLETE    — 交易日，資料不足（API 尚未更新或抓取失敗）
+  MARKET_CLOSED      — 確認休市（週末或國定假日）
+  CALENDAR_UNKNOWN   — 交易日曆無法確認，以資料筆數判斷
 """
 
 import logging
@@ -12,6 +18,9 @@ from typing import Tuple
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Re-export for convenience
+from src.core.trading_calendar import MarketStatus, market_status as _mkt_status
 
 
 class DataValidationError(Exception):
@@ -37,20 +46,35 @@ class DataValidator:
         """
         驗證每日股價資料。
         回傳 (is_valid, message)
+
+        message 前綴 = Data Quality Gate status:
+          DATA_OK / DATA_INCOMPLETE / MARKET_CLOSED / CALENDAR_UNKNOWN
         """
+        # ── 先查交易日曆 ──────────────────────────────────────
+        status = _mkt_status(trade_date)
+
+        if status in (MarketStatus.WEEKEND, MarketStatus.HOLIDAY):
+            # 確認休市：直接拒絕，不用筆數判斷
+            label = "週末" if status == MarketStatus.WEEKEND else "國定假日"
+            return False, f"MARKET_CLOSED: {trade_date} 為{label}，台股休市，不應執行分析。"
+
         if df is None or df.empty:
-            return False, "股價資料為空，今日資料尚未完整更新。"
+            if status == MarketStatus.CALENDAR_UNKNOWN:
+                return False, "CALENDAR_UNKNOWN: 股價資料為空，且交易日曆無法確認當日是否開市。"
+            return False, "DATA_INCOMPLETE: 股價資料為空，今日資料尚未完整更新。"
 
         # 檢查必要欄位
         required = ["stock_id", "close", "volume"]
         missing = [c for c in required if c not in df.columns]
         if missing:
-            return False, f"股價資料缺少必要欄位: {missing}"
+            return False, f"DATA_INCOMPLETE: 股價資料缺少必要欄位: {missing}"
 
-        # 檢查筆數
+        # 檢查筆數（只對確認交易日才嚴格判斷）
         n = len(df)
         if n < self.MIN_VALID_STOCKS:
-            return False, f"股價資料筆數過少（{n} 筆），可能尚未完整更新。"
+            if status == MarketStatus.CALENDAR_UNKNOWN:
+                return False, f"CALENDAR_UNKNOWN: 股價資料筆數過少（{n} 筆），交易日狀態無法確認。"
+            return False, f"DATA_INCOMPLETE: 股價資料筆數過少（{n} 筆），可能尚未完整更新。"
 
         # 檢查同一天重複的 (stock_id, date) 才是真正的重複
         if "date" in df.columns:

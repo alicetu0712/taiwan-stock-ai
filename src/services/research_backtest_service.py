@@ -638,6 +638,7 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
             ForwardSignal.outcomes_computed_at.is_(None),
             ForwardSignal.decision_label.isnot(None),
             ForwardSignal.close_at_signal.isnot(None),
+            ForwardSignal.is_valid.isnot(False),  # exclude invalid (non-trading-day) records
         )
         .all()
     )

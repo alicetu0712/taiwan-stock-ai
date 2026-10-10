@@ -92,13 +92,21 @@ def load_validation_funnel() -> dict:
 
         engine = init_db()
         with Session(engine) as s:
-            n_raw_rec = s.query(func.count(Recommendation.id)).scalar() or 0
+            n_raw_rec = (
+                s.query(func.count(Recommendation.id))
+                .filter(Recommendation.is_valid.isnot(False))  # exclude invalid
+                .scalar() or 0
+            )
 
-            fs_rows = s.query(
-                ForwardSignal.trade_date,
-                ForwardSignal.fwd_return_20d,
-                ForwardSignal.fwd_return_60d,
-            ).all()
+            fs_rows = (
+                s.query(
+                    ForwardSignal.trade_date,
+                    ForwardSignal.fwd_return_20d,
+                    ForwardSignal.fwd_return_60d,
+                )
+                .filter(ForwardSignal.is_valid.isnot(False))  # exclude invalid
+                .all()
+            )
 
         n_fs_total  = len(fs_rows)
         n_fs_20d    = sum(1 for r in fs_rows if r.fwd_return_20d is not None)
@@ -133,6 +141,7 @@ def load_rec_diversity(days: int = 60) -> dict:
                 s.query(Recommendation.date, Recommendation.stock_id,
                         Recommendation.stock_name, Recommendation.total_score)
                 .filter(Recommendation.date >= since)
+                .filter(Recommendation.is_valid.isnot(False))  # exclude invalid
                 .all()
             )
         if not rows:
@@ -245,6 +254,34 @@ def page_backtest() -> None:
     sub = df.dropna(subset=["ret_20d", "b0050_20"]).sort_values("date").copy()
     if sub.empty:
         st.info("尚無足夠價格資料（需同步後等待回測窗口完成）。")
+        return
+
+    # ── 日期範圍篩選 ──────────────────────────────────────────────────
+    from datetime import date, timedelta
+
+    _PERIOD_OPTIONS = {
+        "近 30 天":  30,
+        "近 60 天":  60,
+        "近 90 天":  90,
+        "近 180 天": 180,
+        "近 365 天": 365,
+        "全部":      None,
+    }
+    period_label = st.selectbox(
+        "回測期間",
+        list(_PERIOD_OPTIONS.keys()),
+        index=3,            # 預設「近 180 天」
+        key="bt_period",
+    )
+    period_days = _PERIOD_OPTIONS[period_label]
+    if period_days is not None:
+        cutoff = date.today() - timedelta(days=period_days)
+        sub = sub[pd.to_datetime(sub["date"]).dt.date >= cutoff].copy()
+        df  = df[pd.to_datetime(df["date"]).dt.date  >= cutoff].copy()
+        n_flagged = df["data_flag"].notna().sum() if "data_flag" in df.columns else 0
+
+    if sub.empty:
+        st.info(f"篩選期間（{period_label}）內無已成熟的回測樣本。")
         return
 
     # ── 樣本漏斗（放在統計指標之前）────────────────────────────────────

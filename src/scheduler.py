@@ -24,22 +24,10 @@ logger = logging.getLogger(__name__)
 
 
 def is_trading_day(d: date = None) -> bool:
-    """判斷是否為台股交易日（週一~週五，不含國定假日）。"""
+    """判斷是否為台股交易日。使用 TaiwanTradingCalendar（含國定假日）。"""
     d = d or date.today()
-    if d.weekday() >= 5:
-        return False
-    try:
-        import pandas_market_calendars as mcal
-
-        cal = mcal.get_calendar("XTAI")
-        sched = cal.schedule(
-            start_date=d.strftime("%Y-%m-%d"),
-            end_date=d.strftime("%Y-%m-%d"),
-        )
-        return not sched.empty
-    except Exception:
-        logger.debug("pandas_market_calendars unavailable; weekday-only check.")
-        return True
+    from src.core.trading_calendar import is_trading_day as _cal_check
+    return _cal_check(d)
 
 
 def run_daily_pipeline(trade_date: date = None, force: bool = False):
@@ -58,7 +46,7 @@ def run_daily_pipeline(trade_date: date = None, force: bool = False):
     from main import run_pipeline
 
     try:
-        run_pipeline(trade_date=trade_date)
+        run_pipeline(trade_date=trade_date, force=force)
     except Exception as e:
         logger.error(f"每日分析流程發生錯誤：{e}", exc_info=True)
 

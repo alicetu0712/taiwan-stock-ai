@@ -48,10 +48,21 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
-def run_pipeline(trade_date: date = None, dry_run: bool = False):
+def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = False):
     """執行完整每日分析流程。"""
     trade_date = trade_date or date.today()
     start_time = datetime.now()
+
+    # Guard: 休市日不執行（除非 force=True 或 dry_run）
+    if not dry_run and not force:
+        from src.core.trading_calendar import market_status as _mkt_status, MarketStatus as _MktStatus
+        _status = _mkt_status(trade_date)
+        if _status in (_MktStatus.WEEKEND, _MktStatus.HOLIDAY):
+            logger.info(
+                f"[Guard] {trade_date} 台股休市（{_status.value}），跳過分析。"
+                f"如需強制執行，使用 run_pipeline(force=True) 或 --force。"
+            )
+            return None
 
     logger.info(f"{'='*60}")
     logger.info(f"AI Taiwan Equity Research Platform v6.0")
@@ -107,8 +118,10 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
         logger.info("[Step 1] Fetching price data...")
         is_backfill = (trade_date < date.today())
 
+        source_price_date = None  # 實際資料日期（供 validity gate 使用）
         if dry_run:
             price_df, market_summary = _sample_price_data(trade_date)
+            source_price_date = trade_date  # dry-run 視為一致
         elif is_backfill:
             # 回補歷史日期：從 DailyPrice 表讀取當日實際價格
             logger.info(f"[Step 1] 回補模式：從 DB 讀取 {trade_date} 的歷史股價")
@@ -126,11 +139,25 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             price_df["stock_id"] = price_df["stock_id"].astype(str)
             market_summary = {"index_close": None, "index_change_pct": None,
                               "total_volume": None, "up_count": None, "down_count": None}
+            source_price_date = trade_date  # 回補模式：DB 資料日期即為 trade_date
             logger.info(f"[Step 1] 回補：讀取 {len(price_df)} 筆歷史股價")
         else:
-            price_df     = fetch_all_prices(trade_date)
+            price_df, source_price_date = fetch_all_prices(trade_date)
             market_summary_raw = fetch_market_summary()
             market_summary = {**market_summary_raw}
+            # ── Date/Data Quality Gate ──────────────────────────
+            if source_price_date and source_price_date != trade_date:
+                logger.error(
+                    f"[DQ Gate] PRICE_DATE_MISMATCH: 要求 {trade_date} 的資料，"
+                    f"但 API 回傳 {source_price_date} 的收盤價。"
+                    f"禁止以舊日期資料產生新 Recommendation / Forward Signal。"
+                )
+                _save_execution_log(
+                    session, trade_date, start_time, "failed", 0, 0, 0,
+                    f"PRICE_DATE_MISMATCH: source={source_price_date}, requested={trade_date}"
+                )
+                session.close()
+                return None
 
         price_valid, price_msg = validator.validate_price_data(price_df, trade_date)
         if not price_valid:
@@ -566,7 +593,11 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False):
             no_rec_reason = no_rec_ai or no_rec_reason
 
         # ── 持久化推薦與分析結果至資料庫 ─────────────────────────
-        _save_recommendations(session, trade_date, top_recs, candidates, ai_reports, market_sentiment, opp_recs=opp_recs, watch_recs=watch_recs)
+        _save_recommendations(
+            session, trade_date, top_recs, candidates, ai_reports, market_sentiment,
+            opp_recs=opp_recs, watch_recs=watch_recs,
+            source_price_date=source_price_date,
+        )
 
         # ── Pipeline 漏斗統計 ──────────────────────────────────
         _save_pipeline_funnel(
@@ -855,7 +886,7 @@ def _sample_institutional(trade_date: date, stock_ids):
     return df
 
 
-def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment, opp_recs=None, watch_recs=None):
+def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment, opp_recs=None, watch_recs=None, source_price_date=None):
     """將推薦、分析結果、Decision Journal 持久化至資料庫。"""
     import json
     try:
@@ -950,6 +981,8 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     target2           = rec.target2,
                     atr               = rec.atr,
                     vol_ratio         = rec.vol_ratio,
+                    is_valid          = True,
+                    source_price_date = source_price_date,
                 )
                 session.add(r)
             else:
@@ -1369,13 +1402,15 @@ if __name__ == "__main__":
             logger.error(f"日期格式錯誤：{args.date}，請使用 YYYY-MM-DD 格式。")
             sys.exit(1)
 
-    def is_trading_day(d):
-        if d.weekday() >= 5:
-            return False
-        return True
-
-    if not args.dry_run and not args.force and not is_trading_day(trade_date):
-        logger.info(f"{trade_date} 非台股交易日。使用 --force 可強制執行。")
+    from src.core.trading_calendar import is_trading_day as _is_trading_day, market_status as _mkt_status, MarketStatus as _MktStatus
+    if not args.dry_run and not args.force and not _is_trading_day(trade_date):
+        status = _mkt_status(trade_date)
+        if status == _MktStatus.HOLIDAY:
+            logger.info(f"{trade_date} 為台股國定假日休市。使用 --force 可強制執行。")
+        elif status == _MktStatus.WEEKEND:
+            logger.info(f"{trade_date} 為週末休市。使用 --force 可強制執行。")
+        else:
+            logger.info(f"{trade_date} 非台股交易日（{status}）。使用 --force 可強制執行。")
         sys.exit(0)
 
     run_pipeline(trade_date=trade_date, dry_run=args.dry_run)
