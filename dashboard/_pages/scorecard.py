@@ -11,6 +11,56 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
+
+@st.cache_data(ttl=300)
+def _load_scorecard_rows(limit: int = 300) -> list:
+    """直接查 ForwardSignal，不透過 loaders，避免 Streamlit module-cache 問題。"""
+    try:
+        from src.database import ForwardSignal, get_session
+        from sqlalchemy import desc
+
+        s = get_session()
+        rows = (
+            s.query(ForwardSignal)
+            .filter(ForwardSignal.decision_label.isnot(None))
+            .order_by(desc(ForwardSignal.trade_date), ForwardSignal.candidate_rank)
+            .limit(limit)
+            .all()
+        )
+        s.close()
+        return [
+            {
+                "trade_date":         str(r.trade_date),
+                "stock_id":           r.stock_id,
+                "stock_name":         r.stock_name or r.stock_id,
+                "setup_type":         r.setup_type,
+                "trade_signal":       r.trade_signal,
+                "decision_label":     r.decision_label,
+                "industry":           r.industry,
+                "market_regime":      r.market_regime_at_signal,
+                "close_at_signal":    r.close_at_signal,
+                "entry_low":          r.entry_low,
+                "entry_high":         r.entry_high,
+                "stop_price":         r.stop_price,
+                "target1":            r.target1,
+                "target2":            r.target2,
+                "fwd_return_20d":     r.fwd_return_20d,
+                "alpha_20d":          r.alpha_20d,
+                "fwd_return_60d":     r.fwd_return_60d,
+                "alpha_60d":          r.alpha_60d,
+                "stop_triggered_day": r.stop_triggered_day,
+                "t1_hit_day":         r.t1_hit_day,
+                "outcome_note":       r.outcome_note,
+                "pt_score":           r.pt_score,
+                "total_score":        r.total_score,
+                "confidence":         r.confidence,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning(f"_load_scorecard_rows: {e}")
+        return []
+
 _LABEL_COLOR = {
     "BUY★":              "#1a7f4b",
     "BUY":               "#2ecc71",
@@ -75,10 +125,8 @@ def page_scorecard() -> None:
         "以及事後回填的 20 交易日績效結果。僅顯示有進入 Decision Center 的信號。"
     )
 
-    from dashboard.loaders import load_forward_signals_scorecard
-
     with st.spinner("讀取成績單資料..."):
-        rows = load_forward_signals_scorecard(limit=300)
+        rows = _load_scorecard_rows(limit=300)
 
     if not rows:
         st.info("尚無成績單資料。每日執行後系統會自動凍結 Decision Center 信號。")
