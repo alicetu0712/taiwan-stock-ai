@@ -78,6 +78,45 @@ def load_pipeline_funnels(days: int = 30) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=600)
+def load_validation_funnel() -> dict:
+    """
+    回傳驗證頁漏斗統計：
+    - 歷史回測：原始推薦 / 去重後 / 已成熟 / 尚未成熟
+    - Forward 驗證：累積凍結訊號 / 20D 已成熟 / 60D 已成熟 / 最近新增日期
+    """
+    try:
+        from sqlalchemy import func
+        from sqlalchemy.orm import Session
+        from src.database import init_db, ForwardSignal, Recommendation
+
+        engine = init_db()
+        with Session(engine) as s:
+            n_raw_rec = s.query(func.count(Recommendation.id)).scalar() or 0
+
+            fs_rows = s.query(
+                ForwardSignal.trade_date,
+                ForwardSignal.fwd_return_20d,
+                ForwardSignal.fwd_return_60d,
+            ).all()
+
+        n_fs_total  = len(fs_rows)
+        n_fs_20d    = sum(1 for r in fs_rows if r.fwd_return_20d is not None)
+        n_fs_60d    = sum(1 for r in fs_rows if r.fwd_return_60d is not None)
+        latest_date = max((r.trade_date for r in fs_rows), default=None)
+
+        return {
+            "n_raw_rec":    n_raw_rec,
+            "n_fs_total":   n_fs_total,
+            "n_fs_20d":     n_fs_20d,
+            "n_fs_60d":     n_fs_60d,
+            "fs_latest":    str(latest_date) if latest_date else "—",
+        }
+    except Exception as e:
+        logger.warning(f"load_validation_funnel: {e}")
+        return {"n_raw_rec": 0, "n_fs_total": 0, "n_fs_20d": 0, "n_fs_60d": 0, "fs_latest": "—"}
+
+
 @st.cache_data(ttl=1800)
 def load_rec_diversity(days: int = 60) -> dict:
     """計算推薦重複率統計（近 N 天）。"""
@@ -207,6 +246,54 @@ def page_backtest() -> None:
     if sub.empty:
         st.info("尚無足夠價格資料（需同步後等待回測窗口完成）。")
         return
+
+    # ── 樣本漏斗（放在統計指標之前）────────────────────────────────────
+    vf = load_validation_funnel()
+    n_raw      = vf.get("n_raw_rec", 0)
+    n_deduped  = len(df)
+    n_matured  = len(sub)
+    n_pending  = n_deduped - n_matured
+
+    def _row(label, val, dim=False):
+        color = "#888" if dim else "#f0f6fc"
+        weight = "400" if dim else "700"
+        return (
+            f'<tr><td style="padding:3px 0;font-size:0.82rem;color:#aaa">{label}</td>'
+            f'<td style="padding:3px 0;font-size:0.82rem;color:{color};font-weight:{weight};'
+            f'text-align:right;padding-left:16px">{val}</td></tr>'
+        )
+
+    fs_total  = vf.get("n_fs_total", 0)
+    fs_20d    = vf.get("n_fs_20d", 0)
+    fs_60d    = vf.get("n_fs_60d", 0)
+    fs_latest = vf.get("fs_latest", "—")
+    fs_pending = max(0, fs_total - fs_20d)
+
+    st.markdown(
+        f"""
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+  <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px 16px">
+    <div style="font-size:0.72rem;color:#58a6ff;font-weight:700;margin-bottom:8px">🧪 歷史回測樣本</div>
+    <table style="width:100%;border-collapse:collapse">
+      {_row("原始推薦（所有 Core Picks）", n_raw)}
+      {_row("20D 去重後", n_deduped)}
+      {_row("20D 已成熟", n_matured)}
+      {_row("尚未成熟（等待中）", n_pending, dim=True)}
+    </table>
+  </div>
+  <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px 16px">
+    <div style="font-size:0.72rem;color:#3fb950;font-weight:700;margin-bottom:8px">🔒 Forward 驗證（OOS）</div>
+    <table style="width:100%;border-collapse:collapse">
+      {_row("累積凍結訊號", fs_total)}
+      {_row("20D 已成熟", fs_20d)}
+      {_row("60D 已成熟", fs_60d)}
+      {_row("尚未成熟", fs_pending, dim=True)}
+      {_row("最近一次新增", fs_latest, dim=True)}
+    </table>
+  </div>
+</div>""",
+        unsafe_allow_html=True,
+    )
 
     st20 = _calc_stats(sub["ret_20d"], sub["a0050_20"].dropna(), 20)
     model_mean = sub["ret_20d"].mean()
