@@ -754,3 +754,35 @@ def load_watchable_stocks(sel_date: date) -> list[dict]:
     except Exception as e:
         logger.warning(f"load_watchable_stocks failed: {e}")
         return []
+
+
+@st.cache_data(ttl=3600)
+def load_current_regime() -> str:
+    """Compute current market regime from 0050 (cached 1h)."""
+    try:
+        from src.services.evidence_service import get_current_regime
+        return get_current_regime()
+    except Exception as e:
+        logger.warning(f"load_current_regime: {e}")
+        return "neutral"
+
+
+@st.cache_data(ttl=3600)
+def load_evidence_stats(setup_type: str, market_regime: str) -> dict:
+    """
+    Load similar-signal evidence stats for Decision Center (cached 1h per combination).
+    Returns {"research": {...}, "forward": {...}, "narrative": str}.
+    """
+    try:
+        from src.services.evidence_service import (
+            evidence_narrative,
+            forward_evidence,
+            research_evidence,
+        )
+        re_ev = research_evidence(setup_type, market_regime)
+        fe_ev = forward_evidence(setup_type, market_regime)
+        narrative = evidence_narrative(re_ev, fe_ev)
+        return {"research": re_ev, "forward": fe_ev, "narrative": narrative}
+    except Exception as e:
+        logger.warning(f"load_evidence_stats({setup_type}, {market_regime}): {e}")
+        return {"research": {"n": 0}, "forward": {"total_recorded": 0}, "narrative": ""}

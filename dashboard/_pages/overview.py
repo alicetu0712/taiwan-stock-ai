@@ -10,7 +10,9 @@ import streamlit as st
 
 from dashboard.loaders import (
     load_analysis_results,
+    load_current_regime,
     load_db_recommendations,
+    load_evidence_stats,
     load_exec_logs,
     load_opportunity_recs,
     load_report,
@@ -24,7 +26,7 @@ from dashboard.loaders import (
 logger = logging.getLogger(__name__)
 
 
-def render_rec_card(r: dict) -> None:
+def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
     from src.engines.decision import decision_label, entry_quality_label, tomorrow_triggers
 
     dl         = decision_label(r)
@@ -161,6 +163,69 @@ def render_rec_card(r: dict) -> None:
         conclusion = r.get("conclusion", "")
         if conclusion:
             st.markdown(f"> {conclusion}")
+
+    # ── Evidence panel ──────────────────────────────────────────────────────────
+    signal = r.get("trade_signal") or "wait"
+    if setup != "none" and signal != "sell":
+        ev = load_evidence_stats(setup, current_regime)
+        re_ev = ev.get("research", {})
+        fe_ev = ev.get("forward", {})
+        narrative = ev.get("narrative", "")
+        r_n          = re_ev.get("n", 0)
+        r_tier_emoji = re_ev.get("tier_emoji", "🔴")
+        r_tier_label = re_ev.get("tier_label", "樣本不足")
+        f_total      = fe_ev.get("total_recorded", 0)
+        f_m20        = fe_ev.get("matured_20d", 0)
+        f_m60        = fe_ev.get("matured_60d", 0)
+        f_tier_emoji = fe_ev.get("tier_emoji", "🔴")
+        f_tier_label = fe_ev.get("tier_label", "尚無 OOS 資料")
+
+        with st.expander(f"📊 類似訊號歷史績效（{setup} × {current_regime}）"):
+            st.markdown("**🧪 Research（In-Sample）**")
+            if r_n < 10:
+                st.caption(f"{r_tier_emoji} 樣本不足（{r_n} 筆），無法計算可靠統計。")
+            else:
+                r20 = re_ev.get("alpha_20d", {})
+                r60 = re_ev.get("alpha_60d", {})
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("類似情境", f"{r_n} 次")
+                    if r20.get("mean") is not None:
+                        st.metric("20D Alpha 均值", f"{r20['mean']:+.1f}%")
+                    if r60.get("mean") is not None:
+                        st.metric("60D Alpha 均值", f"{r60['mean']:+.1f}%")
+                with col2:
+                    if r20.get("winrate") is not None:
+                        st.metric("20D 勝率", f"{r20['winrate']:.0f}%")
+                    if r60.get("winrate") is not None:
+                        st.metric("60D 勝率", f"{r60['winrate']:.0f}%")
+                st.caption(f"證據強度：{r_tier_emoji} {r_tier_label}")
+
+            st.divider()
+
+            st.markdown("**🔒 Forward Validation（真實 OOS）**")
+            col3, col4 = st.columns(2)
+            with col3:
+                st.metric("已記錄訊號", f"{f_total} 筆")
+                st.metric("20D 已成熟", f"{f_m20} 筆")
+                if f_m20 >= 10:
+                    f20 = fe_ev.get("alpha_20d", {})
+                    if f20.get("mean") is not None:
+                        st.metric("20D Alpha", f"{f20['mean']:+.1f}%")
+            with col4:
+                st.metric("60D 已成熟", f"{f_m60} 筆")
+                if f_m20 >= 10:
+                    f20 = fe_ev.get("alpha_20d", {})
+                    if f20.get("winrate") is not None:
+                        st.metric("20D 勝率", f"{f20['winrate']:.0f}%")
+            if f_m20 < 10:
+                st.caption(f"{f_tier_emoji} Forward 樣本累積中（{f_m20} 筆 20D 已成熟）")
+            else:
+                st.caption(f"證據強度：{f_tier_emoji} {f_tier_label}")
+
+            if narrative:
+                st.divider()
+                st.markdown(f"**💬 白話解讀**\n\n{narrative}")
 
 
 def page_today(selected_date: date) -> None:
@@ -349,14 +414,15 @@ def page_today(selected_date: date) -> None:
                 f'<div class="section-title">Core Picks（{len(recs)} 檔）</div>',
                 unsafe_allow_html=True,
             )
+        current_regime = load_current_regime()
         cols_data = [recs[i::2] for i in range(2)]
         col_left, col_right = st.columns(2)
         for rec in cols_data[0]:
             with col_left:
-                render_rec_card(rec)
+                render_rec_card(rec, current_regime)
         for rec in cols_data[1]:
             with col_right:
-                render_rec_card(rec)
+                render_rec_card(rec, current_regime)
     else:
         st.info("今日尚無分析資料，請先執行分析。")
 
