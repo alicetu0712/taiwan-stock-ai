@@ -234,10 +234,12 @@ def load_db_recommendations(target_date: date) -> list:
             .scalars()
             .all()
         )
-        stock_name_map = {
-            r.stock_id: r.name
-            for r in s.execute(select(Stock)).scalars().all()
-            if r.name
+        stock_rows = s.execute(select(Stock)).scalars().all()
+        stock_name_map = {r.stock_id: r.name for r in stock_rows if r.name}
+        industry_map   = {
+            r.stock_id: r.industry
+            for r in stock_rows
+            if getattr(r, "industry", None)
         }
         ar_map = {
             r.stock_id: r
@@ -262,6 +264,41 @@ def load_db_recommendations(target_date: date) -> list:
             if dp:
                 db_price_map[sid] = dp.close
         s.close()
+
+        # Consecutive Core Picks days per stock
+        consecutive_map: dict = {}
+        try:
+            from collections import defaultdict
+            s2 = get_session()
+            if rec_ids:
+                past_rows = (
+                    s2.execute(
+                        select(Recommendation.stock_id, Recommendation.date)
+                        .where(
+                            Recommendation.stock_id.in_(rec_ids),
+                            Recommendation.tier == "recommend",
+                            Recommendation.date <= target_date,
+                        )
+                        .order_by(Recommendation.stock_id, Recommendation.date.desc())
+                    )
+                    .all()
+                )
+                s2.close()
+                hist: dict = defaultdict(list)
+                for sid, d in past_rows:
+                    hist[sid].append(d)
+                for sid, dates in hist.items():
+                    dates_sorted = sorted(dates, reverse=True)
+                    cnt = 1
+                    for i in range(1, len(dates_sorted)):
+                        if (dates_sorted[i - 1] - dates_sorted[i]).days <= 5:
+                            cnt += 1
+                        else:
+                            break
+                    consecutive_map[sid] = cnt
+        except Exception as _e:
+            logger.warning(f"consecutive_map: {_e}")
+
         result = []
         for r in recs_rows:
             ar = ar_map.get(r.stock_id)
@@ -300,6 +337,9 @@ def load_db_recommendations(target_date: date) -> list:
                     "target2":           getattr(r, "target2", None),
                     "atr":               getattr(r, "atr", None),
                     "vol_ratio":         getattr(r, "vol_ratio", None),
+                    # P3/P4 fields
+                    "industry":          industry_map.get(r.stock_id, ""),
+                    "consecutive_days":  consecutive_map.get(r.stock_id, 1),
                 }
             )
         return result
@@ -786,3 +826,27 @@ def load_evidence_stats(setup_type: str, market_regime: str) -> dict:
     except Exception as e:
         logger.warning(f"load_evidence_stats({setup_type}, {market_regime}): {e}")
         return {"research": {"n": 0}, "forward": {"total_recorded": 0}, "narrative": ""}
+
+
+@st.cache_data(ttl=300)
+def load_pipeline_funnel(target_date: date) -> dict:
+    """Load today's pipeline funnel stats from PipelineFunnel table (cached 5 min)."""
+    try:
+        from sqlalchemy import select
+        from src.database import PipelineFunnel, get_session
+        s = get_session()
+        row = s.execute(
+            select(PipelineFunnel).where(PipelineFunnel.date == target_date)
+        ).scalar_one_or_none()
+        s.close()
+        if not row:
+            return {}
+        return {
+            "universe":         row.universe or 0,
+            "with_price":       row.with_price or 0,
+            "hard_filter_pass": row.hard_filter_pass or 0,
+            "recommended":      row.recommended or 0,
+        }
+    except Exception as e:
+        logger.warning(f"load_pipeline_funnel: {e}")
+        return {}

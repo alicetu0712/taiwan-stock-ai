@@ -408,6 +408,7 @@ class DecisionEngine:
         # Gate 2: PriceTrend >= 60（趨勢門檻）；PT missing → 直接 fail，不 fallback
         # Gate 3: 排除 breakdown（無論分數多高，趨勢已破壞）
         # Gate 4: trade_signal != "sell"
+        # Gate 5: Data Quality Gate — 關鍵資料必須存在且合理
         def _passes_v2_gate(r: StockRecommendation) -> bool:
             pt = r.price_trend_score
             if pt <= 0:
@@ -425,18 +426,35 @@ class DecisionEngine:
                 return False
             return True
 
+        def _passes_dq_gate(r: StockRecommendation) -> bool:
+            """Data Quality Gate: ensure critical data is present before Core Picks."""
+            if not r.close or r.close <= 0:
+                logger.warning(f"{r.stock_id}: DQ Gate — no valid close price")
+                return False
+            if r.entry_low is None or r.stop_price is None or r.target1 is None:
+                logger.warning(f"{r.stock_id}: DQ Gate — trading plan not computed (ATR missing)")
+                return False
+            if not (r.stop_price < r.close < r.target1):
+                logger.warning(
+                    f"{r.stock_id}: DQ Gate — invalid plan "
+                    f"(stop={r.stop_price:.2f}, close={r.close:.2f}, t1={r.target1:.2f})"
+                )
+                return False
+            return True
+
         qualified = [
             r for r in candidates
             if r.confidence >= min_conf
             and r.rec_level in allowed_levels
             and _passes_v2_gate(r)
+            and _passes_dq_gate(r)
         ]
 
         if not qualified:
             reason = (
                 f"今日沒有符合本研究策略的股票。"
                 f"（信心≥{min_conf:.0f}%、等級{'/'.join(allowed_levels)}、"
-                f"PriceTrend≥60 且無 breakdown，三關卡均未通過）"
+                f"PriceTrend≥60、無 breakdown、Data Quality Gate，五關卡均未通過）"
             )
             return [], reason
 

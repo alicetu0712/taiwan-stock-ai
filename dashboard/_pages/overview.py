@@ -15,6 +15,7 @@ from dashboard.loaders import (
     load_evidence_stats,
     load_exec_logs,
     load_opportunity_recs,
+    load_pipeline_funnel,
     load_report,
     load_stock_names,
     load_stock_prices,
@@ -54,6 +55,36 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
     override_note = ""
     if dl.get("is_override"):
         override_note = '<span style="font-size:0.7rem;color:#888;margin-left:8px">（進場品質 override）</span>'
+
+    # ── Consecutive recommendation badge (P4) ──────────────────
+    consecutive = r.get("consecutive_days", 1)
+    consec_badge = ""
+    if consecutive >= 2:
+        consec_badge = (
+            f'<div style="font-size:0.68rem;color:#546e7a;background:#eceff1;'
+            f'padding:2px 8px;border-radius:10px;display:inline-block;margin-top:3px">'
+            f'🔄 連續第 {consecutive} 個交易日入選</div>'
+        )
+
+    # ── "Why again today?" block (P4) ──────────────────────────
+    why_again_html = ""
+    if consecutive >= 2:
+        pt_now = r.get("price_trend_score") or 0
+        ma20   = r.get("ma20_gap") or 0.0
+        vol_r  = r.get("vol_ratio") or 0.0
+        conditions = []
+        if pt_now > 0:
+            conditions.append(f"PT {pt_now:.0f}")
+        if ma20:
+            conditions.append(f"MA20 乖離 {ma20:+.1f}%")
+        if vol_r:
+            conditions.append(f"量比 {vol_r:.1f}x")
+        cond_str = "　".join(conditions) if conditions else "條件持續符合"
+        why_again_html = f"""
+<div style="background:#f1f8e9;border-left:3px solid #8bc34a;padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:0.63rem;color:#558b2f;font-weight:600;margin-bottom:2px">今日仍入選原因</div>
+  <div style="font-size:0.73rem;color:#33691e">{cond_str}</div>
+</div>"""
 
     # ── R/R ratio and trading plan ─────────────────────────────
     rr_html = ""
@@ -133,7 +164,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
         f"""
 <div style="border:1px solid #e0e0e0;border-radius:10px;padding:14px 16px;margin-bottom:12px;background:#fff">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-    <div>{name_html}</div>
+    <div>{name_html}{consec_badge}</div>
     <div style="text-align:right">
       <div style="font-size:1.3rem;font-weight:900;color:{label_color}">{label_text}</div>
       {override_note}
@@ -141,6 +172,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral") -> None:
     </div>
   </div>
   <div style="font-size:0.78rem;color:#555;margin-bottom:6px">{dl['reason']}</div>
+  {why_again_html}
   {rr_html}
   {why_html}
   {trig_html}
@@ -357,6 +389,37 @@ def page_today(selected_date: date) -> None:
     for r in recs:
         if r["price"] is None:
             r["price"] = stock_prices.get(r["sid"])
+
+    # P2: Pipeline funnel
+    funnel = load_pipeline_funnel(selected_date)
+    if funnel:
+        universe  = funnel.get("universe", 0)
+        with_price = funnel.get("with_price", 0)
+        hf_pass   = funnel.get("hard_filter_pass", 0)
+        final_rec = funnel.get("recommended", 0)
+        st.markdown(
+            f"""
+<div style="background:#f8f9fa;border-radius:8px;padding:7px 14px;margin:6px 0 10px;font-size:0.74rem;color:#546e7a">
+  <span style="font-weight:600">今日掃描漏斗：</span>
+  全市場 <b>{universe:,}</b> 檔
+  → 有價格 <b>{with_price:,}</b>
+  → 通過初篩 <b>{hf_pass}</b>
+  → Core Picks <b>{final_rec}</b>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+    # P3: Diversity health warning (monitor only, no scoring change)
+    if len(recs) >= 2:
+        from collections import Counter
+        rec_industries = [r.get("industry", "") for r in recs if r.get("industry")]
+        if rec_industries:
+            top_ind, top_cnt = Counter(rec_industries).most_common(1)[0]
+            if top_cnt == len(recs):
+                st.warning(
+                    f"⚠️ 多樣性監控：今日 {len(recs)} 支 Core Picks 均屬同一產業（{top_ind}）。"
+                    f"市場今日可能高度集中，建議交叉確認是否為整體行情性現象。"
+                )
 
     if not recs:
         recs_section = re.search(
