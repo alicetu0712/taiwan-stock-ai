@@ -377,6 +377,13 @@ class ForwardSignal(Base):
     rec_level = Column(String(5))
     model_version = Column(String(20), default=MODEL_VERSION)
 
+    # ── v2 追加欄位（signal 當下凍結，事後不可補）────────────────
+    confidence              = Column(Float)        # 信心分數（%）
+    industry                = Column(String(50))   # 產業分類
+    market_regime_at_signal = Column(String(10))   # bull / neutral / bear
+    close_at_signal         = Column(Float)        # 進場收盤價（免事後猜 entry）
+    candidate_rank          = Column(Integer)      # 當日 candidates 中的排名（1=最高分）
+
     locked_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -429,10 +436,38 @@ def get_engine() -> Engine:
     return engine
 
 
+def _migrate_forward_signals(engine) -> None:
+    """forward_signals に新カラムを追加（既存 DB の自動マイグレーション）。"""
+    from sqlalchemy import inspect, text
+
+    new_cols = [
+        ("confidence",              "FLOAT"),
+        ("industry",                "VARCHAR(50)"),
+        ("market_regime_at_signal", "VARCHAR(10)"),
+        ("close_at_signal",         "FLOAT"),
+        ("candidate_rank",          "INTEGER"),
+    ]
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns("forward_signals")}
+    except Exception:
+        return  # table might not exist yet; create_all handles it
+    with engine.begin() as conn:
+        for col_name, col_type in new_cols:
+            if col_name not in existing:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE forward_signals ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info(f"forward_signals: added column {col_name}")
+                except Exception as exc:
+                    logger.warning(f"forward_signals migration {col_name}: {exc}")
+
+
 def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
+    _migrate_forward_signals(engine)
     from config import DATABASE_URL
 
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")

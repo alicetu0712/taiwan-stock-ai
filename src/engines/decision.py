@@ -295,15 +295,20 @@ class DecisionEngine:
             )
 
         # ── V2 多關卡篩選 ────────────────────────────────────────
-        # Gate 1: 等級 + 信心（原有）
-        # Gate 2: PriceTrend >= 60（趨勢門檻），V1 compat 用 timing_score 代替
+        # Gate 1: 等級 + 信心
+        # Gate 2: PriceTrend >= 60（趨勢門檻）；PT missing → 直接 fail，不 fallback
         # Gate 3: 排除 breakdown（無論分數多高，趨勢已破壞）
         # Gate 4: trade_signal != "sell"
         def _passes_v2_gate(r: StockRecommendation) -> bool:
             pt = r.price_trend_score
-            # 若 price_trend_score 未填（V1 資料），用 timing_score 近似
-            trend_ok = (pt >= 60) if pt > 0 else (r.timing_score >= 55)
-            if not trend_ok:
+            if pt <= 0:
+                # PT 未計算（PriceTrendAnalyzer 未執行或失敗），拒絕進入 Core Picks
+                logger.warning(
+                    f"{r.stock_id}: PT score missing (={pt}), failing V2 gate. "
+                    "Check PriceTrendAnalyzer output."
+                )
+                return False
+            if pt < 60:
                 return False
             if r.setup_type == "breakdown":
                 return False

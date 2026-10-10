@@ -34,6 +34,13 @@ def _fmt_p(v):
     return f"{v:.3f}"
 
 
+def _fmt_d(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "—"
+    tag = " (L)" if abs(v) >= 0.8 else " (M)" if abs(v) >= 0.5 else " (S)" if abs(v) >= 0.2 else ""
+    return f"{v:+.2f}{tag}"
+
+
 def _render_stats_table(df: pd.DataFrame, group_col: str) -> None:
     """顯示分組統計 DataFrame，格式化數值欄位。"""
     if df is None or df.empty:
@@ -43,7 +50,9 @@ def _render_stats_table(df: pd.DataFrame, group_col: str) -> None:
     display = df.copy()
 
     for col in ["20D均Alpha%", "20D中位Alpha%", "20D CI低", "20D CI高",
-                "60D均Alpha%", "60D中位Alpha%", "60D CI低", "60D CI高"]:
+                "20D Boot CI低", "20D Boot CI高",
+                "60D均Alpha%", "60D中位Alpha%", "60D CI低", "60D CI高",
+                "60D Boot CI低", "60D Boot CI高"]:
         if col in display.columns:
             display[col] = display[col].apply(_fmt_pct)
 
@@ -63,10 +72,17 @@ def _render_stats_table(df: pd.DataFrame, group_col: str) -> None:
                 lambda v: f"{v:.1f}%" if v is not None and not (isinstance(v, float) and np.isnan(v)) else "—"
             )
 
+    for col in ["20D Cohen'd", "60D Cohen'd"]:
+        if col in display.columns:
+            display[col] = display[col].apply(_fmt_d)
+
     st.dataframe(display.set_index(group_col), use_container_width=True)
     st.caption(
-        "p值 < 0.05（*）或 < 0.01（**）表示在 H₀: mean alpha=0 下有統計顯著性，"
-        "但 p值需與 n、95% CI 寬度、std、中位數一起判讀，**不能單獨下結論**。"
+        "p值 < 0.05（*）或 < 0.01（**）表示在 H₀: mean alpha=0 下有統計顯著性。"
+        "Cohen's d：S ≥ 0.2，M ≥ 0.5，L ≥ 0.8。"
+        "Boot CI = Bootstrap 95% 百分位 CI（2000 次重抽樣），"
+        "與 t-test CI 大幅分歧時以 Boot CI 為準（分布有偏、厚尾時常見）。"
+        "所有指標需合併判讀，**不能單獨下結論**。"
     )
 
 
@@ -189,6 +205,68 @@ def page_research_backtest() -> None:
 
         st.divider()
 
+        # ── 樣本獨立性診斷 ────────────────────────────────────
+        si = res.get("sample_independence")
+        if si:
+            st.markdown("#### 樣本獨立性診斷")
+            st.caption(
+                "每日相同股票的信號前向報酬高度重疊（例如台積電連續 10 天都出現），"
+                "t-test 會把它們當成獨立樣本，造成 n 虛高、CI 虛窄、p-value 虛美。"
+                "以下對比原始樣本與「去重後」（同股 ≥ N 個交易日才取一次）的整體統計差異。"
+            )
+
+            si_rows = []
+            for label, ver in [
+                ("Raw（全部）", "raw"),
+                ("Dedup 20D（同股 ≥ 20 交易日一次）", "dedup_20"),
+                ("Dedup 60D（同股 ≥ 60 交易日一次）", "dedup_60"),
+            ]:
+                v   = si[ver]
+                s20 = v["stats_20d"]
+                s60 = v["stats_60d"]
+                ci20 = (
+                    f"[{s20['ci_low']:+.2f}%, {s20['ci_high']:+.2f}%]"
+                    if s20.get("ci_low") is not None else "—"
+                )
+                ci60 = (
+                    f"[{s60['ci_low']:+.2f}%, {s60['ci_high']:+.2f}%]"
+                    if s60.get("ci_low") is not None else "—"
+                )
+                boot20 = (
+                    f"[{s20['boot_ci_low']:+.2f}%, {s20['boot_ci_high']:+.2f}%]"
+                    if s20.get("boot_ci_low") is not None else "—"
+                )
+                boot60 = (
+                    f"[{s60['boot_ci_low']:+.2f}%, {s60['boot_ci_high']:+.2f}%]"
+                    if s60.get("boot_ci_low") is not None else "—"
+                )
+                si_rows.append({
+                    "版本":          label,
+                    "n":             v["n"],
+                    "20D均Alpha":    _fmt_pct(s20.get("mean")),
+                    "20D p值":       _fmt_p(s20.get("p_value")),
+                    "20D t CI":      ci20,
+                    "20D Boot CI":   boot20,
+                    "20D Cohen'd":   _fmt_d(s20.get("cohens_d")),
+                    "60D均Alpha":    _fmt_pct(s60.get("mean")),
+                    "60D p值":       _fmt_p(s60.get("p_value")),
+                    "60D t CI":      ci60,
+                    "60D Boot CI":   boot60,
+                    "60D Cohen'd":   _fmt_d(s60.get("cohens_d")),
+                })
+
+            st.dataframe(
+                pd.DataFrame(si_rows).set_index("版本"),
+                use_container_width=True,
+            )
+            st.caption(
+                "⚠️ 若 p 值在去重後從顯著變為不顯著（例如 0.02 → 0.18），"
+                "表示原始顯著性很可能主要來自重複樣本，**非真實策略優勢**。"
+                "去重後 n 大幅縮水且 CI 跨越 0 則結論應保守。"
+            )
+
+        st.divider()
+
         # PT Score Coverage
         n_with_pt    = res.get("n_with_pt", 0)
         n_without_pt = res.get("n_without_pt", 0)
@@ -246,7 +324,11 @@ def page_research_backtest() -> None:
 
         # Market Regime
         st.markdown("#### 市場 Regime 分組")
-        st.caption("Bull = 0050 > MA60；Bear = 0050 ≤ MA60（分析當日計算）")
+        st.caption(
+            "Bull = 0050 > MA60 且 MA60 slope 向上；"
+            "Bear = 0050 < MA60 且 MA60 slope 向下；"
+            "Neutral = 其他（slope flat 或位置與趨勢方向不一致的過渡期）"
+        )
         _render_stats_table(res.get("by_regime"), "regime")
 
         st.divider()
@@ -319,9 +401,12 @@ def page_research_backtest() -> None:
         # 顯示目前已凍結的 signals
         st.markdown("#### 已凍結 Forward Signals")
         show_fwd_cols = [
-            "trade_date", "stock_id", "stock_name", "pt_score",
-            "setup_type", "trade_signal", "ma20_gap", "ma60_gap",
-            "vol_ratio", "total_score", "rec_level", "model_version",
+            "trade_date", "stock_id", "stock_name",
+            "candidate_rank", "rec_level", "confidence",
+            "close_at_signal", "market_regime_at_signal",
+            "pt_score", "setup_type", "trade_signal",
+            "ma20_gap", "ma60_gap", "vol_ratio",
+            "total_score", "industry", "model_version",
         ]
         st.dataframe(
             fwd_df[[c for c in show_fwd_cols if c in fwd_df.columns]],

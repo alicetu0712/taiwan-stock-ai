@@ -26,16 +26,9 @@ from scipy import stats as sp_stats
 
 logger = logging.getLogger(__name__)
 
-# Lazy import helper — avoids module-level import ordering issues with Streamlit hot-reload.
-# Falls back to hardcoded value if sys.modules["src.database"] is stale (hot-reload scenario).
 def _get_cutoff():
-    from datetime import date as _d
-    _FALLBACK = _d(2026, 10, 9)
-    try:
-        from src.database import RESEARCH_CUTOFF_DATE
-        return RESEARCH_CUTOFF_DATE
-    except (ImportError, AttributeError):
-        return _FALLBACK
+    from src.database import RESEARCH_CUTOFF_DATE
+    return RESEARCH_CUTOFF_DATE
 
 ROUND_TRIP_COST = 0.585  # 買進 + 賣出合計（%）
 
@@ -83,12 +76,48 @@ def ma60_bracket(gap) -> str:
     return "> 5%"
 
 
+def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict) -> pd.DataFrame:
+    """
+    同股票在 n_days 個「交易日」內只保留第一筆 signal，消除前向報酬重疊。
+
+    計數邏輯：利用 sorted_dates[stock_id] 直接 bisect，O(log N) per row。
+    若該股無 price 資料，以日曆天 / 1.4 近似。
+    """
+    if df.empty:
+        return df.copy()
+    df_sorted = df.sort_values(["stock_id", "date"]).reset_index(drop=True)
+    last_kept: dict = {}
+    keep: list = []
+    for _, row in df_sorted.iterrows():
+        sid = row["stock_id"]
+        d   = row["date"]
+        prev = last_kept.get(sid)
+        if prev is None:
+            keep.append(True)
+            last_kept[sid] = d
+        else:
+            sdates = sorted_dates.get(sid, [])
+            if sdates:
+                lo = bisect.bisect_right(sdates, prev)
+                hi = bisect.bisect_right(sdates, d)
+                tdays = hi - lo
+            else:
+                tdays = int((d - prev).days / 1.4)
+            if tdays >= n_days:
+                keep.append(True)
+                last_kept[sid] = d
+            else:
+                keep.append(False)
+    return df_sorted[keep].reset_index(drop=True)
+
+
 def compute_stats(alpha_list: list) -> dict:
     """
-    One-sample t-test H0: mean alpha = 0.
+    One-sample t-test H0: mean alpha = 0，加 Cohen's d 效應量與 bootstrap 95% CI。
 
-    p-value 僅為參考，不能單獨下結論。
-    需同時看 n、CI 寬度、median、std。
+    bootstrap CI 是 t-test CI 的 sanity check：
+    股票 Alpha 分布通常右偏、有厚尾，t-test 假設未必成立。
+    若兩者 CI 大幅分歧，以 bootstrap 為準。
     """
     arr = np.array(
         [x for x in alpha_list if x is not None and not np.isnan(float(x))],
@@ -98,6 +127,7 @@ def compute_stats(alpha_list: list) -> dict:
     empty = {
         "n": n, "mean": None, "median": None, "std": None,
         "ci_low": None, "ci_high": None, "p_value": None, "win_rate": None,
+        "cohens_d": None, "boot_ci_low": None, "boot_ci_high": None,
     }
     if n < 2:
         return empty
@@ -108,15 +138,32 @@ def compute_stats(alpha_list: list) -> dict:
     _, p_val = sp_stats.ttest_1samp(arr, 0)
     ci = sp_stats.t.interval(0.95, df=n - 1, loc=mean, scale=se)
     win_rate = float(np.mean(arr > 0) * 100)
+
+    # Effect size: Cohen's d (one-sample, H0: μ=0)
+    # 0.2 = small, 0.5 = medium, 0.8 = large
+    cohens_d = round(mean / std, 3) if std > 0 else 0.0
+
+    # Bootstrap 95% CI (2 000 resamples, percentile method, seeded for reproducibility)
+    rng = np.random.default_rng(42)
+    boot_means = np.fromiter(
+        (np.mean(rng.choice(arr, size=n, replace=True)) for _ in range(2000)),
+        dtype=float, count=2000,
+    )
+    boot_ci_low  = round(float(np.percentile(boot_means, 2.5)), 2)
+    boot_ci_high = round(float(np.percentile(boot_means, 97.5)), 2)
+
     return {
-        "n": n,
-        "mean":     round(mean, 2),
-        "median":   round(median, 2),
-        "std":      round(std, 2),
-        "ci_low":   round(float(ci[0]), 2),
-        "ci_high":  round(float(ci[1]), 2),
-        "p_value":  round(float(p_val), 3),
-        "win_rate": round(win_rate, 1),
+        "n":            n,
+        "mean":         round(mean, 2),
+        "median":       round(median, 2),
+        "std":          round(std, 2),
+        "ci_low":       round(float(ci[0]), 2),
+        "ci_high":      round(float(ci[1]), 2),
+        "p_value":      round(float(p_val), 3),
+        "win_rate":     round(win_rate, 1),
+        "cohens_d":     cohens_d,
+        "boot_ci_low":  boot_ci_low,
+        "boot_ci_high": boot_ci_high,
     }
 
 
@@ -142,7 +189,7 @@ class ResearchBacktestService:
           n_total_candidates  — cutoff 前 analysis_results 總筆數
           n_usable            — 有 20D forward return 的筆數
         """
-        raw_df, n_total = self._build_raw_df()
+        raw_df, n_total, sorted_dates = self._build_raw_df()
 
         if raw_df.empty:
             return {
@@ -162,6 +209,22 @@ class ResearchBacktestService:
         # PT bucket 統計只含有真實 pt_score 的列，N/A 不得納入績效比較
         pt_usable = usable[usable["pt_bucket"] != "N/A"]
 
+        # ── 樣本獨立性診斷 ─────────────────────────────────────
+        dedup_20 = dedup_observations(usable, 20, sorted_dates)
+        dedup_60 = dedup_observations(usable, 60, sorted_dates)
+
+        def _si_stats(df):
+            return {
+                "stats_20d": compute_stats(df["alpha_20d"].tolist()),
+                "stats_60d": compute_stats(df["alpha_60d"].tolist()),
+            }
+
+        sample_independence = {
+            "raw":      {"n": len(usable),  **_si_stats(usable)},
+            "dedup_20": {"n": len(dedup_20), **_si_stats(dedup_20)},
+            "dedup_60": {"n": len(dedup_60), **_si_stats(dedup_60)},
+        }
+
         return {
             "raw_df":             usable,
             "by_pt_bucket":       self._group_stats(pt_usable, "pt_bucket", PT_BUCKET_ORDER),
@@ -169,13 +232,14 @@ class ResearchBacktestService:
             "by_ma20":            self._group_stats(usable, "ma20_bracket", MA20_BRACKET_ORDER),
             "by_ma60":            self._group_stats(usable, "ma60_bracket", MA60_BRACKET_ORDER),
             "by_month":           self._group_stats(usable, "ym",           None),
-            "by_regime":          self._group_stats(usable, "regime",       ["bull", "bear"]),
+            "by_regime":          self._group_stats(usable, "regime",       ["bull", "neutral", "bear"]),
             "cutoff":             _get_cutoff(),
             "n_total_candidates": n_total,
             "n_usable":           len(usable),
             "n_with_pt":          n_with_pt,
             "n_without_pt":       n_without_pt,
             "pt_coverage_pct":    pt_coverage,
+            "sample_independence": sample_independence,
         }
 
     # ── 內部：建構原始 DataFrame ──────────────────────────────
@@ -254,11 +318,21 @@ class ResearchBacktestService:
             ma60_map[sid]       = d2ma60
             ma60_slope_map[sid] = d2slope
 
-        # ── 0050 regime（當日 0050 close vs MA60）──────────────
+        # ── 0050 regime（當日 0050 close + MA60 slope）────────────
+        # Bull    : close > MA60 且 slope up   → 趨勢確認多頭
+        # Bear    : close < MA60 且 slope down → 趨勢確認空頭
+        # Neutral : 其他（slope flat、或位置與趨勢方向不一致的過渡期）
         regime_map: dict = {}
+        _0050_slope = ma60_slope_map.get("0050", {})
         for d, (close, ma60) in ma60_map.get("0050", {}).items():
             if ma60 is not None:
-                regime_map[d] = "bull" if close > ma60 else "bear"
+                slope = _0050_slope.get(d, "flat")
+                if close > ma60 and slope == "up":
+                    regime_map[d] = "bull"
+                elif close < ma60 and slope == "down":
+                    regime_map[d] = "bear"
+                else:
+                    regime_map[d] = "neutral"
 
         # ── 前向報酬（O(log n) per lookup）────────────────────
         def _fwd(sid: str, entry_date: date, n_days: int):
@@ -329,7 +403,7 @@ class ResearchBacktestService:
                 "ym":           ym,
             })
 
-        return pd.DataFrame(rows), n_total
+        return pd.DataFrame(rows), n_total, sorted_dates
 
     # ── 分組統計 ──────────────────────────────────────────────
 
@@ -344,22 +418,28 @@ class ResearchBacktestService:
             s20 = compute_stats(gdf["alpha_20d"].tolist())
             s60 = compute_stats(gdf["alpha_60d"].tolist())
             rows.append({
-                group_col:        grp_val,
-                "n":              s20["n"],
-                "20D均Alpha%":    s20["mean"],
-                "20D中位Alpha%":  s20["median"],
-                "20D Std":        s20["std"],
-                "20D CI低":       s20["ci_low"],
-                "20D CI高":       s20["ci_high"],
-                "20D p值":        s20["p_value"],
-                "20D勝率%":       s20["win_rate"],
-                "60D均Alpha%":    s60["mean"],
-                "60D中位Alpha%":  s60["median"],
-                "60D Std":        s60["std"],
-                "60D CI低":       s60["ci_low"],
-                "60D CI高":       s60["ci_high"],
-                "60D p值":        s60["p_value"],
-                "60D勝率%":       s60["win_rate"],
+                group_col:          grp_val,
+                "n":                s20["n"],
+                "20D均Alpha%":      s20["mean"],
+                "20D中位Alpha%":    s20["median"],
+                "20D Std":          s20["std"],
+                "20D CI低":         s20["ci_low"],
+                "20D CI高":         s20["ci_high"],
+                "20D p值":          s20["p_value"],
+                "20D勝率%":         s20["win_rate"],
+                "20D Cohen'd":      s20["cohens_d"],
+                "20D Boot CI低":    s20["boot_ci_low"],
+                "20D Boot CI高":    s20["boot_ci_high"],
+                "60D均Alpha%":      s60["mean"],
+                "60D中位Alpha%":    s60["median"],
+                "60D Std":          s60["std"],
+                "60D CI低":         s60["ci_low"],
+                "60D CI高":         s60["ci_high"],
+                "60D p值":          s60["p_value"],
+                "60D勝率%":         s60["win_rate"],
+                "60D Cohen'd":      s60["cohens_d"],
+                "60D Boot CI低":    s60["boot_ci_low"],
+                "60D Boot CI高":    s60["boot_ci_high"],
             })
 
         out = pd.DataFrame(rows)
@@ -391,12 +471,12 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
 
     stock_ids = [ar.stock_id for ar in today_ars]
 
-    # 批次查詢：最近 100 天歷史價格（計算 MA60）
+    # 批次查詢：最近 100 天歷史價格（含 0050 供 regime 計算）
     lookback = trade_date - timedelta(days=100)
     hist_rows = (
         session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.close)
         .filter(
-            DailyPrice.stock_id.in_(stock_ids),
+            DailyPrice.stock_id.in_(stock_ids + ["0050"]),
             DailyPrice.date >= lookback,
             DailyPrice.date <= trade_date,
             DailyPrice.close.isnot(None),
@@ -404,10 +484,13 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         .order_by(DailyPrice.stock_id, DailyPrice.date)
         .all()
     )
-    hist_map: dict = defaultdict(list)
+    hist_map: dict   = defaultdict(list)
+    close_on_day: dict = {}     # close_at_signal: 當日收盤
     for sid, d, c in hist_rows:
         if c and c > 0:
             hist_map[sid].append(c)
+            if d == trade_date:
+                close_on_day[sid] = c
 
     def _ma60_features(sid: str):
         closes = hist_map.get(sid, [])
@@ -417,23 +500,46 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         gap = round((closes[-1] - ma60_now) / ma60_now * 100, 2)
         if len(closes) >= 65:
             ma60_5ago = float(np.mean(closes[-65:-5]))
-            if ma60_now > ma60_5ago * 1.005:
-                slope = "up"
-            elif ma60_now < ma60_5ago * 0.995:
-                slope = "down"
-            else:
-                slope = "flat"
+            slope = ("up"   if ma60_now > ma60_5ago * 1.005
+                     else "down" if ma60_now < ma60_5ago * 0.995
+                     else "flat")
         else:
             slope = "flat"
         return gap, slope
 
-    # 取股票名稱
-    name_map = {
-        r.stock_id: r.name
-        for r in session.query(Stock.stock_id, Stock.name)
+    # market_regime_at_signal: 0050 close + MA60 slope（三狀態，與 Research 分析一致）
+    def _regime_0050() -> str:
+        closes = hist_map.get("0050", [])
+        if len(closes) < 60:
+            return "unknown"
+        ma60_now = float(np.mean(closes[-60:]))
+        close_now = closes[-1]
+        slope = "flat"
+        if len(closes) >= 65:
+            ma60_5ago = float(np.mean(closes[-65:-5]))
+            slope = ("up"   if ma60_now > ma60_5ago * 1.005
+                     else "down" if ma60_now < ma60_5ago * 0.995
+                     else "flat")
+        if close_now > ma60_now and slope == "up":
+            return "bull"
+        if close_now < ma60_now and slope == "down":
+            return "bear"
+        return "neutral"
+
+    regime_today = _regime_0050()
+
+    # 取股票名稱與產業
+    stock_rows = (
+        session.query(Stock.stock_id, Stock.name, Stock.industry)
         .filter(Stock.stock_id.in_(stock_ids))
         .all()
-    }
+    )
+    name_map     = {r.stock_id: r.name     for r in stock_rows}
+    industry_map = {r.stock_id: r.industry for r in stock_rows}
+
+    # candidate_rank: 當日所有 candidates 按 total_score 排名
+    sorted_ars = sorted(today_ars, key=lambda x: (x.total_score or 0.0), reverse=True)
+    rank_map = {ar.stock_id: i + 1 for i, ar in enumerate(sorted_ars)}
 
     # 查已存在的 (trade_date, stock_id) 以避免衝突
     existing = {
@@ -451,21 +557,26 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         ma60_gap_v, ma60_slope_v = _ma60_features(ar.stock_id)
 
         session.add(ForwardSignal(
-            trade_date    = trade_date,
-            stock_id      = ar.stock_id,
-            stock_name    = name_map.get(ar.stock_id, ""),
-            pt_score      = ar.price_trend_score,
-            setup_type    = ar.setup_type,
-            trade_signal  = ar.trade_signal,
-            ma20_gap      = ar.ma20_gap,
-            ma60_gap      = ma60_gap_v,
-            ma60_slope    = ma60_slope_v,
-            vol_ratio     = ar.volume_ratio,
-            total_score   = ar.total_score,
-            timing_score  = ar.timing_score,
-            behavior_score= ar.behavior_score,
-            rec_level     = ar.rec_level,
-            model_version = MODEL_VERSION,
+            trade_date              = trade_date,
+            stock_id                = ar.stock_id,
+            stock_name              = name_map.get(ar.stock_id, ""),
+            pt_score                = ar.price_trend_score,
+            setup_type              = ar.setup_type,
+            trade_signal            = ar.trade_signal,
+            ma20_gap                = ar.ma20_gap,
+            ma60_gap                = ma60_gap_v,
+            ma60_slope              = ma60_slope_v,
+            vol_ratio               = ar.volume_ratio,
+            total_score             = ar.total_score,
+            timing_score            = ar.timing_score,
+            behavior_score          = ar.behavior_score,
+            rec_level               = ar.rec_level,
+            model_version           = MODEL_VERSION,
+            confidence              = ar.confidence,
+            industry                = industry_map.get(ar.stock_id),
+            market_regime_at_signal = regime_today,
+            close_at_signal         = close_on_day.get(ar.stock_id),
+            candidate_rank          = rank_map.get(ar.stock_id),
         ))
         inserted += 1
 

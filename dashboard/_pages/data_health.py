@@ -168,6 +168,40 @@ def _load_health_metrics() -> dict:
             "last_7d": ar_7d,
         }
 
+        # ── Forward Signal 完整性 ─────────────────────────────
+        from src.database import ForwardSignal, RESEARCH_CUTOFF_DATE
+        fs_latest = s.query(func.max(ForwardSignal.trade_date)).scalar()
+        fs_total  = s.query(func.count(ForwardSignal.id)).scalar() or 0
+
+        # AR 在 cutoff 後有資料的每日筆數（最近 60 天）
+        ar_cutoff_rows = (
+            s.query(AnalysisResult.date, func.count(AnalysisResult.id).label("ar_cnt"))
+            .filter(AnalysisResult.date >= RESEARCH_CUTOFF_DATE)
+            .group_by(AnalysisResult.date)
+            .order_by(AnalysisResult.date.desc())
+            .limit(60)
+            .all()
+        )
+        # cutoff 後已有 forward_signals 的日期集合
+        fs_dates_set = {
+            d for (d,) in
+            s.query(func.distinct(ForwardSignal.trade_date))
+            .filter(ForwardSignal.trade_date >= RESEARCH_CUTOFF_DATE)
+            .all()
+        }
+        # 找出 AR 有資料但 FS 缺失的日期
+        missing_fs_dates = [
+            {"date": d, "ar_cnt": int(cnt)}
+            for d, cnt in ar_cutoff_rows
+            if d not in fs_dates_set
+        ]
+        metrics["forward_signal"] = {
+            "latest":       fs_latest,
+            "total":        fs_total,
+            "cutoff":       RESEARCH_CUTOFF_DATE,
+            "missing_dates": missing_fs_dates,
+        }
+
         # ── 最近執行記錄（最新 5 筆）────────────────────────
         exec_logs = (
             s.query(ExecutionLog).order_by(ExecutionLog.date.desc()).limit(5).all()
@@ -358,6 +392,22 @@ def page_data_health() -> None:
         f"近 7 天 {ar_m.get('last_7d', 0)} 筆",
     )
 
+    # Forward Signals
+    fs_m = m.get("forward_signal", {})
+    fs_missing = fs_m.get("missing_dates", [])
+    fs_detail = f"總計 {fs_m.get('total', 0):,} 筆"
+    fs_extra = (
+        f"🔴 {len(fs_missing)} 個缺失日期" if fs_missing
+        else ("✅ 無缺失" if fs_m.get("total", 0) > 0 else "尚未開始累積")
+    )
+    _render_source_row(
+        "Forward Signals",
+        "🔒",
+        fs_m.get("latest"),
+        fs_detail,
+        fs_extra,
+    )
+
     st.markdown("---")
 
     # ── 最近執行記錄 ─────────────────────────────────────────
@@ -405,9 +455,28 @@ def page_data_health() -> None:
     if rec_m.get("last_30d", 0) == 0:
         warnings.append("⚠️  近 30 天無任何推薦記錄，請確認分析流程是否正常運行")
 
+    # Forward Signal 缺失日期（最嚴重，獨立顯示在最前面）
+    fs_m = m.get("forward_signal", {})
+    fs_missing = fs_m.get("missing_dates", [])
+    if fs_missing:
+        st.markdown("#### 🔴 Forward Signal 缺失警告")
+        st.error(
+            f"**偵測到 {len(fs_missing)} 個缺失日期** — "
+            "這些天有 `analysis_results` 但 `forward_signals` 未寫入。\n\n"
+            "該日的預測記錄**永遠無法補回**（補寫即不再是真正的 append-only OOS）。\n\n"
+            "請確認 `main.py` 的 `write_forward_signals()` 是否因例外而靜默失敗。"
+        )
+        missing_rows = [
+            {"日期": str(row["date"]), "analysis_results 筆數": row["ar_cnt"], "forward_signals": "❌ 缺失"}
+            for row in fs_missing
+        ]
+        import pandas as _pd
+        st.dataframe(_pd.DataFrame(missing_rows).set_index("日期"), use_container_width=True)
+        st.markdown("---")
+
     if warnings:
         st.markdown("#### ⚠️ 異常警示")
         for w in warnings:
             st.warning(w)
-    else:
+    elif not fs_missing:
         st.success("✅ 所有資料來源狀態正常")
