@@ -295,7 +295,10 @@ def page_settings(selected_date: date) -> None:
     st.divider()
     st.markdown('<div class="section-title">部位試算設定</div>', unsafe_allow_html=True)
     st.caption("設定你的資金與風控參數，Decision Center 的「部位試算」區塊將依此計算建議張數。此設定暫存於瀏覽器 session，重新開啟頁面後回到預設值。")
-    from config import POSITION_SIZING as _PS_CFG
+    try:
+        from config import POSITION_SIZING as _PS_CFG
+    except ImportError:
+        _PS_CFG = {"capital_ntd": 1_000_000, "max_risk_pct": 1.0, "max_single_pct": 20.0, "lot_size": 1000}
     ps_col1, ps_col2 = st.columns(2)
     with ps_col1:
         cap = st.number_input(

@@ -102,7 +102,10 @@ def decision_label(r: dict) -> dict:
 
     Returns dict with keys: label, color, reason, is_override.
     """
-    from config import ENTRY_QUALITY
+    try:
+        from config import ENTRY_QUALITY
+    except ImportError:
+        ENTRY_QUALITY = {"chase_gap_pct": 5.0}
 
     signal          = r.get("trade_signal") or "wait"
     setup           = r.get("setup_type") or "none"
@@ -147,7 +150,10 @@ def decision_label(r: dict) -> dict:
 
 def entry_quality_label(r: dict) -> str:
     """Return plain-language entry quality: 理想 / 追高 / 回檔機會 / 觀望."""
-    from config import ENTRY_QUALITY
+    try:
+        from config import ENTRY_QUALITY
+    except ImportError:
+        ENTRY_QUALITY = {"chase_gap_pct": 5.0}
 
     signal          = r.get("trade_signal") or "wait"
     setup           = r.get("setup_type") or "none"

@@ -147,7 +147,10 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     # ── Position sizing ─────────────────────────────────────────
     ps_html = ""
     if price and stop_p and t1 and price > stop_p:
-        from config import POSITION_SIZING as _PS_CFG
+        try:
+            from config import POSITION_SIZING as _PS_CFG
+        except ImportError:
+            _PS_CFG = {"capital_ntd": 1_000_000, "max_risk_pct": 1.0, "max_single_pct": 20.0, "lot_size": 1000}
         capital      = st.session_state.get("ps_capital",      _PS_CFG["capital_ntd"])
         max_risk_pct = st.session_state.get("ps_max_risk_pct", _PS_CFG["max_risk_pct"])
         ps = _ps(
