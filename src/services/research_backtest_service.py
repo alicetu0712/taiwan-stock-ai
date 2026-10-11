@@ -830,11 +830,15 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         # Uses low price so that a stop-limit order placed at `stop` would have
         # triggered intraday, consistent with swing-trade execution semantics.
         # Falls back to close if low is unavailable for that day.
+        used_close_fallback = False  # tracks whether any day lacked H/L, lowering outcome reliability
+
         stop_day = None
         if stop and stop > 0:
             for i in range(idx_s, min(idx_s + 20, len(sdates))):
                 d_i = sdates[i]
                 lo = low_map.get(fs.stock_id, {}).get(d_i)
+                if lo is None:
+                    used_close_fallback = True
                 chk = lo if lo is not None else price_map.get(fs.stock_id, {}).get(d_i)
                 if chk is not None and chk <= stop:
                     stop_day = i - idx_s + 1
@@ -848,6 +852,8 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
             for i in range(idx_s, min(idx_s + 20, len(sdates))):
                 d_i = sdates[i]
                 hi = high_map.get(fs.stock_id, {}).get(d_i)
+                if hi is None:
+                    used_close_fallback = True
                 chk = hi if hi is not None else price_map.get(fs.stock_id, {}).get(d_i)
                 if chk is not None and chk >= t1:
                     t1_day = i - idx_s + 1
@@ -872,13 +878,14 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         else:
             note = None  # not enough data yet
 
-        fs.fwd_return_20d     = ret_20
-        fs.alpha_20d          = alpha_20
-        fs.fwd_return_60d     = ret_60
-        fs.alpha_60d          = alpha_60
-        fs.stop_triggered_day = stop_day
-        fs.t1_hit_day         = t1_day
-        fs.outcome_note       = note
+        fs.fwd_return_20d      = ret_20
+        fs.alpha_20d           = alpha_20
+        fs.fwd_return_60d      = ret_60
+        fs.alpha_60d           = alpha_60
+        fs.stop_triggered_day  = stop_day
+        fs.t1_hit_day          = t1_day
+        fs.outcome_note        = note
+        fs.outcome_price_quality = "CLOSE_ONLY" if used_close_fallback else "OHLC"
         if note:  # only mark computed when we got a result
             fs.outcomes_computed_at = datetime.utcnow()
         updated += 1

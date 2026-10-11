@@ -423,8 +423,9 @@ class ForwardSignal(Base):
     alpha_60d            = Column(Float)    # 超額報酬 vs 0050（%），60 交易日
     stop_triggered_day   = Column(Integer)  # 第幾個交易日收盤跌破停損（NULL = 未觸發）
     t1_hit_day           = Column(Integer)  # 第幾個交易日收盤首次達到 T1
-    outcome_note         = Column(String(20))  # T1_HIT / STOP_TRIGGERED / EXPIRED / null
-    outcomes_computed_at = Column(DateTime)
+    outcome_note          = Column(String(20))  # T1_HIT / STOP_TRIGGERED / EXPIRED / null
+    outcome_price_quality = Column(String(10))  # OHLC / CLOSE_ONLY — whether stop/T1 scan used intraday H/L or close fallback
+    outcomes_computed_at  = Column(DateTime)
     # Data Integrity — validity gate
     is_valid          = Column(Boolean, default=True)    # False = 此紀錄不得參與任何績效統計
     invalid_reason    = Column(String(60))               # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH
@@ -505,6 +506,7 @@ def _migrate_forward_signals(engine) -> None:
         ("stop_triggered_day",      "INTEGER"),
         ("t1_hit_day",              "INTEGER"),
         ("outcome_note",            "VARCHAR(20)"),
+        ("outcome_price_quality",   "VARCHAR(10)"),
         ("outcomes_computed_at",    "DATETIME"),
         # Data Integrity validity gate
         ("is_valid",                "BOOLEAN DEFAULT 1"),

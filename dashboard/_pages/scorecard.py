@@ -51,9 +51,10 @@ def _load_scorecard_rows(limit: int = 300) -> list:
                 "alpha_20d":          r.alpha_20d,
                 "fwd_return_60d":     r.fwd_return_60d,
                 "alpha_60d":          r.alpha_60d,
-                "stop_triggered_day": r.stop_triggered_day,
-                "t1_hit_day":         r.t1_hit_day,
-                "outcome_note":       r.outcome_note,
+                "stop_triggered_day":  r.stop_triggered_day,
+                "t1_hit_day":          r.t1_hit_day,
+                "outcome_note":        r.outcome_note,
+                "outcome_price_quality": getattr(r, "outcome_price_quality", None),
                 "pt_score":           r.pt_score,
                 "total_score":        r.total_score,
                 "confidence":         r.confidence,
@@ -260,6 +261,11 @@ def page_scorecard() -> None:
                         st.caption(f"停損觸發日：第 {r['stop_triggered_day']} 交易日（盤中 Low ≤ Stop Price）")
                     if r["t1_hit_day"]:
                         st.caption(f"T1 達成日：第 {r['t1_hit_day']} 交易日（盤中 High ≥ T1）")
+                    _pq = r.get("outcome_price_quality")
+                    if _pq == "CLOSE_ONLY":
+                        st.caption("⚠️ 價格品質：CLOSE_ONLY — 掃描期間部分交易日缺少盤中 H/L，以收盤價代替判斷停損/目標，結果可信度較低")
+                    elif _pq == "OHLC":
+                        st.caption("✅ 價格品質：OHLC — 停損/目標判斷全程使用盤中 High/Low")
                     st.markdown(
                         f"20D 淨報酬：{_fmt(ret_20, '%', plus=True)}  \n"
                         f"20D Alpha：{_fmt(alpha_20, '%', plus=True)}  \n"
