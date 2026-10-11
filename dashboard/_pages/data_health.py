@@ -14,6 +14,7 @@ from dashboard.db import (
     AnalysisResult,
     DailyPrice,
     Recommendation,
+    Stock,
     get_session,
 )
 
@@ -249,6 +250,48 @@ def _render_source_row(
         st.caption(detail + (f"  {extra}" if extra else ""))
 
 
+@st.cache_data(ttl=300)
+def _load_coverage_history(n_days: int = 20) -> dict:
+    """
+    近 n_days 個有 DailyPrice 資料的交易日的市場覆蓋率分布。
+    Expected universe = Stock 資料表中 is_excluded != True 的標的數。
+    """
+    try:
+        from sqlalchemy import func
+        s = get_session()
+        expected = (
+            s.query(func.count(Stock.stock_id))
+            .filter(Stock.is_excluded.isnot(True))
+            .scalar()
+        ) or 0
+
+        # 找近 n_days 個有 DailyPrice 的日期
+        recent_dates = (
+            s.query(DailyPrice.date)
+            .filter(DailyPrice.close.isnot(None))
+            .group_by(DailyPrice.date)
+            .order_by(DailyPrice.date.desc())
+            .limit(n_days)
+            .all()
+        )
+        dates = sorted([r[0] for r in recent_dates])
+
+        rows = []
+        for d in dates:
+            cnt = (
+                s.query(func.count(DailyPrice.stock_id))
+                .filter(DailyPrice.date == d, DailyPrice.close.isnot(None))
+                .scalar()
+            ) or 0
+            ratio = cnt / expected if expected > 0 else None
+            rows.append({"date": d, "count": cnt, "expected": expected, "ratio": ratio})
+        s.close()
+        return {"expected": expected, "rows": rows}
+    except Exception as e:
+        logger.warning(f"_load_coverage_history: {e}")
+        return {"expected": 0, "rows": []}
+
+
 def page_data_health() -> None:
     st.subheader("🩺 資料品質監控")
     st.caption("各資料來源的新鮮度與覆蓋率。每 5 分鐘自動更新。")
@@ -480,3 +523,51 @@ def page_data_health() -> None:
             st.warning(w)
     elif not fs_missing:
         st.success("✅ 所有資料來源狀態正常")
+
+    st.markdown("---")
+
+    # ── Forward Gate 市場覆蓋率監控 ──────────────────────────────
+    st.markdown("#### 📊 Forward Gate 市場覆蓋率（近 20 交易日）")
+    st.caption(
+        "此面板用於觀察每日 DailyPrice 實際筆數佔標的宇宙的比例，"
+        "協助校準 `FORWARD_MARKET_COVERAGE[min_ratio]`（目前設定為 None = 停用比例檢查）。"
+        "觀察完真實分布後再設定門檻，不要事先猜測。"
+    )
+
+    cov = _load_coverage_history(n_days=20)
+    cov_rows = cov.get("rows", [])
+    expected_uni = cov.get("expected", 0)
+
+    if not cov_rows:
+        st.info("尚無覆蓋率資料")
+    else:
+        import pandas as _pd
+
+        ratios = [r["ratio"] for r in cov_rows if r["ratio"] is not None]
+        counts = [r["count"] for r in cov_rows]
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("標的宇宙（Stock 表）", f"{expected_uni:,} 檔")
+        col2.metric("覆蓋率 最低", f"{min(ratios)*100:.1f}%" if ratios else "—")
+        col3.metric("覆蓋率 中位數", f"{sorted(ratios)[len(ratios)//2]*100:.1f}%" if ratios else "—")
+        col4.metric("覆蓋率 最高", f"{max(ratios)*100:.1f}%" if ratios else "—")
+
+        df_cov = _pd.DataFrame([
+            {
+                "日期": str(r["date"]),
+                "DailyPrice 筆數": r["count"],
+                "標的宇宙": r["expected"],
+                "覆蓋率 %": f"{r['ratio']*100:.1f}" if r["ratio"] is not None else "—",
+            }
+            for r in reversed(cov_rows)  # newest first
+        ])
+        st.dataframe(df_cov.set_index("日期"), use_container_width=True)
+
+        from config import FORWARD_MARKET_COVERAGE
+        _min_ratio = FORWARD_MARKET_COVERAGE.get("min_ratio")
+        _min_count = FORWARD_MARKET_COVERAGE.get("min_count", 200)
+        if _min_ratio is None:
+            st.caption(
+                f"⚙️ 目前 Gate 設定：絕對下限 {_min_count} 檔，比例下限 **停用**（None）。"
+                " 觀察以上分布後，在 `config.py` 設定 `min_ratio` 啟用。"
+            )
