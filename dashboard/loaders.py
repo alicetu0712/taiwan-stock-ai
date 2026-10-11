@@ -711,24 +711,28 @@ def load_price_chart_data(stock_id: str, days: int = 120) -> pd.DataFrame:
 
 @st.cache_data(ttl=600)
 def load_latest_pt_analysis(stock_id: str) -> dict:
-    """讀取個股最新一筆 AnalysisResult（V2 欄位），供看盤頁顯示。TTL=10 分鐘。"""
+    """讀取個股最新一筆有效交易日的 AnalysisResult（V2 欄位），供看盤頁顯示。TTL=10 分鐘。"""
     try:
         from sqlalchemy import select
 
+        from src.core.trading_calendar import TaiwanTradingCalendar
         from src.database import AnalysisResult, get_session
 
+        cal = TaiwanTradingCalendar()
         s = get_session()
-        row = (
+        # Fetch recent rows; skip any that fall on a non-trading day
+        rows = (
             s.execute(
                 select(AnalysisResult)
                 .where(AnalysisResult.stock_id == stock_id.strip())
                 .order_by(AnalysisResult.date.desc())
-                .limit(1)
+                .limit(10)
             )
             .scalars()
-            .first()
+            .all()
         )
         s.close()
+        row = next((r for r in rows if cal.is_trading_day(r.date)), None)
         if not row:
             return {}
         return {
