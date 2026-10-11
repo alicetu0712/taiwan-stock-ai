@@ -239,19 +239,19 @@ def page_scorecard() -> None:
                     st.markdown("⏳ 尚未成熟（等待 20 交易日後回填）")
                 else:
                     outcome_display = {
-                        "T1_HIT":         "🎯 達到目標 T1",
-                        "STOP_TRIGGERED": "🛑 觸及停損",
-                        "EXPIRED":        "⏱️ 時間到期",
+                        "T1_HIT":         "🎯 盤中觸及目標 T1（High ≥ T1）",
+                        "STOP_TRIGGERED": "🛑 盤中觸及停損（Low ≤ Stop）",
+                        "EXPIRED":        "⏱️ 時間到期（20 交易日內未觸發）",
                     }.get(r["outcome_note"], r["outcome_note"])
                     st.markdown(f"結果：**{outcome_display}**")
                     if r["stop_triggered_day"]:
-                        st.caption(f"停損觸發日：第 {r['stop_triggered_day']} 交易日")
+                        st.caption(f"停損觸發日：第 {r['stop_triggered_day']} 交易日（盤中 Low ≤ Stop Price）")
                     if r["t1_hit_day"]:
-                        st.caption(f"T1 達成日：第 {r['t1_hit_day']} 交易日")
+                        st.caption(f"T1 達成日：第 {r['t1_hit_day']} 交易日（盤中 High ≥ T1）")
                     st.markdown(
                         f"20D 淨報酬：{_fmt(ret_20, '%', plus=True)}  \n"
                         f"20D Alpha：{_fmt(alpha_20, '%', plus=True)}  \n"
                         f"60D 淨報酬：{_fmt(r['fwd_return_60d'], '%', plus=True)}  \n"
                         f"60D Alpha：{_fmt(r['alpha_60d'], '%', plus=True)}"
                     )
-                    st.caption("淨報酬已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）")
+                    st.caption("淨報酬已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）。同日 Stop 與 T1 同時觸及時以 Stop 為準。")

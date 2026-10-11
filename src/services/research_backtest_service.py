@@ -725,7 +725,8 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
     max_date = max(r.trade_date for r in pending) + timedelta(days=150)
 
     price_rows = (
-        session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.close)
+        session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.close,
+                      DailyPrice.low, DailyPrice.high)
         .filter(
             DailyPrice.stock_id.in_(stock_ids + ["0050"]),
             DailyPrice.date >= min_date,
@@ -736,11 +737,19 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         .all()
     )
 
-    price_map: dict = {}
-    for sid, d, c in price_rows:
+    price_map: dict = {}   # close prices (for return calc and 0050)
+    low_map:   dict = {}   # intraday low  (for stop detection)
+    high_map:  dict = {}   # intraday high (for T1 detection)
+    for sid, d, c, lo, hi in price_rows:
         if sid not in price_map:
             price_map[sid] = {}
+            low_map[sid]   = {}
+            high_map[sid]  = {}
         price_map[sid][d] = c
+        if lo is not None:
+            low_map[sid][d]  = lo
+        if hi is not None:
+            high_map[sid][d] = hi
     sorted_dates_map = {sid: sorted(dm.keys()) for sid, dm in price_map.items()}
     p0050 = price_map.get("0050", {})
     sorted_0050 = sorted(p0050.keys())
@@ -792,21 +801,30 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         ret_20, alpha_20 = _return_at(20)
         ret_60, alpha_60 = _return_at(60)
 
-        # stop_triggered_day: first trading day (1-indexed) where close < stop
+        # stop_triggered_day: first trading day (1-indexed) where intraday low <= stop
+        # Uses low price so that a stop-limit order placed at `stop` would have
+        # triggered intraday, consistent with swing-trade execution semantics.
+        # Falls back to close if low is unavailable for that day.
         stop_day = None
         if stop and stop > 0:
             for i in range(idx_s, min(idx_s + 20, len(sdates))):
-                c = price_map.get(fs.stock_id, {}).get(sdates[i])
-                if c and c < stop:
+                d_i = sdates[i]
+                lo = low_map.get(fs.stock_id, {}).get(d_i)
+                chk = lo if lo is not None else price_map.get(fs.stock_id, {}).get(d_i)
+                if chk is not None and chk <= stop:
                     stop_day = i - idx_s + 1
                     break
 
-        # t1_hit_day: first trading day (1-indexed) where close >= t1
+        # t1_hit_day: first trading day (1-indexed) where intraday high >= t1
+        # Uses high price so that a limit-sell at T1 would have executed intraday.
+        # Falls back to close if high is unavailable for that day.
         t1_day = None
         if t1 and t1 > 0:
             for i in range(idx_s, min(idx_s + 20, len(sdates))):
-                c = price_map.get(fs.stock_id, {}).get(sdates[i])
-                if c and c >= t1:
+                d_i = sdates[i]
+                hi = high_map.get(fs.stock_id, {}).get(d_i)
+                chk = hi if hi is not None else price_map.get(fs.stock_id, {}).get(d_i)
+                if chk is not None and chk >= t1:
                     t1_day = i - idx_s + 1
                     break
 
