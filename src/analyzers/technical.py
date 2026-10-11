@@ -510,11 +510,13 @@ class TechnicalAnalyzer:
         if ma20 and cur < ma20 and r.ma_trend == "bearish":
             return "breakdown"
 
-        # Breakout：近20日新高 + MACD 正向
-        # 有量突破 vs 無量突破 → 均算 breakout，量的差異由 vol_ratio 顯示
-        if (r.breakout_20d or r.near_20d_high) and \
-           r.macd_signal in ("golden", "golden_strong"):
+        # Breakout：確實突破20日高點 + MACD 正向
+        if r.breakout_20d and r.macd_signal in ("golden", "golden_strong"):
             return "breakout"
+
+        # Near Breakout：接近20日高點（未突破）+ MACD 正向
+        if r.near_20d_high and r.macd_signal in ("golden", "golden_strong"):
+            return "near_breakout"
 
         # Pullback Buy：多頭排列，回踩 MA10 附近（0-5%以上）且縮量
         # 代表健康拉回而非趨勢破壞，是較佳的低風險進場點
@@ -539,6 +541,7 @@ class TechnicalAnalyzer:
     def _build_summary(self, r: TechnicalResult) -> str:
         setup_desc = {
             "breakout":      "突破型態：站上20日新高",
+            "near_breakout": "接近突破：股價逼近20日高點，待確認",
             "pullback_buy":  "回踩買點：多頭排列中縮量回踩MA10",
             "pullback_hold": "回踩守穩：回踩MA20後守住",
             "trending":      "趨勢延伸：均線多頭排列持續向上",

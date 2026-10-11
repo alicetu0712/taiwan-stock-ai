@@ -451,7 +451,8 @@ class DecisionEngine:
 
         # ── 信心分數 ──────────────────────────────────────────
         rec.confidence = self._calc_confidence(
-            quality_result, technical_result, behavior_result, risk_result
+            quality_result, technical_result, behavior_result, risk_result,
+            price_trend_result=price_trend_result,
         )
 
         # ── Explainable AI（收集加分/扣分因素）────────────────
@@ -485,7 +486,8 @@ class DecisionEngine:
         rec.advantages = list(dict.fromkeys(advantages))[:5]  # 去重，最多5條
         rec.risks = list(dict.fromkeys(risks))[:5]
         rec.watch_points = self._build_watch_points(
-            quality_result, technical_result, trade_date
+            quality_result, technical_result, trade_date,
+            price_trend_result=price_trend_result,
         )
         rec.summary = self._build_summary(rec)
         rec.ai_conclusion = self._build_conclusion(rec)
@@ -757,6 +759,7 @@ class DecisionEngine:
         technical_result,
         behavior_result,
         risk_result,
+        price_trend_result=None,
     ) -> float:
         """
         短線信心分數：以技術面為主軸，基本面負責排除惡化。
@@ -795,11 +798,11 @@ class DecisionEngine:
             elif risk_result.risk_score < 65:
                 confidence -= 10
 
-        # Setup 型態加分
-        if technical_result:
-            st = getattr(technical_result, "setup_type", "none")
-            if st in ("breakout", "pullback_hold"):
-                confidence += 5
+        # Setup 型態加分（PriceTrend 為 single source of truth；fallback 到 TechnicalResult）
+        st = (price_trend_result.setup_type if price_trend_result
+              else getattr(technical_result, "setup_type", "none"))
+        if st in ("breakout", "pullback_hold"):
+            confidence += 5
 
         return round(max(0.0, min(100.0, confidence)), 1)
 
@@ -875,12 +878,15 @@ class DecisionEngine:
         quality_result,
         technical_result,
         trade_date,
+        price_trend_result=None,
     ) -> List[str]:
         """短線觀察重點：技術面為主。"""
         points = []
 
-        if technical_result:
-            st = getattr(technical_result, "setup_type", "none")
+        if technical_result or price_trend_result:
+            # PriceTrend 為 single source of truth；fallback 到 TechnicalResult
+            st = (price_trend_result.setup_type if price_trend_result
+                  else getattr(technical_result, "setup_type", "none"))
             if st == "breakout":
                 points.append("確認突破後能否站穩，量能是否持續")
             elif st == "near_breakout":
@@ -891,7 +897,7 @@ class DecisionEngine:
                 points.append("確認 MA20 是否守穩，不破支撐")
             elif st == "trending":
                 points.append("確認均線多頭排列持續，量不萎縮")
-            if technical_result.resistance:
+            if technical_result and technical_result.resistance:
                 points.append(f"關注前波壓力 {technical_result.resistance:.2f} 是否有效突破")
         if quality_result and quality_result.factors_minus:
             points.append(f"基本面注意：{quality_result.factors_minus[0]}")
