@@ -194,7 +194,7 @@ def page_scorecard() -> None:
         sc4.metric("平均 Alpha", "—")
         sc5.metric("達 T1 率", "—")
         sc6.metric("⚠️ 同日模糊", "—")
-    st.caption("報酬均為淨報酬，已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）。Alpha = 股票淨報酬 − 0050 淨報酬。")
+    st.caption("報酬均為淨報酬，已扣保守假設交易成本 0.585%（保守固定假設值；實際成本依券商折扣、標的類型而異，不含滑價）。Alpha = 股票淨報酬 − 0050 淨報酬。")
     st.markdown("---")
 
     if not filtered:
@@ -266,4 +266,4 @@ def page_scorecard() -> None:
                         f"60D 淨報酬：{_fmt(r['fwd_return_60d'], '%', plus=True)}  \n"
                         f"60D Alpha：{_fmt(r['alpha_60d'], '%', plus=True)}"
                     )
-                    st.caption("淨報酬已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）。同日 Stop 與 T1 同時觸及時標記為「同日模糊」，不計入 T1 率或停損率。")
+                    st.caption("淨報酬已扣保守假設交易成本 0.585%（保守固定假設值；實際成本依券商折扣、標的類型而異，不含滑價）。同日 Stop 與 T1 同時觸及時標記為「同日模糊」，不計入 T1 率或停損率。")

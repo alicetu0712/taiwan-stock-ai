@@ -30,7 +30,10 @@ def _get_cutoff():
     from src.database import RESEARCH_CUTOFF_DATE
     return RESEARCH_CUTOFF_DATE
 
-ROUND_TRIP_COST = 0.585  # 買進 + 賣出合計（%）
+ROUND_TRIP_COST = 0.585  # conservative assumed round-trip cost (%)
+# Derivation: standard broker fee (buy+sell) ~0.285% + securities transaction tax 0.3%
+# Actual costs vary by broker discount, instrument type (ETF vs stock), lot size,
+# and intraday/swing distinction. Do NOT treat as precise per-trade cost.
 
 # ── 排序順序 ──────────────────────────────────────────────────
 PT_BUCKET_ORDER   = ["<40", "40-50", "50-60", "60-70", "70-80", "80+"]

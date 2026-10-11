@@ -401,7 +401,7 @@ def page_backtest() -> None:
 <div style="background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:12px 16px;margin-bottom:16px">
   <div style="color:{verdict_color};font-size:0.95rem;font-weight:600">{verdict}</div>
   <div style="color:#888;font-size:0.75rem;margin-top:6px">
-    ⚠️ 模型、0050、0056、隨機基準報酬均已扣除單次買賣成本 0.585%（手續費＋證交稅），未扣滑價 ·
+    ⚠️ 模型、0050、0056、隨機基準報酬均已扣除保守假設交易成本 0.585%（固定假設值，非精確費率；實際成本依券商折扣、標的類型而異），未扣滑價 ·
     模型與隨機基準均套用 20 交易日冷卻期（同股票不重複計算）·
     回測期間偏短，需持續累積跨越完整財報週期的樣本<br>
     {"⚠️ 本回測含 " + str(n_flagged) + " 筆停牌/下市紀錄（停牌用最後成交價、下市用 -100%），不靜默刪除以保留完整損益。 · " if n_flagged > 0 else ""}

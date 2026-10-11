@@ -134,7 +134,9 @@ class TestModelConfidence:
 
 class TestRoundTripCost:
     def test_cost_matches_expected_value(self):
-        """台股買賣成本 = 手續費(買+賣)×0.285% + 證交稅×0.3% ≈ 0.585%"""
+        """Conservative assumed round-trip cost locked at 0.585%.
+        Derivation: standard broker fee (buy+sell) ~0.285% + securities tax 0.3%.
+        Actual costs vary; this is a fixed conservative assumption, not a precise fee."""
         assert ROUND_TRIP_COST == pytest.approx(0.585, abs=0.001)
 
     def test_cost_reduces_gross_return(self):
