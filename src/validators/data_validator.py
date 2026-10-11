@@ -38,7 +38,7 @@ class DataValidator:
     """
 
     PRICE_ABNORMAL_THRESHOLD = 1e9  # 成交量/金額異常門檻
-    MIN_VALID_STOCKS = 100  # 最少需要幾檔股票資料才視為有效
+    from config import DATA_VALIDATOR_MIN_STOCKS as MIN_VALID_STOCKS
 
     def validate_price_data(
         self, df: pd.DataFrame, trade_date: date

@@ -226,6 +226,22 @@ EXCLUDE_PATTERNS = [
     r"^7[89]\d{2}",  # 興櫃
 ]
 
+# ── Forward Signal 寫入門檻（OOS 完整性保護，工程安全門檻）─────────────────────
+# 這是資料品質門檻，不是策略參數。
+#
+# min_count  — 絕對下限。低於此數視為 API 抓取失敗（當日只回傳少量資料）。
+# min_ratio  — 相對覆蓋率（actual / expected_universe）。None = 停用比例檢查。
+#              expected_universe 來源：Stock 資料表中 is_excluded != True 的標的總數。
+#              在確認實際宇宙大小後再調整，不要盲目設定。
+#              建議啟用範例：min_ratio = 0.80（表示當日須有 80% 的標的有收盤價）。
+FORWARD_MARKET_COVERAGE = {
+    "min_count": 200,    # 絕對下限（任何時候都要過）
+    "min_ratio": None,   # 比例下限（None = 停用；確認宇宙大小後啟用）
+}
+
+# DataValidator 用：收盤資料至少需有幾檔才視為有效（排除 API 回傳殘缺資料）
+DATA_VALIDATOR_MIN_STOCKS = 100
+
 # ── Decision Center 設定（Presentation layer，非 validated trading rule）──────
 # ENTRY_QUALITY: entry quality check for UI display only.
 # chase_gap_pct is NOT a validated signal threshold — it is a presentation heuristic.

@@ -476,8 +476,10 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
 
     Validity gate（5 層，fail-closed）:
     L1 Trading Calendar   : trade_date 必須是交易日（TaiwanTradingCalendar）
-    L2 Market Coverage    : 當日 DailyPrice 筆數 >= _FORWARD_MIN_MARKET_COVERAGE
-                            防止 API 抓取失敗只進來少數幾筆
+    L2 Market Coverage    : 當日 DailyPrice 筆數滿足 config.FORWARD_MARKET_COVERAGE
+                            L2a 絕對下限（min_count）：低於此數視為 API 抓取失敗
+                            L2b 覆蓋率（min_ratio）  ：actual/expected_universe；
+                                                      None = 停用，確認宇宙大小後啟用
     L3 Benchmark Exact    : 0050 必須有 trade_date 當日的 close
                             Alpha 計算要求股票與基準同日進場
     L4 Per-Signal Price   : 每筆 AR 的 stock_id 必須有 trade_date 的 DailyPrice
@@ -488,8 +490,10 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     from src.core.trading_calendar import TaiwanTradingCalendar
     from sqlalchemy import func
     from datetime import timedelta
+    from config import FORWARD_MARKET_COVERAGE
 
-    _FORWARD_MIN_MARKET_COVERAGE = 200  # 低於此數量視為資料抓取失敗
+    _min_count = FORWARD_MARKET_COVERAGE["min_count"]
+    _min_ratio = FORWARD_MARKET_COVERAGE.get("min_ratio")  # None = disabled
 
     if not today_ars:
         return 0
@@ -508,13 +512,31 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         .filter(DailyPrice.date == trade_date, DailyPrice.close.isnot(None))
         .scalar()
     ) or 0
-    if market_count < _FORWARD_MIN_MARKET_COVERAGE:
+
+    # L2a: absolute floor
+    if market_count < _min_count:
         logger.warning(
-            f"[write_forward_signals] REJECTED L2: {trade_date} 市場資料不足 "
-            f"({market_count} 檔 < 門檻 {_FORWARD_MIN_MARKET_COVERAGE})，"
+            f"[write_forward_signals] REJECTED L2a: {trade_date} 市場資料不足 "
+            f"({market_count} 檔 < 絕對下限 {_min_count})，"
             f"疑似資料抓取失敗，不寫入 Forward signals"
         )
         return 0
+
+    # L2b: coverage ratio (disabled when min_ratio is None)
+    if _min_ratio is not None:
+        expected_universe = (
+            session.query(func.count(Stock.stock_id))
+            .filter(Stock.is_excluded.isnot(True))
+            .scalar()
+        ) or 1
+        actual_ratio = market_count / expected_universe
+        if actual_ratio < _min_ratio:
+            logger.warning(
+                f"[write_forward_signals] REJECTED L2b: {trade_date} 市場覆蓋率不足 "
+                f"({market_count}/{expected_universe} = {actual_ratio:.1%} "
+                f"< 門檻 {_min_ratio:.0%})，不寫入 Forward signals"
+            )
+            return 0
 
     # ── L3: Benchmark (0050) Exact Date ─────────────────────────────
     has_0050 = (
