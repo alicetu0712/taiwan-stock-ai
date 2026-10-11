@@ -228,6 +228,7 @@ def load_db_recommendations(target_date: date) -> list:
                 .where(
                     Recommendation.date == target_date,
                     Recommendation.tier == "recommend",
+                    Recommendation.is_valid.isnot(False),
                 )
                 .order_by(Recommendation.confidence.desc())
             )
@@ -367,6 +368,7 @@ def load_opportunity_recs(target_date: date) -> list:
                 .where(
                     Recommendation.date == target_date,
                     Recommendation.tier == "opportunity",
+                    Recommendation.is_valid.isnot(False),
                 )
                 .order_by(Recommendation.total_score.desc())
             )
@@ -441,6 +443,7 @@ def load_watch_recs(target_date: date) -> list:
                 .where(
                     Recommendation.date == target_date,
                     Recommendation.tier == "watch",
+                    Recommendation.is_valid.isnot(False),
                 )
                 .order_by(Recommendation.total_score.desc())
             )
