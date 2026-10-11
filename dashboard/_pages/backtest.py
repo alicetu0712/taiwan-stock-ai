@@ -254,11 +254,11 @@ def page_backtest() -> None:
         if "data_flag" not in frame.columns:
             return 0, 0
         return (
-            (frame["data_flag"] == "⚠️ 停牌").sum(),
+            (frame["data_flag"] == "⚠️ INCOMPLETE_HORIZON").sum(),
             (frame["data_flag"] == "❓ 無價格").sum(),
         )
 
-    n_suspended, n_missing = _flag_counts(df)
+    n_incomplete, n_missing = _flag_counts(df)
     sub = df.dropna(subset=["ret_20d", "b0050_20"]).sort_values("date").copy()
     if sub.empty:
         st.info("尚無足夠價格資料（需同步後等待回測窗口完成）。")
@@ -286,7 +286,7 @@ def page_backtest() -> None:
         cutoff = date.today() - timedelta(days=period_days)
         sub = sub[pd.to_datetime(sub["date"]).dt.date >= cutoff].copy()
         df  = df[pd.to_datetime(df["date"]).dt.date  >= cutoff].copy()
-        n_suspended, n_missing = _flag_counts(df)
+        n_incomplete, n_missing = _flag_counts(df)
 
     if sub.empty:
         st.info(f"篩選期間（{period_label}）內無已成熟的回測樣本。")
@@ -412,7 +412,7 @@ def page_backtest() -> None:
     ⚠️ 模型、0050、0056、隨機基準報酬均已扣除保守假設交易成本 0.585%（固定假設值，非精確費率；實際成本依券商折扣、標的類型而異），未扣滑價 ·
     模型與隨機基準均套用 20 交易日冷卻期（同股票不重複計算）·
     回測期間偏短，需持續累積跨越完整財報週期的樣本<br>
-    {"⚠️ 停牌 " + str(n_suspended) + " 筆（以最後成交價強制出場計算報酬）· " if n_suspended > 0 else ""}{"❓ 無價格 " + str(n_missing) + " 筆（無法確認是否下市，已從報酬統計中排除，不以 -100% 計入）· " if n_missing > 0 else ""}
+    {"⚠️ INCOMPLETE_HORIZON " + str(n_incomplete) + " 筆（20D 窗口未完成，原因不明—資料缺口或停牌皆可能，已從 20D 統計中排除）· " if n_incomplete > 0 else ""}{"❓ 無價格 " + str(n_missing) + " 筆（訊號後完全無價格，已排除）· " if n_missing > 0 else ""}
     ⚠️ 倖存者偏差：分析池僅含現存且有完整價格資料的股票，歷史上已下市標的無法納入，可能使績效偏高。
   </div>
 </div>""",
