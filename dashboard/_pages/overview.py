@@ -267,7 +267,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     ma20_note    = f'<span style="font-size:0.65rem;color:#888">MA20 乖離 {ma20_gap:+.1f}%</span>' if ma20_gap else ""
     _total_score = scores.get("total") or 0
 
-    st.markdown(
+    st.html(
         f"""
 <div style="border:1px solid #e0e0e0;border-radius:10px;padding:14px 16px;margin-bottom:12px;background:#fff">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
@@ -288,8 +288,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
   {trig_html}
   {dq_html}
   <div style="font-size:0.7rem;color:#aaa;margin-top:6px">模型評分：PT {pt_val:.0f} ｜ 綜合 {_total_score:.0f} ｜ 信心度 {conf}% ｜ {level} 級 · {setup} {ma20_note}</div>
-</div>""",
-        unsafe_allow_html=True,
+</div>"""
     )
 
     with st.expander("📊 原始評分"):
@@ -335,7 +334,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             f'<div style="font-size:0.73rem;color:#555;margin-top:7px;font-style:italic">💬 {narrative}</div>'
             if narrative else ""
         )
-        st.markdown(
+        st.html(
             f'<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;'
             f'padding:10px 14px;margin-bottom:8px">'
             f'<div style="font-size:0.65rem;color:#888;font-weight:700;letter-spacing:.05em;margin-bottom:6px">驗證強度</div>'
@@ -344,8 +343,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             f'<span>🔒 Forward：{f_tier_emoji} {f_tier_label} {_f_detail}</span>'
             f'</div>'
             f'{_narrative_html}'
-            f'</div>',
-            unsafe_allow_html=True,
+            f'</div>'
         )
 
         with st.expander(f"📊 類似訊號歷史績效（{setup} × {current_regime}）"):
