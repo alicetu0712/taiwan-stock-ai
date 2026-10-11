@@ -19,6 +19,23 @@ from src.core.result import CollectResult
 logger = logging.getLogger(__name__)
 
 
+def _revenue_published_by(year: int, month: int) -> date:
+    """
+    Return the earliest date on which monthly revenue for (year, month) is
+    publicly available.
+
+    TWSE/TPEx rule: companies must file by the 10th **working** day of the
+    following month. We use the 10th calendar day as a conservative proxy
+    (most companies file by then; a few late filers arrive by ~day 15).
+    Callers that need a stricter cutoff can add 5 days.
+
+    Example: May 2025 revenue → available from 2025-06-10.
+    """
+    pub_month = month + 1 if month < 12 else 1
+    pub_year  = year if month < 12 else year + 1
+    return date(pub_year, pub_month, 10)
+
+
 def _get_dataloader() -> Optional[Any]:
     """建立 FinMind DataLoader 並登入。"""
     try:
@@ -276,14 +293,25 @@ def build_financial_summary(
         )
         return summary
 
-    # --- 月營收 ---
+    # --- 月營收（look-ahead guard）---
     rev_df = fetch_monthly_revenue(stock_id, start)
     if not rev_df.empty and "yoy_growth" in rev_df.columns:
+        if as_of_date is not None:
+            # Only use months whose publication date (10th of following month) has passed.
+            # e.g. as_of_date=2025-06-01 → May 2025 (published ~June 10) NOT available;
+            #      April 2025 (published ~May 10) IS available.
+            rev_df = rev_df[
+                rev_df.apply(
+                    lambda r: cutoff >= _revenue_published_by(int(r["year"]), int(r["month"])),
+                    axis=1,
+                )
+            ]
         recent = rev_df.tail(12)
-        summary["revenue_yoy_avg"] = recent["yoy_growth"].mean()
-        trend = _calc_trend(rev_df["revenue"].tolist())
-        summary["revenue_trend"] = trend
-        summary["has_data"] = True
+        if not recent.empty:
+            summary["revenue_yoy_avg"] = recent["yoy_growth"].mean()
+            trend = _calc_trend(rev_df["revenue"].tolist())
+            summary["revenue_trend"] = trend
+            summary["has_data"] = True
 
     # --- EPS（季報公告截止：Q1=5/15, Q2=8/14, Q3=11/14, Q4=3/31 隔年）---
     eps_df = fetch_eps_history(stock_id, start)

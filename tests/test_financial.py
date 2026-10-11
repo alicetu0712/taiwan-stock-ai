@@ -6,6 +6,7 @@ test_financial.py — 財務資料蒐集器與計算邏輯測試
 """
 
 import sys
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -140,3 +141,65 @@ class TestGetDataloader:
                     assert result is None
             except ImportError:
                 pytest.skip("FinMind not installed")
+
+
+# ── _revenue_published_by — look-ahead cutoff helper ─────────
+
+
+class TestRevenueLookaheadGuard:
+    """
+    月營收 look-ahead bias 防護：
+    台灣上市公司月營收須於次月 10 日前申報。
+    as_of_date 之前已公告 = pub_date <= as_of_date。
+    """
+
+    def test_mid_year_month_available_after_10th(self):
+        from src.collectors.financial_collector import _revenue_published_by
+        # May 2025 revenue → available from 2025-06-10
+        assert _revenue_published_by(2025, 5) == date(2025, 6, 10)
+
+    def test_december_wraps_to_january(self):
+        from src.collectors.financial_collector import _revenue_published_by
+        # Dec 2025 revenue → available from 2026-01-10
+        assert _revenue_published_by(2025, 12) == date(2026, 1, 10)
+
+    def test_may_revenue_not_available_on_june_1(self):
+        from src.collectors.financial_collector import _revenue_published_by
+        # as_of_date = 2025-06-01: May not yet published (published 2025-06-10)
+        assert date(2025, 6, 1) < _revenue_published_by(2025, 5)
+
+    def test_april_revenue_available_on_june_1(self):
+        from src.collectors.financial_collector import _revenue_published_by
+        # as_of_date = 2025-06-01: April published 2025-05-10 — available
+        assert date(2025, 6, 1) >= _revenue_published_by(2025, 4)
+
+    def test_build_financial_summary_filters_future_revenue(self):
+        """
+        When as_of_date = 2025-06-01, months published after 2025-06-01
+        (i.e., May 2025 and later) must not appear in revenue_yoy_avg.
+        """
+        import pandas as pd
+        from src.collectors.financial_collector import build_financial_summary
+
+        # Build a fake revenue DataFrame: Jan–Jun 2025 (June is future)
+        fake_rev = pd.DataFrame({
+            "year":       [2025] * 6,
+            "month":      [1, 2, 3, 4, 5, 6],
+            "revenue":    [100.0, 110.0, 105.0, 108.0, 115.0, 120.0],
+            "yoy_growth": [5.0, 8.0, 3.0, 6.0, 10.0, 12.0],
+            "stock_id":   ["2330"] * 6,
+        })
+
+        with patch("src.collectors.financial_collector.fetch_monthly_revenue", return_value=fake_rev), \
+             patch("src.collectors.financial_collector._build_summary_from_db", return_value={"has_data": False}), \
+             patch("src.collectors.financial_collector.FINMIND_TOKEN", "fake"), \
+             patch("src.collectors.financial_collector._get_dataloader", return_value=MagicMock()):
+            result = build_financial_summary("2330", as_of_date=date(2025, 6, 1))
+
+        # as_of_date=2025-06-01: only Jan–Apr available (published by May 10).
+        # May published 2025-06-10 → NOT available. Jun published 2025-07-10 → NOT available.
+        # revenue_yoy_avg should be mean of Jan–Apr yoy: (5+8+3+6)/4 = 5.5
+        assert result.get("revenue_yoy_avg") is not None
+        assert abs(result["revenue_yoy_avg"] - 5.5) < 0.01, (
+            f"Expected 5.5 (Jan-Apr only), got {result['revenue_yoy_avg']}"
+        )
