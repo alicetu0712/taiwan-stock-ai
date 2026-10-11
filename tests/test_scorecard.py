@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dashboard._pages.scorecard import (
     _dedup_cohort,
+    _stats_block,
     _summary_stats,
 )
 
@@ -178,3 +179,78 @@ class TestSummaryStatsDedup:
         stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         assert stats["s20"]["ci95"] is not None
         assert stats["s20"]["ci95"] > 0
+
+
+# ── _stats_block separate denominators ────────────────────────
+
+def _matured_row(alpha: float, outcome: str | None) -> dict:
+    """Minimal row dict for _stats_block tests."""
+    return {"alpha_20d": alpha, "outcome_note": outcome}
+
+
+class TestStatsBlockDenominators:
+    """Alpha stats use alpha_n; outcome rates use outcome_n.
+    Rows with alpha but no outcome_note are excluded from outcome denominator."""
+
+    def test_alpha_n_counts_rows_with_alpha(self):
+        rows = [
+            _matured_row(1.0, "EXPIRED"),
+            _matured_row(2.0, "T1_HIT"),
+            _matured_row(-1.0, None),    # alpha set, outcome unknown
+        ]
+        result = _stats_block(rows, "alpha_20d")
+        assert result["n"] == 3          # all three have alpha
+
+    def test_outcome_n_excludes_null_outcome(self):
+        rows = [
+            _matured_row(1.0, "EXPIRED"),
+            _matured_row(2.0, "T1_HIT"),
+            _matured_row(-1.0, None),    # alpha set, outcome unknown
+        ]
+        result = _stats_block(rows, "alpha_20d")
+        assert result["n_outcome"] == 2  # only EXPIRED + T1_HIT
+
+    def test_t1_rate_uses_outcome_n(self):
+        # 1 T1_HIT out of 2 rows with outcome → 50%
+        # But if n were used (3): 33%
+        rows = [
+            _matured_row(1.0, "T1_HIT"),
+            _matured_row(-1.0, "STOP_TRIGGERED"),
+            _matured_row(0.5, None),   # alpha present, outcome unknown
+        ]
+        result = _stats_block(rows, "alpha_20d")
+        assert result["n"] == 3
+        assert result["n_outcome"] == 2
+        assert result["t1_rate"] == 50.0   # 1/2 not 1/3
+
+    def test_stop_rate_uses_outcome_n(self):
+        rows = [
+            _matured_row(1.0, "T1_HIT"),
+            _matured_row(-1.0, "STOP_TRIGGERED"),
+            _matured_row(0.5, None),
+        ]
+        result = _stats_block(rows, "alpha_20d")
+        assert result["stop_rate"] == 50.0  # 1/2 not 1/3
+
+    def test_outcome_n_zero_returns_none_rates(self):
+        rows = [
+            _matured_row(1.0, None),
+            _matured_row(2.0, None),
+        ]
+        result = _stats_block(rows, "alpha_20d")
+        assert result["n"] == 2
+        assert result["n_outcome"] == 0
+        assert result["t1_rate"] is None
+        assert result["stop_rate"] is None
+        assert result["ambiguous_rate"] is None
+
+    def test_winrate_uses_alpha_n(self):
+        # 2 positive, 1 negative, all have outcomes → winrate = 2/3
+        rows = [
+            _matured_row(1.0, "T1_HIT"),
+            _matured_row(2.0, "EXPIRED"),
+            _matured_row(-1.0, "STOP_TRIGGERED"),
+        ]
+        result = _stats_block(rows, "alpha_20d")
+        assert result["n"] == 3
+        assert abs(result["winrate"] - 66.7) < 0.1

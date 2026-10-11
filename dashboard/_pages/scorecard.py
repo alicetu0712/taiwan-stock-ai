@@ -143,22 +143,37 @@ def _ci95_mean(values: list) -> float | None:
     return round(1.96 * statistics.stdev(values) / (n ** 0.5), 2)
 
 
+_OUTCOME_CODES = frozenset(("T1_HIT", "STOP_TRIGGERED", "SAME_DAY_AMBIGUOUS", "EXPIRED"))
+
+
 def _stats_block(matured: list, alpha_key: str) -> dict:
-    """Compute a standard stats dict from a list of matured rows."""
+    """Compute a standard stats dict from a list of matured rows.
+
+    Two separate denominators:
+      alpha_n   — rows with a non-None alpha value  → win rate, avg alpha, CI
+      outcome_n — rows with a determined outcome_note → T1/stop/ambiguous rates
+    """
     alphas = [r[alpha_key] for r in matured if r[alpha_key] is not None]
     if not alphas:
-        return {"n": 0, "winrate": None, "avg_alpha": None, "ci95": None,
+        return {"n": 0, "n_outcome": 0, "winrate": None, "avg_alpha": None, "ci95": None,
                 "t1_rate": None, "stop_rate": None, "ambiguous_rate": None}
-    n = len(alphas)
+    alpha_n   = len(alphas)
+    outcome_n = sum(1 for r in matured if r["outcome_note"] in _OUTCOME_CODES)
+
+    def _rate(code: str) -> float | None:
+        if outcome_n == 0:
+            return None
+        return round(sum(1 for r in matured if r["outcome_note"] == code) / outcome_n * 100, 1)
+
     return {
-        "n":             n,
-        "winrate":       round(sum(1 for a in alphas if a > 0) / n * 100, 1),
-        "avg_alpha":     round(sum(alphas) / n, 2),
+        "n":             alpha_n,
+        "n_outcome":     outcome_n,
+        "winrate":       round(sum(1 for a in alphas if a > 0) / alpha_n * 100, 1),
+        "avg_alpha":     round(sum(alphas) / alpha_n, 2),
         "ci95":          _ci95_mean(alphas),
-        # outcome rates are only meaningful on 20D outcomes
-        "t1_rate":       round(sum(1 for r in matured if r["outcome_note"] == "T1_HIT")              / n * 100, 1),
-        "stop_rate":     round(sum(1 for r in matured if r["outcome_note"] == "STOP_TRIGGERED")       / n * 100, 1),
-        "ambiguous_rate":round(sum(1 for r in matured if r["outcome_note"] == "SAME_DAY_AMBIGUOUS")   / n * 100, 1),
+        "t1_rate":       _rate("T1_HIT"),
+        "stop_rate":     _rate("STOP_TRIGGERED"),
+        "ambiguous_rate":_rate("SAME_DAY_AMBIGUOUS"),
     }
 
 
@@ -269,18 +284,22 @@ def page_scorecard() -> None:
     # ── 20D 統計（基於 20D Dedup 樣本）──────────────────────────
     st.markdown("**20D 統計**（基於 20D Dedup 樣本）")
     d1, d2, d3, d4, d5, d6 = st.columns(6)
-    d1.metric("20D 已成熟", s20["n"] if s20["n"] else "—")
+    d1.metric("20D 已成熟（Alpha）", s20["n"] if s20["n"] else "—",
+              help="有 alpha_20d 值的樣本數；用於勝率、平均 Alpha、CI。")
     if s20["avg_alpha"] is not None:
         ci_str = f"±{s20['ci95']:.2f}%" if s20["ci95"] is not None else ""
         d2.metric("20D Alpha", f"{s20['avg_alpha']:+.2f}%",
                   delta=ci_str or None, delta_color="off",
                   help="20D Dedup 樣本的平均 Alpha；delta 為 95% CI 半寬")
         d3.metric("20D 勝率", f"{s20['winrate']}%",
-                  help="Alpha > 0 的比例（20D Dedup 樣本）")
-        d4.metric("T1 率", f"{s20['t1_rate']}%")
-        d5.metric("停損率", f"{s20['stop_rate']}%")
-        d6.metric("⚠️ 同日模糊", f"{s20['ambiguous_rate']}%",
-                  help="同一交易日 High≥T1 且 Low≤Stop，日線資料無法判斷先後順序")
+                  help="Alpha > 0 的比例（分母 = 有 alpha 的樣本數）")
+        n_out = s20.get("n_outcome", 0)
+        d4.metric("T1 率", f"{s20['t1_rate']}%" if s20["t1_rate"] is not None else "—",
+                  help=f"T1 達成 / 有 outcome 判定樣本（n={n_out}）")
+        d5.metric("停損率", f"{s20['stop_rate']}%" if s20["stop_rate"] is not None else "—",
+                  help=f"停損觸發 / 有 outcome 判定樣本（n={n_out}）")
+        d6.metric("⚠️ 同日模糊", f"{s20['ambiguous_rate']}%" if s20["ambiguous_rate"] is not None else "—",
+                  help=f"同日 High≥T1 且 Low≤Stop，無法判斷順序（n={n_out}）")
     else:
         for col in (d2, d3, d4, d5, d6):
             col.metric("—", "—")
