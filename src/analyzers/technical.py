@@ -145,14 +145,11 @@ class TechnicalAnalyzer:
         if rsi_val and rsi_val > 80:
             risk_signals.append(f"RSI {rsi_val:.0f} 過熱")
 
-        # ── Setup 判斷 ────────────────────────────────────────
-        result.setup_type = self._detect_setup(result, ma_vals, close)
-
         result.timing_score = round(max(0.0, min(100.0, score)), 1)
         result.risk_signals = risk_signals
         result.summary = self._build_summary(result)
 
-        logger.debug(f"{stock_id}: Timing={result.timing_score:.1f} Setup={result.setup_type}")
+        logger.debug(f"{stock_id}: Timing={result.timing_score:.1f}")
         return result
 
     # ── 分析子方法 ────────────────────────────────────────────
@@ -489,66 +486,9 @@ class TechnicalAnalyzer:
         except Exception:
             return None, None
 
-    def _detect_setup(self, r: TechnicalResult, ma_vals: Dict, close: np.ndarray) -> str:
-        """
-        Setup 判斷優先順序（高優先先判斷）：
-        breakdown    — 跌破 MA20 且均線下彎：賣出訊號
-        breakout     — 近20日新高 + 放量 + MACD 正向：突破買點
-        pullback_buy — 多頭排列中回踩 MA10（5%內）縮量守穩：較佳進場點
-        pullback_hold — 多頭排列中回踩 MA20（3%內）守穩：次優進場點
-        trending     — 均線多頭排列 + HH/HL：趨勢延伸
-        none         — 無明確型態
-        """
-        ma10 = ma_vals.get("ma10")
-        ma20 = ma_vals.get("ma20")
-        cur = r.close
-
-        if cur is None:
-            return "none"
-
-        # Breakdown：跌破 MA20 且 MA 趨勢偏空（含放量加權）
-        if ma20 and cur < ma20 and r.ma_trend == "bearish":
-            return "breakdown"
-
-        # Breakout：確實突破20日高點 + MACD 正向
-        if r.breakout_20d and r.macd_signal in ("golden", "golden_strong"):
-            return "breakout"
-
-        # Near Breakout：接近20日高點（未突破）+ MACD 正向
-        if r.near_20d_high and r.macd_signal in ("golden", "golden_strong"):
-            return "near_breakout"
-
-        # Pullback Buy：多頭排列，回踩 MA10 附近（0-5%以上）且縮量
-        # 代表健康拉回而非趨勢破壞，是較佳的低風險進場點
-        if ma10 and r.ma_trend in ("bullish", "bullish_weak") and \
-           0 <= (cur - ma10) / ma10 <= 0.05 and \
-           r.macd_signal != "dead" and \
-           (r.vol_ratio is None or r.vol_ratio <= 1.2):   # 縮量回踩更健康
-            return "pullback_buy"
-
-        # Pullback Hold：多頭排列，回踩 MA20 在3%以內守穩
-        if ma20 and 0 <= (cur - ma20) / ma20 <= 0.03 and \
-           r.ma_trend in ("bullish", "bullish_weak") and \
-           r.macd_signal != "dead":
-            return "pullback_hold"
-
-        # Trending：完整多頭排列 + HH/HL 結構
-        if r.ma_trend == "bullish" and r.hh_hl_structure:
-            return "trending"
-
-        return "none"
-
     def _build_summary(self, r: TechnicalResult) -> str:
-        setup_desc = {
-            "breakout":      "突破型態：站上20日新高",
-            "near_breakout": "接近突破：股價逼近20日高點，待確認",
-            "pullback_buy":  "回踩買點：多頭排列中縮量回踩MA10",
-            "pullback_hold": "回踩守穩：回踩MA20後守住",
-            "trending":      "趨勢延伸：均線多頭排列持續向上",
-            "breakdown":     "趨勢破壞：跌破MA20且均線下彎",
-            "none":          "無明確型態",
-        }
-        parts = [setup_desc.get(r.setup_type, "")]
+        # setup_type is always "none" here — setup is owned by PriceTrendAnalyzer
+        parts = []
         ma_desc = {
             "bullish":      "均線多頭排列",
             "bullish_weak": "短均線在長均線上",

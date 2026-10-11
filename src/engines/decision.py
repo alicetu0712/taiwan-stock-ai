@@ -376,16 +376,12 @@ class DecisionEngine:
         rec.quality_grade      = quality_result.quality_grade if quality_result else "D"
 
         # ── V2 Price Trend 細節 ─────────────────────────────────
+        # setup_type is owned exclusively by PriceTrendAnalyzer; no fallback to TechnicalResult
         if price_trend_result:
             rec.setup_type   = price_trend_result.setup_type
             rec.ma20_gap     = price_trend_result.ma20_gap
             rec.vol_ratio    = price_trend_result.volume_ratio
             rec.trade_signal = price_trend_result.trade_signal
-            rec.expected_holding = self._estimate_holding(rec.setup_type)
-        elif technical_result:
-            # fallback to technical_result (V1 compat)
-            rec.setup_type = getattr(technical_result, "setup_type", "none")
-            rec.vol_ratio  = getattr(technical_result, "vol_ratio", None)
             rec.expected_holding = self._estimate_holding(rec.setup_type)
 
         # ── ATR 進出場計算 ──────────────────────────────────────
@@ -798,9 +794,8 @@ class DecisionEngine:
             elif risk_result.risk_score < 65:
                 confidence -= 10
 
-        # Setup 型態加分（PriceTrend 為 single source of truth；fallback 到 TechnicalResult）
-        st = (price_trend_result.setup_type if price_trend_result
-              else getattr(technical_result, "setup_type", "none"))
+        # Setup 型態加分（PriceTrend 為 single source of truth）
+        st = price_trend_result.setup_type if price_trend_result else "none"
         if st in ("breakout", "pullback_hold"):
             confidence += 5
 
@@ -883,10 +878,9 @@ class DecisionEngine:
         """短線觀察重點：技術面為主。"""
         points = []
 
-        if technical_result or price_trend_result:
-            # PriceTrend 為 single source of truth；fallback 到 TechnicalResult
-            st = (price_trend_result.setup_type if price_trend_result
-                  else getattr(technical_result, "setup_type", "none"))
+        if price_trend_result:
+            # PriceTrend 為 single source of truth
+            st = price_trend_result.setup_type
             if st == "breakout":
                 points.append("確認突破後能否站穩，量能是否持續")
             elif st == "near_breakout":
