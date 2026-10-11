@@ -278,6 +278,11 @@ class PriceTrendAnalyzer:
         near_20d:        today's close is within 3% below prev_20d_high — approaching.
         failed_breakout: a recent bar (last 3 days excl. today) peaked above prev_20d_high
                          but today's close retreated below it — breakout attempt rejected.
+
+        Not yet modelled (P2):
+          intraday_failed_breakout — today's High > prev_20d_high but Close < prev_20d_high.
+          Distinct from failed_breakout (which looks at prior bars); this is same-day rejection.
+          Requires intraday High data and a separate setup label; skipped for now.
         """
         n = len(close)
         if n < 21:
