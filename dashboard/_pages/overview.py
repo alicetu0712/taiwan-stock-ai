@@ -264,7 +264,8 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         else f'<div style="font-size:1.05rem;font-weight:700">{sid}</div>'
         f'<div style="font-size:0.75rem;color:#888">TWSE{price_str}</div>'
     )
-    ma20_note = f'<span style="font-size:0.65rem;color:#888">MA20 乖離 {ma20_gap:+.1f}%</span>' if ma20_gap else ""
+    ma20_note    = f'<span style="font-size:0.65rem;color:#888">MA20 乖離 {ma20_gap:+.1f}%</span>' if ma20_gap else ""
+    _total_score = scores.get("total") or 0
 
     st.markdown(
         f"""
@@ -286,7 +287,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
   {why_html}
   {trig_html}
   {dq_html}
-  <div style="font-size:0.7rem;color:#aaa;margin-top:6px">模型評分：PT {pt_val:.0f} ｜ 綜合 {scores.get('total', 0):.0f} ｜ 信心度 {conf}% ｜ {level} 級 · {setup} {ma20_note}</div>
+  <div style="font-size:0.7rem;color:#aaa;margin-top:6px">模型評分：PT {pt_val:.0f} ｜ 綜合 {_total_score:.0f} ｜ 信心度 {conf}% ｜ {level} 級 · {setup} {ma20_note}</div>
 </div>""",
         unsafe_allow_html=True,
     )
