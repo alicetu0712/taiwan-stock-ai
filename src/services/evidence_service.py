@@ -275,10 +275,12 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
             s.close()
             return empty
 
-        # Include records where regime field is NULL (legacy before schema v2)
+        # Strict regime match only.
+        # Legacy records where market_regime_at_signal is NULL are excluded from
+        # regime-specific evidence (unknown regime ≠ bull/neutral/bear).
         matching = [
             r for r in fs_rows
-            if r.market_regime_at_signal is None or r.market_regime_at_signal == market_regime
+            if r.market_regime_at_signal == market_regime
         ]
         total = len(matching)
         if total == 0:
