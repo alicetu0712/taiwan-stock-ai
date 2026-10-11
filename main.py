@@ -947,7 +947,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
     """將推薦、分析結果、Decision Journal 持久化至資料庫。"""
     import json
     try:
-        from src.database import Recommendation, AnalysisResult, DecisionJournal, ResearchStatus
+        from src.database import Recommendation, AnalysisResult, DecisionJournal, ResearchStatus, MODEL_VERSION
 
         # ── 儲存所有股票的分析結果 ─────────────────────────────
         for rec in all_candidates:
@@ -1020,7 +1020,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     risks             = json.dumps(rec.risks, ensure_ascii=False),
                     watch_points      = json.dumps(rec.watch_points, ensure_ascii=False),
                     ai_conclusion     = ai.get("conclusion_ai", ""),
-                    strategy_version  = "v6.0",
+                    strategy_version  = MODEL_VERSION,
                     total_score       = rec.total_score,
                     timing_score      = rec.timing_score,
                     behavior_score    = rec.behavior_score,
@@ -1058,7 +1058,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                 existing.risks             = json.dumps(rec.risks, ensure_ascii=False)
                 existing.watch_points      = json.dumps(rec.watch_points, ensure_ascii=False)
                 existing.ai_conclusion     = ai.get("conclusion_ai", "")
-                existing.strategy_version  = "v6.0"
+                existing.strategy_version  = MODEL_VERSION
                 existing.total_score       = rec.total_score
                 existing.timing_score      = rec.timing_score
                 existing.behavior_score    = rec.behavior_score
@@ -1093,7 +1093,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     advantages         = json.dumps(rec.advantages, ensure_ascii=False),
                     risks              = json.dumps(rec.risks, ensure_ascii=False),
                     watch_points       = json.dumps(rec.watch_points, ensure_ascii=False),
-                    strategy_version   = "v6.0",
+                    strategy_version   = MODEL_VERSION,
                     total_score        = rec.total_score,
                     timing_score       = rec.timing_score,
                     behavior_score     = rec.behavior_score,
@@ -1131,7 +1131,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     advantages       = json.dumps(rec.advantages, ensure_ascii=False),
                     risks            = json.dumps(rec.risks, ensure_ascii=False),
                     watch_points     = json.dumps(rec.watch_points, ensure_ascii=False),
-                    strategy_version = "v6.0",
+                    strategy_version = MODEL_VERSION,
                     total_score      = rec.total_score,
                     timing_score     = rec.timing_score,
                     behavior_score     = rec.behavior_score,
@@ -1170,7 +1170,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                 action              = action,
                 reason              = rec.summary,
                 market_env          = market_env_desc,
-                strategy_version    = "v6.0",
+                strategy_version    = MODEL_VERSION,
             )
             session.add(dj)
 

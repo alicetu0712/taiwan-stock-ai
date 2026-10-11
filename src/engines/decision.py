@@ -411,14 +411,15 @@ class DecisionEngine:
             b_score = 0.0
 
         # intelligence 在 V2 中為 0，不影響計算
-        base_score = (
+        # Risk is a weighted component (positive), not a penalty deducted from base.
+        # Old formula (pre-v7): base - (100-r)*0.05 → max score 95, systematic -5 bias.
+        total_score = round(max(0.0, min(100.0,
             pt_score * w.get("price_trend", 0)
             + t_score  * w["timing"]
             + b_score  * w["behavior"]
             + q_score  * w["quality"]
-        )
-        risk_penalty = (100 - r_score) * w["risk"]
-        total_score = round(max(0.0, min(100.0, base_score - risk_penalty)), 1)
+            + r_score  * w["risk"]
+        )), 1)
         rec.total_score = total_score
 
         # ── 推薦等級 ──────────────────────────────────────────
