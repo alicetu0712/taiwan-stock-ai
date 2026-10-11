@@ -405,8 +405,14 @@ class ForwardSignal(Base):
     confidence              = Column(Float)        # 信心分數（%）
     industry                = Column(String(50))   # 產業分類
     market_regime_at_signal = Column(String(10))   # bull / neutral / bear
-    close_at_signal         = Column(Float)        # 進場收盤價（免事後猜 entry）
+    close_at_signal         = Column(Float)        # signal_date 收盤價（legacy 相容欄，非進場價）
     candidate_rank          = Column(Integer)      # 當日 candidates 中的排名（1=最高分）
+
+    # ── 執行時機修正（Execution Timing Bias fix）─────────────────
+    signal_close            = Column(Float)        # signal_date 收盤價（明確語意，同 close_at_signal）
+    execution_date          = Column(Date)         # 實際執行日（signal_date 後首個交易日）
+    execution_price         = Column(Float)        # 執行日開盤進場價（NEXT_OPEN）
+    execution_price_type    = Column(String(20))   # "NEXT_OPEN" | "SIGNAL_CLOSE_LEGACY"
 
     # ── 決策快照（Recommendation ATR plan 凍結，表示當時網站說什麼）──
     entry_low      = Column(Float)        # 建議進場區間下緣
@@ -538,6 +544,11 @@ def _migrate_forward_signals(engine) -> None:
         ("is_valid",                "BOOLEAN DEFAULT 1"),
         ("invalid_reason",          "VARCHAR(60)"),
         ("source_price_date",       "DATE"),
+        # Execution Timing Bias fix
+        ("signal_close",            "FLOAT"),
+        ("execution_date",          "DATE"),
+        ("execution_price",         "FLOAT"),
+        ("execution_price_type",    "VARCHAR(20)"),
     ]
     try:
         existing = {c["name"] for c in inspect(engine).get_columns("forward_signals")}

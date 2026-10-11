@@ -8,8 +8,8 @@ research_backtest_service.py — Research Backtest 服務層
 嚴格 no look-ahead bias 原則：
   - features 取自 analysis date（當日已知）
   - MA60 / MA60 slope 由 daily_prices 到 analysis date 為止計算
-  - forward return 從 analysis date close 起算，往後 N 個交易日
-  - benchmark 0050 同日進出場
+  - forward return：execution_date（signal_date 次日）開盤進場，往後 N 個交易日收盤出場
+  - benchmark 0050：同一 execution_date 開盤進場，N 個交易日後收盤出場
 
 兩個資料集嚴格隔離，禁止混用。
 """
@@ -253,6 +253,7 @@ class ResearchBacktestService:
     # ── 內部：建構原始 DataFrame ──────────────────────────────
 
     def _build_raw_df(self):
+        import bisect
         from src.database import AnalysisResult, DailyPrice, get_session
 
         cutoff = _get_cutoff()
@@ -288,11 +289,15 @@ class ResearchBacktestService:
         # ── 建 price 索引 ──────────────────────────────────────
         # sorted_dates[sid]  = sorted list of dates
         # price_dict[sid][d] = close
+        # open_dict[sid][d]  = open
         sorted_dates: dict = defaultdict(list)
         price_dict: dict   = defaultdict(dict)
+        open_dict: dict    = defaultdict(dict)
         for p in prices_q:
             if p.close and p.close > 0:
                 price_dict[p.stock_id][p.date] = p.close
+            if p.open and p.open > 0:
+                open_dict[p.stock_id][p.date] = p.open
         for sid in price_dict:
             sorted_dates[sid] = sorted(price_dict[sid].keys())
 
@@ -342,22 +347,30 @@ class ResearchBacktestService:
                 else:
                     regime_map[d] = "neutral"
 
-        # ── 前向報酬（O(log n) per lookup）────────────────────
-        def _fwd(sid: str, entry_date: date, n_days: int):
+        # ── 前向報酬（NEXT_OPEN：次日開盤進場，n_days 後收盤出場）──
+        # signal_date 必須有收盤資料（確保 pipeline 有在開盤日執行）。
+        # entry = execution_date open（= signal_date 後第一個交易日的開盤）
+        # exit  = execution_date + n_days 後的收盤（共持有 n_days 個交易日）
+        def _fwd(sid: str, signal_date: date, n_days: int):
             sdates = sorted_dates.get(sid, [])
             if not sdates:
                 return None, None
-            idx = bisect.bisect_left(sdates, entry_date)
-            if idx >= len(sdates) or sdates[idx] != entry_date:
-                # Require exact match — do NOT slide to the next trading day.
-                # A non-trading-day analysis date means the pipeline ran on a
-                # holiday; using the next day's price would silently corrupt returns.
+            idx = bisect.bisect_left(sdates, signal_date)
+            if idx >= len(sdates) or sdates[idx] != signal_date:
                 return None, None
-            entry = price_dict[sid][sdates[idx]]
-            if idx + n_days < len(sdates):
-                exit_c = price_dict[sid][sdates[idx + n_days]]
-                return round((exit_c - entry) / entry * 100 - ROUND_TRIP_COST, 2), entry
-            return None, entry
+            exec_idx = idx + 1  # next trading day
+            if exec_idx >= len(sdates):
+                return None, None
+            open_price = open_dict.get(sid, {}).get(sdates[exec_idx])
+            if not open_price or open_price <= 0:
+                return None, None
+            exit_idx = exec_idx + n_days
+            if exit_idx >= len(sdates):
+                return None, None
+            exit_c = price_dict[sid].get(sdates[exit_idx])
+            if not exit_c:
+                return None, None
+            return round((exit_c - open_price) / open_price * 100 - ROUND_TRIP_COST, 2), open_price
 
         # ── 組裝資料列 ──────────────────────────────────────────
         rows = []
@@ -717,6 +730,7 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         ma60_gap_v, ma60_slope_v = _ma60_features(ar.stock_id)
         rec = rec_snap.get(ar.stock_id)
 
+        _sig_close = close_on_day.get(ar.stock_id)
         session.add(ForwardSignal(
             trade_date              = trade_date,
             stock_id                = ar.stock_id,
@@ -736,7 +750,10 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
             confidence              = ar.confidence,
             industry                = industry_map.get(ar.stock_id),
             market_regime_at_signal = regime_today,
-            close_at_signal         = close_on_day.get(ar.stock_id),
+            close_at_signal         = _sig_close,
+            signal_close            = _sig_close,
+            execution_price_type    = "NEXT_OPEN",
+            # execution_date / execution_price filled later by fill_execution_prices()
             candidate_rank          = rank_map.get(ar.stock_id),
             # ── 決策快照 ─────────────────────────────────────────
             entry_low               = rec.entry_low   if rec else None,
@@ -755,6 +772,91 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
             f"[write_forward_signals] {trade_date}: {skipped_no_price} 筆訊號因缺當日 DailyPrice 而略過（L4 gate）"
         )
     return inserted
+
+
+def fill_execution_prices(session, as_of_date: date) -> int:
+    """
+    後填 ForwardSignal 的 execution_date + execution_price（NEXT_OPEN 記錄）。
+
+    execution_date  = signal_date 後首個 0050 有收盤價的交易日
+    execution_price = 該日 DailyPrice.open（開盤進場價）
+    僅處理 execution_price_type == "NEXT_OPEN" 且 execution_price IS NULL 的記錄。
+    Returns: 更新筆數
+    """
+    import bisect
+    from datetime import timedelta
+
+    from src.database import DailyPrice, ForwardSignal
+
+    pending = (
+        session.query(ForwardSignal)
+        .filter(
+            ForwardSignal.execution_price_type == "NEXT_OPEN",
+            ForwardSignal.execution_price.is_(None),
+            ForwardSignal.trade_date < as_of_date,
+        )
+        .all()
+    )
+    if not pending:
+        return 0
+
+    min_date = min(fs.trade_date for fs in pending)
+    max_date = max(fs.trade_date for fs in pending) + timedelta(days=10)
+    stock_ids = {fs.stock_id for fs in pending}
+
+    cal_rows = (
+        session.query(DailyPrice.date)
+        .filter(
+            DailyPrice.stock_id == "0050",
+            DailyPrice.date >= min_date,
+            DailyPrice.date <= max_date,
+            DailyPrice.close.isnot(None),
+        )
+        .order_by(DailyPrice.date)
+        .all()
+    )
+    market_cal = [r.date for r in cal_rows]
+
+    open_rows = (
+        session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.open)
+        .filter(
+            DailyPrice.stock_id.in_(stock_ids),
+            DailyPrice.date >= min_date,
+            DailyPrice.date <= max_date,
+            DailyPrice.open.isnot(None),
+        )
+        .all()
+    )
+    open_map: dict = {}
+    for row in open_rows:
+        if row.stock_id not in open_map:
+            open_map[row.stock_id] = {}
+        open_map[row.stock_id][row.date] = row.open
+
+    updated = 0
+    for fs in pending:
+        idx = bisect.bisect_right(market_cal, fs.trade_date)
+        if idx >= len(market_cal):
+            logger.warning(
+                "[fill_execution_prices] %s %s: no 0050 trading day after trade_date",
+                fs.stock_id, fs.trade_date,
+            )
+            continue
+        exec_date = market_cal[idx]
+        open_price = open_map.get(fs.stock_id, {}).get(exec_date)
+        if not open_price or open_price <= 0:
+            logger.debug(
+                "[fill_execution_prices] %s %s: no open price on execution_date %s",
+                fs.stock_id, fs.trade_date, exec_date,
+            )
+            continue
+        fs.execution_date  = exec_date
+        fs.execution_price = open_price
+        updated += 1
+
+    if updated:
+        session.commit()
+    return updated
 
 
 def compute_signal_outcomes(session, as_of_date: date) -> int:
@@ -778,8 +880,7 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
             ForwardSignal.trade_date <= cutoff,
             ForwardSignal.outcomes_computed_at.is_(None),
             ForwardSignal.decision_label.isnot(None),
-            ForwardSignal.close_at_signal.isnot(None),
-            ForwardSignal.is_valid.isnot(False),  # exclude invalid (non-trading-day) records
+            ForwardSignal.is_valid.isnot(False),
         )
         .all()
     )
@@ -792,7 +893,7 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
 
     price_rows = (
         session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.close,
-                      DailyPrice.low, DailyPrice.high)
+                      DailyPrice.low, DailyPrice.high, DailyPrice.open)
         .filter(
             DailyPrice.stock_id.in_(stock_ids + ["0050"]),
             DailyPrice.date >= min_date,
@@ -806,18 +907,23 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
     price_map: dict = {}   # close prices (for return calc and 0050)
     low_map:   dict = {}   # intraday low  (for stop detection)
     high_map:  dict = {}   # intraday high (for T1 detection)
-    for sid, d, c, lo, hi in price_rows:
+    open_map:  dict = {}   # open prices (for NEXT_OPEN execution price & 0050 benchmark)
+    for sid, d, c, lo, hi, op in price_rows:
         if sid not in price_map:
             price_map[sid] = {}
             low_map[sid]   = {}
             high_map[sid]  = {}
+            open_map[sid]  = {}
         price_map[sid][d] = c
         if lo is not None:
             low_map[sid][d]  = lo
         if hi is not None:
             high_map[sid][d] = hi
+        if op is not None:
+            open_map[sid][d] = op
     sorted_dates_map = {sid: sorted(dm.keys()) for sid, dm in price_map.items()}
     p0050 = price_map.get("0050", {})
+    open_0050 = open_map.get("0050", {})
     sorted_0050 = sorted(p0050.keys())
 
     import bisect
@@ -825,44 +931,82 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
     updated = 0
     for fs in pending:
         sdates = sorted_dates_map.get(fs.stock_id, [])
-        idx_s = bisect.bisect_right(sdates, fs.trade_date)
-        if idx_s == 0:
-            continue
 
-        idx_0050 = bisect.bisect_right(sorted_0050, fs.trade_date)
-        if idx_0050 == 0:
-            continue
-        benchmark_entry_date = sorted_0050[idx_0050 - 1]
-        if benchmark_entry_date != fs.trade_date:
-            # Require exact date match for benchmark entry — do NOT fall back to a
-            # prior trading day. Stock entry uses fs.close_at_signal (signal date),
-            # so benchmark must be the same date or alpha is comparing different periods.
-            continue
-        p0_entry = p0050.get(benchmark_entry_date)
-        if not p0_entry:
-            continue
+        use_next_open = (
+            fs.execution_price_type == "NEXT_OPEN"
+            and fs.execution_price is not None
+            and fs.execution_date is not None
+        )
 
-        entry = fs.close_at_signal
+        if use_next_open:
+            exec_date = fs.execution_date
+            idx_s = bisect.bisect_left(sdates, exec_date)
+            if idx_s >= len(sdates) or sdates[idx_s] != exec_date:
+                continue
+            idx_exec_0050 = bisect.bisect_left(sorted_0050, exec_date)
+            if idx_exec_0050 >= len(sorted_0050) or sorted_0050[idx_exec_0050] != exec_date:
+                continue
+            p0_entry = open_0050.get(exec_date)
+            if not p0_entry:
+                continue
+            entry = fs.execution_price
+
+            def _return_at(n_days,
+                           _idx_s=idx_s, _idx_b=idx_exec_0050,
+                           _entry=entry, _p0=p0_entry):
+                target_idx = _idx_s + n_days  # exit n_days AFTER execution_date
+                if target_idx >= len(sdates):
+                    return None, None
+                fwd_close = price_map.get(fs.stock_id, {}).get(sdates[target_idx])
+                if not fwd_close:
+                    return None, None
+                t0050_idx = _idx_b + n_days
+                if t0050_idx >= len(sorted_0050):
+                    return None, None
+                fwd_0050 = p0050.get(sorted_0050[t0050_idx])
+                if not fwd_0050:
+                    return None, None
+                ret   = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
+                b_ret = round((fwd_0050 - _p0) / _p0 * 100 - ROUND_TRIP_COST, 2)
+                return ret, round(ret - b_ret, 2)
+        else:
+            if not fs.close_at_signal:
+                continue
+            idx_s = bisect.bisect_right(sdates, fs.trade_date)
+            if idx_s == 0:
+                continue
+            idx_0050 = bisect.bisect_right(sorted_0050, fs.trade_date)
+            if idx_0050 == 0:
+                continue
+            benchmark_entry_date = sorted_0050[idx_0050 - 1]
+            if benchmark_entry_date != fs.trade_date:
+                continue
+            p0_entry = p0050.get(benchmark_entry_date)
+            if not p0_entry:
+                continue
+            entry = fs.close_at_signal
+
+            def _return_at(n_days,
+                           _idx_s=idx_s, _idx_b=idx_0050,
+                           _entry=entry, _p0=p0_entry):
+                target_idx = _idx_s + n_days - 1  # legacy: exit on nth day counting exec as day 1
+                if target_idx >= len(sdates):
+                    return None, None
+                fwd_close = price_map.get(fs.stock_id, {}).get(sdates[target_idx])
+                if not fwd_close:
+                    return None, None
+                t0050_idx = _idx_b + n_days - 1
+                if t0050_idx >= len(sorted_0050):
+                    return None, None
+                fwd_0050 = p0050.get(sorted_0050[t0050_idx])
+                if not fwd_0050:
+                    return None, None
+                ret   = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
+                b_ret = round((fwd_0050 - _p0) / _p0 * 100 - ROUND_TRIP_COST, 2)
+                return ret, round(ret - b_ret, 2)
+
         stop  = fs.stop_price
         t1    = fs.target1
-
-        def _return_at(n_days):
-            target_idx = idx_s + n_days - 1
-            if target_idx >= len(sdates):
-                return None, None
-            fwd_close = price_map.get(fs.stock_id, {}).get(sdates[target_idx])
-            if not fwd_close:
-                return None, None
-            t0050_idx = idx_0050 + n_days - 1
-            if t0050_idx >= len(sorted_0050):
-                return None, None
-            fwd_0050 = p0050.get(sorted_0050[t0050_idx])
-            if not fwd_0050:
-                return None, None
-            ret   = round((fwd_close - entry) / entry * 100 - ROUND_TRIP_COST, 2)
-            b_ret = round((fwd_0050 - p0_entry) / p0_entry * 100 - ROUND_TRIP_COST, 2)
-            alpha = round(ret - b_ret, 2)
-            return ret, alpha
 
         ret_20, alpha_20 = _return_at(20)
         ret_60, alpha_60 = _return_at(60)

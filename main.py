@@ -736,6 +736,14 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
                     f"[Step 9c] Forward signal 凍結完成："
                     f"{inserted} 筆新增，{len(today_ars) - inserted} 筆已存在（skip）"
                 )
+                # 填入執行日開盤進場價（NEXT_OPEN）
+                try:
+                    from src.services.research_backtest_service import fill_execution_prices
+                    exec_filled = fill_execution_prices(session, trade_date)
+                    if exec_filled:
+                        logger.info(f"[Step 9c] 執行價回填：{exec_filled} 筆更新")
+                except Exception as fe:
+                    logger.warning(f"[Step 9c] 執行價回填失敗：{fe}")
                 # 回填已成熟信號的績效
                 try:
                     from src.services.research_backtest_service import compute_signal_outcomes
