@@ -156,7 +156,13 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             max_single_pct=_PS_CFG["max_single_pct"],
             lot_size=_PS_CFG["lot_size"],
         )
-        if ps and ps.get("lots", 0) > 0:
+        if ps and ps.get("lots", 0) == 0 and ps.get("min_lot_ntd"):
+            ps_html = (
+                f'<div style="background:#fff3e0;border-left:3px solid #ff8f00;'
+                f'padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0;font-size:0.72rem;color:#bf360c">'
+                f'⚠ 1張需 NT${ps["min_lot_ntd"]:,}，超出曝險上限 NT${ps["max_exposure_ntd"]:,}，無法試算部位。</div>'
+            )
+        elif ps and ps.get("lots", 0) > 0:
             cap_note = '<span style="color:#e65100">（已達曝險上限）</span>' if ps["capped"] else ""
             ps_html = f"""
 <div style="background:#f3e5f5;border-radius:8px;padding:8px 12px;margin:4px 0">

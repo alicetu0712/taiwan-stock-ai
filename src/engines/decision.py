@@ -277,7 +277,14 @@ def position_sizing(
     max_exposure_ntd = capital * max_single_pct / 100
     capped           = risk_based_ntd > max_exposure_ntd
     final_ntd        = min(risk_based_ntd, max_exposure_ntd)
-    final_lots       = max(1, int(final_ntd / (lot_size * entry)))
+    final_lots = int(final_ntd / (lot_size * entry))
+    if final_lots <= 0:
+        # One lot costs more than the exposure cap — cannot size a position
+        return {
+            "lots": 0,
+            "min_lot_ntd":     round(lot_size * entry),
+            "max_exposure_ntd": round(max_exposure_ntd),
+        }
     actual_ntd       = final_lots * lot_size * entry
     actual_risk      = final_lots * lot_size * risk_per_share
     return {
