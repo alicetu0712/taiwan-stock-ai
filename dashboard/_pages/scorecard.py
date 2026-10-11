@@ -96,24 +96,42 @@ def _fmt(v, suffix="", places=1, plus=False):
     return fmt
 
 
-def _dedup_cohort(rows: list, cooldown_calendar_days: int) -> list:
-    """Per-stock cooldown dedup: keep first signal per stock in each cooldown window.
+@st.cache_data(ttl=3600)
+def _load_market_calendar() -> list:
+    """Returns sorted list of 0050 trading dates from DB (used as Taiwan market proxy)."""
+    try:
+        from src.database import DailyPrice, get_session
+        s = get_session()
+        rows = (
+            s.query(DailyPrice.date)
+            .filter(DailyPrice.stock_id == "0050")
+            .order_by(DailyPrice.date)
+            .all()
+        )
+        s.close()
+        return [r.date for r in rows]
+    except Exception as e:
+        logger.warning(f"_load_market_calendar: {e}")
+        return []
 
-    Rows are assumed to contain 'stock_id' and 'trade_date' (ISO string or date).
-    Sorted ascending by trade_date; earliest signal in each window is retained.
+
+def _dedup_cohort(rows: list, n_trading_days: int, market_calendar: list = None) -> list:
+    """Per-stock trading-day cooldown dedup on list of row dicts.
+
+    Uses actual Taiwan market trading days (via 0050 calendar) instead of
+    calendar-day approximation, so results align with Evidence and ResearchBacktest.
     """
     from datetime import date as _date
-    last_kept: dict = {}
-    result = []
-    for r in sorted(rows, key=lambda x: x["trade_date"]):
-        td = r["trade_date"]
-        if isinstance(td, str):
-            td = _date.fromisoformat(td)
-        last = last_kept.get(r["stock_id"])
-        if last is None or (td - last).days >= cooldown_calendar_days:
-            result.append(r)
-            last_kept[r["stock_id"]] = td
-    return result
+    from src.utils.dedup_utils import dedup_by_trading_days
+
+    sorted_rows = sorted(rows, key=lambda x: x["trade_date"])
+    signals = [
+        (r["stock_id"],
+         _date.fromisoformat(r["trade_date"]) if isinstance(r["trade_date"], str) else r["trade_date"])
+        for r in sorted_rows
+    ]
+    kept = set(dedup_by_trading_days(signals, n_trading_days, market_calendar=market_calendar))
+    return [r for r, sig in zip(sorted_rows, signals) if sig in kept]
 
 
 def _ci95_mean(values: list) -> float | None:
@@ -144,23 +162,19 @@ def _stats_block(matured: list, alpha_key: str) -> dict:
     }
 
 
-# 20 trading days ≈ 28 calendar days; 60 trading days ≈ 84 calendar days
-_DEDUP_20_DAYS = 28
-_DEDUP_60_DAYS = 84
-
-
-def _summary_stats(rows: list) -> dict:
+def _summary_stats(rows: list, market_calendar: list = None) -> dict:
     """
     Compute dedup-aware stats.
 
     20D statistics are computed from the 20D-dedup cohort only.
     60D statistics are computed from the 60D-dedup cohort only.
     Raw N is reported for reference but NOT used in any statistic.
+    market_calendar: sorted list of 0050 trading dates; if None falls back to /1.4 approx.
     """
     buy_rows = [r for r in rows if r["decision_label"] in buy_codes()]
 
-    dedup_20 = _dedup_cohort(buy_rows, _DEDUP_20_DAYS)
-    dedup_60 = _dedup_cohort(buy_rows, _DEDUP_60_DAYS)
+    dedup_20 = _dedup_cohort(buy_rows, 20, market_calendar)
+    dedup_60 = _dedup_cohort(buy_rows, 60, market_calendar)
 
     matured_20 = [r for r in dedup_20 if r["alpha_20d"] is not None]
     matured_60 = [r for r in dedup_60 if r["alpha_60d"] is not None]
@@ -231,7 +245,8 @@ def page_scorecard() -> None:
         filtered = [r for r in filtered if r["outcome_note"] is None]
 
     # ── 摘要統計 ──────────────────────────────────────────────
-    stats = _summary_stats(filtered)
+    market_cal = _load_market_calendar()
+    stats = _summary_stats(filtered, market_calendar=market_cal)
     s20, s60 = stats["s20"], stats["s60"]
     st.markdown("---")
 
@@ -243,11 +258,11 @@ def page_scorecard() -> None:
     )
     cnt2.metric(
         "20D Dedup N", stats["n_dedup_20"],
-        help=f"同一股票 {_DEDUP_20_DAYS} 日冷卻去重後的樣本數。20D 統計基於此集合。",
+        help="同一股票 20 交易日冷卻去重後的樣本數（使用 0050 市場交易日曆）。20D 統計基於此集合。",
     )
     cnt3.metric(
         "60D Dedup N", stats["n_dedup_60"],
-        help=f"同一股票 {_DEDUP_60_DAYS} 日冷卻去重後的樣本數。60D 統計基於此集合。",
+        help="同一股票 60 交易日冷卻去重後的樣本數（使用 0050 市場交易日曆）。60D 統計基於此集合。",
     )
 
     # ── 20D 統計（基於 20D Dedup 樣本）──────────────────────────
@@ -283,7 +298,7 @@ def page_scorecard() -> None:
 
     st.caption(
         "報酬均為淨報酬，已扣保守假設交易成本 0.585%。Alpha = 股票淨報酬 − 0050 淨報酬。"
-        f"Dedup：同一股票 20D/60D 冷卻（約 {_DEDUP_20_DAYS}/{_DEDUP_60_DAYS} 日曆日）去除重疊樣本；"
+        "Dedup：同一股票 20/60 交易日冷卻（使用 0050 市場交易日曆；與 Research / Forward Evidence 一致）去除重疊樣本；"
         "統計直接在 Dedup 樣本上計算，Raw N 僅顯示用。"
     )
     st.caption(

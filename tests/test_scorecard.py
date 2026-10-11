@@ -2,8 +2,9 @@
 test_scorecard.py — Overlapping Samples dedup 邏輯測試
 
 核心驗證：
-  - _dedup_cohort 正確去除同一股票在冷卻期內的重複訊號
+  - _dedup_cohort 正確去除同一股票在冷卻期（交易日）內的重複訊號
   - _summary_stats 的 20D 和 60D 統計使用各自的 Dedup 樣本，而非 Raw N
+  - 不傳 market_calendar 時，退回 /1.4 fallback（純邏輯測試用途）
 """
 
 import sys
@@ -13,8 +14,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dashboard._pages.scorecard import (
-    _DEDUP_20_DAYS,
-    _DEDUP_60_DAYS,
     _dedup_cohort,
     _summary_stats,
 )
@@ -39,30 +38,33 @@ def _row(stock_id: str, trade_date: date, alpha_20: float | None = None,
 # ── _dedup_cohort ─────────────────────────────────────────────
 
 class TestDedupCohort:
+    """Tests use no market_calendar → /1.4 fallback.
+    28 calendar days / 1.4 = 20 trading days (exact), so boundary tests hold."""
+
     def test_no_overlap_keeps_all(self):
         rows = [
             _row("2330", date(2024, 1, 2)),
             _row("2454", date(2024, 1, 2)),
-            _row("2330", date(2024, 3, 1)),  # 59 days later — beyond 28d window
+            _row("2330", date(2024, 3, 1)),  # 59 cal days → 42 tdays >> 20
         ]
-        result = _dedup_cohort(rows, cooldown_calendar_days=28)
+        result = _dedup_cohort(rows, n_trading_days=20)
         assert len(result) == 3
 
     def test_within_cooldown_drops_second(self):
         rows = [
             _row("2330", date(2024, 1, 2)),
-            _row("2330", date(2024, 1, 15)),  # 13 days later — within 28d cooldown
+            _row("2330", date(2024, 1, 15)),  # 13 cal days → 9 tdays < 20
         ]
-        result = _dedup_cohort(rows, cooldown_calendar_days=28)
+        result = _dedup_cohort(rows, n_trading_days=20)
         assert len(result) == 1
         assert result[0]["trade_date"] == "2024-01-02"  # earliest kept
 
     def test_exactly_at_boundary_kept(self):
         rows = [
             _row("2330", date(2024, 1, 2)),
-            _row("2330", date(2024, 1, 30)),  # exactly 28 days later — kept
+            _row("2330", date(2024, 1, 30)),  # 28 cal days → int(28/1.4)=20 → kept
         ]
-        result = _dedup_cohort(rows, cooldown_calendar_days=28)
+        result = _dedup_cohort(rows, n_trading_days=20)
         assert len(result) == 2
 
     def test_different_stocks_independent(self):
@@ -71,20 +73,20 @@ class TestDedupCohort:
             _row("2454", date(2024, 1, 3)),  # different stock, not affected
             _row("2330", date(2024, 1, 5)),  # same stock, within cooldown
         ]
-        result = _dedup_cohort(rows, cooldown_calendar_days=28)
+        result = _dedup_cohort(rows, n_trading_days=20)
         stock_ids = [r["stock_id"] for r in result]
         assert stock_ids.count("2330") == 1
         assert stock_ids.count("2454") == 1
 
     def test_chain_dedup_three_signals(self):
-        """First kept → second dropped → third kept (28+ days after first)."""
+        """First kept → second dropped → third kept (34 cal days from first > 20 tdays)."""
         rows = [
             _row("2330", date(2024, 1, 2)),   # kept
-            _row("2330", date(2024, 1, 10)),  # dropped (8 days)
-            _row("2330", date(2024, 2, 5)),   # kept (34 days from Jan 2)
-            _row("2330", date(2024, 2, 10)),  # dropped (5 days from Feb 5)
+            _row("2330", date(2024, 1, 10)),  # 8 cal → 5 tdays < 20 → dropped
+            _row("2330", date(2024, 2, 5)),   # 34 cal → 24 tdays >= 20 → kept
+            _row("2330", date(2024, 2, 10)),  # 5 cal → 3 tdays < 20 → dropped
         ]
-        result = _dedup_cohort(rows, cooldown_calendar_days=28)
+        result = _dedup_cohort(rows, n_trading_days=20)
         kept_dates = [r["trade_date"] for r in result]
         assert "2024-01-02" in kept_dates
         assert "2024-02-05" in kept_dates
@@ -97,12 +99,12 @@ class TestSummaryStatsDedup:
     def _make_rows(self):
         """
         Stock A appears 5 times, each 5 days apart (Jan 2, 7, 12, 17, 22).
-        Max span = 20 calendar days < 28d cooldown → dedup keeps only the first.
+        Max span = 20 cal days → 14 tdays (via /1.4 fallback) < 20 → only first kept.
         Stock B appears once on Jan 2 → always kept.
         """
         base = date(2024, 1, 2)
         rows = []
-        # 5 A signals, 5 days apart — all fall within 28d of the first
+        # 5 A signals, 5 days apart — all within 14 tdays of the first
         for i in range(5):
             rows.append(_row("A", base + timedelta(days=5 * i), alpha_20=2.0))
         # 1 B signal

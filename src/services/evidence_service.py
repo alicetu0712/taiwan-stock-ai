@@ -8,11 +8,12 @@ Architecture:
 - NEVER used to change BUY/WAIT label — display/context only
 """
 
-import bisect
 import logging
 from datetime import timedelta
 
 import numpy as np
+
+from src.utils.dedup_utils import dedup_by_trading_days
 
 logger = logging.getLogger(__name__)
 
@@ -98,37 +99,6 @@ def _compute_0050_regime_map(engine=None) -> dict:
         return {}
 
 
-def _dedup_obs_tuples(
-    signals: list,
-    n_trading_days: int,
-    sorted_dates_map: dict,
-    market_calendar: list,
-) -> list:
-    """
-    Per-stock trading-day cooldown dedup on (stock_id, date) tuples.
-
-    Priority: stock's own price dates → market_calendar (0050) → calendar/1.4 fallback.
-    Input must be sorted ascending by date.
-    """
-    last_kept: dict = {}
-    result = []
-    for stock_id, d in signals:
-        prev = last_kept.get(stock_id)
-        if prev is None:
-            result.append((stock_id, d))
-            last_kept[stock_id] = d
-        else:
-            sdates = sorted_dates_map.get(stock_id, [])
-            if sdates:
-                tdays = bisect.bisect_right(sdates, d) - bisect.bisect_right(sdates, prev)
-            elif market_calendar:
-                tdays = bisect.bisect_right(market_calendar, d) - bisect.bisect_right(market_calendar, prev)
-            else:
-                tdays = int((d - prev).days / 1.4)
-            if tdays >= n_trading_days:
-                result.append((stock_id, d))
-                last_kept[stock_id] = d
-    return result
 
 
 def _compute_forward_alpha(
@@ -246,8 +216,8 @@ def research_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         sorted_0050 = sorted(p0050_map.keys())
 
         sorted_matching = sorted(matching, key=lambda x: x[1])
-        dedup_m20 = _dedup_obs_tuples(sorted_matching, 20, sorted_dates_map, sorted_0050)
-        dedup_m60 = _dedup_obs_tuples(sorted_matching, 60, sorted_dates_map, sorted_0050)
+        dedup_m20 = dedup_by_trading_days(sorted_matching, 20, sorted_dates_map, sorted_0050)
+        dedup_m60 = dedup_by_trading_days(sorted_matching, 60, sorted_dates_map, sorted_0050)
 
         obs_20 = [
             (sid, d, price_map.get(sid, {}).get(d))
@@ -343,8 +313,8 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         matching_sorted = sorted(matching, key=lambda r: r.trade_date)
         matching_tuples = [(r.stock_id, r.trade_date) for r in matching_sorted]
 
-        dedup_pairs_20 = set(_dedup_obs_tuples(matching_tuples, 20, sorted_dates_map, sorted_0050))
-        dedup_pairs_60 = set(_dedup_obs_tuples(matching_tuples, 60, sorted_dates_map, sorted_0050))
+        dedup_pairs_20 = set(dedup_by_trading_days(matching_tuples, 20, sorted_dates_map, sorted_0050))
+        dedup_pairs_60 = set(dedup_by_trading_days(matching_tuples, 60, sorted_dates_map, sorted_0050))
 
         observations_20 = []
         observations_60 = []

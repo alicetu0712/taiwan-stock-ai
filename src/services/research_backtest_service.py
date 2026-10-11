@@ -14,7 +14,6 @@ research_backtest_service.py — Research Backtest 服務層
 兩個資料集嚴格隔離，禁止混用。
 """
 
-import bisect
 import logging
 from collections import defaultdict
 from datetime import date
@@ -23,6 +22,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
+
+from src.utils.dedup_utils import dedup_by_trading_days
 
 logger = logging.getLogger(__name__)
 
@@ -84,37 +85,23 @@ def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict,
     """
     同股票在 n_days 個「交易日」內只保留第一筆 signal，消除前向報酬重疊。
 
-    計數邏輯（優先順序）：
-      1. sorted_dates[stock_id]：用個股自身的交易日序列 bisect（最精確）
-      2. market_calendar（建議傳入 sorted_dates["0050"]）：台灣市場交易日作 fallback
-      3. 最後手段：日曆天 / 1.4（已棄用，僅在無任何市場資料時啟動）
+    委派至 dedup_by_trading_days()（src/utils/dedup_utils.py）。
+    計數邏輯優先順序：個股自身價格日→市場交易日曆(0050)→日曆天/1.4 最後手段。
     """
     if df.empty:
         return df.copy()
     df_sorted = df.sort_values(["stock_id", "date"]).reset_index(drop=True)
-    last_kept: dict = {}
-    keep: list = []
-    for _, row in df_sorted.iterrows():
-        sid = row["stock_id"]
-        d   = row["date"]
-        prev = last_kept.get(sid)
-        if prev is None:
-            keep.append(True)
-            last_kept[sid] = d
-        else:
-            sdates = sorted_dates.get(sid, [])
-            if sdates:
-                tdays = bisect.bisect_right(sdates, d) - bisect.bisect_right(sdates, prev)
-            elif market_calendar:
-                tdays = bisect.bisect_right(market_calendar, d) - bisect.bisect_right(market_calendar, prev)
-            else:
-                tdays = int((d - prev).days / 1.4)
-            if tdays >= n_days:
-                keep.append(True)
-                last_kept[sid] = d
-            else:
-                keep.append(False)
-    return df_sorted[keep].reset_index(drop=True)
+    signals = list(zip(df_sorted["stock_id"].tolist(), df_sorted["date"].tolist()))
+    kept = dedup_by_trading_days(signals, n_days, sorted_dates_map=sorted_dates,
+                                  market_calendar=market_calendar)
+    # kept is a subsequence of signals; recover row indices via pointer scan
+    keep_mask = [False] * len(signals)
+    ki = 0
+    for i, sig in enumerate(signals):
+        if ki < len(kept) and sig == kept[ki]:
+            keep_mask[i] = True
+            ki += 1
+    return df_sorted[keep_mask].reset_index(drop=True)
 
 
 def compute_stats(alpha_list: list) -> dict:
