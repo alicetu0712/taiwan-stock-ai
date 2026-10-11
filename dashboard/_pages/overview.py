@@ -50,6 +50,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     risks      = r.get("risks", [])
     setup      = r.get("setup_type") or "none"
     ma20_gap   = r.get("ma20_gap") or 0.0
+    pt_val     = r.get("price_trend_score", 0) or 0
 
     label_color   = dl["color"]
     label_text    = dl["label"]
@@ -279,7 +280,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
   {why_html}
   {trig_html}
   {dq_html}
-  <div style="font-size:0.7rem;color:#aaa;margin-top:6px">信心度 {conf}% · {level} 級 · {setup} {ma20_note}</div>
+  <div style="font-size:0.7rem;color:#aaa;margin-top:6px">模型評分：PT {pt_val:.0f} ｜ 綜合 {scores.get('total', 0):.0f} ｜ 信心度 {conf}% ｜ {level} 級 · {setup} {ma20_note}</div>
 </div>""",
         unsafe_allow_html=True,
     )
@@ -314,6 +315,31 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         f_m60        = fe_ev.get("matured_60d", 0)
         f_tier_emoji = fe_ev.get("tier_emoji", "🔴")
         f_tier_label = fe_ev.get("tier_label", "尚無 OOS 資料")
+
+        # ── Inline evidence summary (always visible) ─────────────────────────
+        _r_wr = re_ev.get("alpha_20d", {}).get("winrate")
+        _r_detail = (
+            f"（{r_n} 筆，20D 勝率 {_r_wr:.0f}%）"
+            if (r_n >= 10 and _r_wr is not None)
+            else f"（{r_n} 筆）"
+        )
+        _f_detail = f"（20D 成熟 {f_m20} 筆）"
+        _narrative_html = (
+            f'<div style="font-size:0.73rem;color:#555;margin-top:7px;font-style:italic">💬 {narrative}</div>'
+            if narrative else ""
+        )
+        st.markdown(
+            f'<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;'
+            f'padding:10px 14px;margin-bottom:8px">'
+            f'<div style="font-size:0.65rem;color:#888;font-weight:700;letter-spacing:.05em;margin-bottom:6px">驗證強度</div>'
+            f'<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.76rem;color:#333">'
+            f'<span>🧪 Research：{r_tier_emoji} {r_tier_label} {_r_detail}</span>'
+            f'<span>🔒 Forward：{f_tier_emoji} {f_tier_label} {_f_detail}</span>'
+            f'</div>'
+            f'{_narrative_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
         with st.expander(f"📊 類似訊號歷史績效（{setup} × {current_regime}）"):
             st.markdown("**🧪 Research（In-Sample）**")
@@ -357,10 +383,6 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
                 st.caption(f"{f_tier_emoji} Forward 樣本累積中（{f_m20} 筆 20D 已成熟）")
             else:
                 st.caption(f"證據強度：{f_tier_emoji} {f_tier_label}")
-
-            if narrative:
-                st.divider()
-                st.markdown(f"**💬 白話解讀**\n\n{narrative}")
 
 
 def page_today(selected_date: date) -> None:
