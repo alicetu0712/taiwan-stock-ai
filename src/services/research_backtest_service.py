@@ -719,7 +719,13 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         idx_0050 = bisect.bisect_right(sorted_0050, fs.trade_date)
         if idx_0050 == 0:
             continue
-        p0_entry = p0050.get(sorted_0050[idx_0050 - 1])
+        benchmark_entry_date = sorted_0050[idx_0050 - 1]
+        if benchmark_entry_date != fs.trade_date:
+            # Require exact date match for benchmark entry — do NOT fall back to a
+            # prior trading day. Stock entry uses fs.close_at_signal (signal date),
+            # so benchmark must be the same date or alpha is comparing different periods.
+            continue
+        p0_entry = p0050.get(benchmark_entry_date)
         if not p0_entry:
             continue
 
