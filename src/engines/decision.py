@@ -28,6 +28,9 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+# Bump this when Decision Center logic changes so historical snapshots remain attributable
+DECISION_CENTER_VERSION = "v2.0"
+
 
 @dataclass
 class StockRecommendation:
@@ -86,6 +89,7 @@ class StockRecommendation:
     target2: Optional[float] = None
     expected_holding: str = ""
     vol_ratio: Optional[float] = None
+    ma60_gap:  Optional[float] = None    # (close − MA60) / MA60 × 100%, frozen at signal time
 
 
 # ── Decision Center（Presentation layer）────────────────────────────────────

@@ -221,6 +221,12 @@ class Recommendation(Base):
     target2     = Column(Float)
     atr         = Column(Float)
     vol_ratio   = Column(Float)
+    ma60_gap    = Column(Float)           # (close − MA60) / MA60 × 100%, frozen at signal time
+    # Decision Center snapshot
+    decision_code          = Column(String(20))   # final code after DC override (e.g. wait_pullback ≠ trade_signal)
+    decision_label_version = Column(String(20))   # DECISION_CENTER_VERSION at signal time
+    rr_ratio               = Column(Float)        # (target1 − close) / (close − stop_price)
+    market_regime          = Column(String(10))   # bull / neutral / bear at signal time
     # Stock-level data quality (JSON: price/ma60/volume/pt_score/institution/financial + confidence)
     data_quality_json = Column(Text)
     # Data Integrity — validity gate
@@ -531,6 +537,12 @@ def _migrate_recommendations(engine) -> None:
         ("target2",           "FLOAT"),
         ("atr",               "FLOAT"),
         ("vol_ratio",         "FLOAT"),
+        ("ma60_gap",          "FLOAT"),
+        # Decision Center snapshot
+        ("decision_code",          "VARCHAR(20)"),
+        ("decision_label_version", "VARCHAR(20)"),
+        ("rr_ratio",               "FLOAT"),
+        ("market_regime",          "VARCHAR(10)"),
         # Stock-level data quality
         ("data_quality_json", "TEXT"),
         # Data Integrity validity gate

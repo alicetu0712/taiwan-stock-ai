@@ -494,6 +494,8 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
                 market                 = market,
                 trade_date             = trade_date,
             )
+            if pt_r is not None:
+                rec.ma60_gap = getattr(pt_r, "ma60_gap", None)
             candidates.append(rec)
 
         # ── Step 7b: 分數動能 + 冷卻期標記 ──────────────────────
@@ -531,6 +533,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
         except Exception as e:
             logger.warning(f"[Step 8] 大盤方向判斷失敗（{e}），預設多頭模式")
 
+        market_regime = "bear" if bear_mode else ("neutral" if caution_mode else "bull")
         top_recs, no_rec_reason = decision.select_top_n(
             candidates, bear_mode=bear_mode, caution_mode=caution_mode
         )
@@ -615,6 +618,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
             opp_recs=opp_recs, watch_recs=watch_recs,
             source_price_date=source_price_date,
             data_quality_map=_dq_map,
+            market_regime=market_regime,
         )
 
         # ── Pipeline 漏斗統計 ──────────────────────────────────
@@ -904,6 +908,34 @@ def _sample_institutional(trade_date: date, stock_ids):
     return df
 
 
+from src.engines.decision import DECISION_CENTER_VERSION as _DC_VER
+
+
+def _dc_code(rec) -> str | None:
+    """Return the final Decision Center code for a rec (may differ from trade_signal)."""
+    try:
+        from src.engines.decision import decision_label as _dl
+        return _dl({
+            "trade_signal": rec.trade_signal,
+            "setup_type":   rec.setup_type,
+            "ma20_gap":     rec.ma20_gap or 0.0,
+        }).get("code")
+    except Exception:
+        return rec.trade_signal
+
+
+def _compute_rr(close, stop_price, target1) -> float | None:
+    """(target1 - close) / (close - stop_price), None if inputs invalid."""
+    try:
+        risk = float(close) - float(stop_price)
+        reward = float(target1) - float(close)
+        if risk > 0:
+            return round(reward / risk, 2)
+    except (TypeError, ZeroDivisionError):
+        pass
+    return None
+
+
 def _dq_json(dq_map, stock_id) -> str | None:
     """Serialize StockDataQuality to JSON string for DB storage."""
     import json as _json
@@ -911,7 +943,7 @@ def _dq_json(dq_map, stock_id) -> str | None:
     return _json.dumps(dq.to_dict()) if dq is not None else None
 
 
-def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment, opp_recs=None, watch_recs=None, source_price_date=None, data_quality_map=None):
+def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment, opp_recs=None, watch_recs=None, source_price_date=None, data_quality_map=None, market_regime=None):
     """將推薦、分析結果、Decision Journal 持久化至資料庫。"""
     import json
     try:
@@ -1006,6 +1038,12 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     target2           = rec.target2,
                     atr               = rec.atr,
                     vol_ratio         = rec.vol_ratio,
+                    ma60_gap          = rec.ma60_gap,
+                    # Decision Center snapshot (frozen at signal time)
+                    decision_code          = _dc_code(rec),
+                    decision_label_version = _DC_VER,
+                    rr_ratio               = _compute_rr(rec.close, rec.stop_price, rec.target1),
+                    market_regime          = market_regime,
                     data_quality_json = _dq_json(data_quality_map, rec.stock_id),
                     is_valid          = True,
                     source_price_date = source_price_date,
