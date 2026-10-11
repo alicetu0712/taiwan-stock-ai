@@ -1047,6 +1047,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     data_quality_json = _dq_json(data_quality_map, rec.stock_id),
                     is_valid          = True,
                     source_price_date = source_price_date,
+                    missing_data_factors = rec.missing_data_factors,
                 )
                 session.add(r)
             else:
@@ -1076,6 +1077,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                 existing.target2           = rec.target2
                 existing.atr               = rec.atr
                 existing.vol_ratio         = rec.vol_ratio
+                existing.missing_data_factors = rec.missing_data_factors
 
         # ── 儲存 Opportunity 追蹤記錄 ────────────────────────
         for rec in (opp_recs or []):

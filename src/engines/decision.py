@@ -90,6 +90,8 @@ class StockRecommendation:
     expected_holding: str = ""
     vol_ratio: Optional[float] = None
     ma60_gap:  Optional[float] = None    # (close − MA60) / MA60 × 100%, frozen at signal time
+    # Data completeness: which scoring dimensions lacked real data
+    missing_data_factors: Optional[str] = None  # comma-separated e.g. "quality,behavior"; None = complete
 
 
 # ── Decision Center（Presentation layer）────────────────────────────────────
@@ -423,6 +425,14 @@ class DecisionEngine:
                     w[k] += extra * (w[k] / active_sum)
             w["behavior"] = 0.0
             b_score = 0.0
+
+        # ── Data Completeness ────────────────────────────────────
+        _missing = []
+        if quality_result is None:
+            _missing.append("quality")
+        if not has_chip:
+            _missing.append("behavior")
+        rec.missing_data_factors = ",".join(_missing) if _missing else None
 
         # intelligence 在 V2 中為 0，不影響計算
         # Risk is a weighted component (positive), not a penalty deducted from base.

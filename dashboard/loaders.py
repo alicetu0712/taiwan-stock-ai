@@ -342,8 +342,9 @@ def load_db_recommendations(target_date: date) -> list:
                     "industry":          industry_map.get(r.stock_id, ""),
                     "consecutive_days":  consecutive_map.get(r.stock_id, 1),
                     # Stock-level data quality
-                    "data_quality":      json.loads(r.data_quality_json)
-                                         if getattr(r, "data_quality_json", None) else None,
+                    "data_quality":           json.loads(r.data_quality_json)
+                                              if getattr(r, "data_quality_json", None) else None,
+                    "missing_data_factors":   getattr(r, "missing_data_factors", None),
                 }
             )
         return result

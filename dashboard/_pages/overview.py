@@ -306,6 +306,30 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         if conclusion:
             st.markdown(f"> {conclusion}")
 
+    # ── Data Completeness badge ─────────────────────────────────────────────────
+    _missing_raw = r.get("missing_data_factors") or ""
+    _missing_list = [f for f in _missing_raw.split(",") if f] if _missing_raw else []
+    _factor_label = {"quality": "基本面", "behavior": "籌碼"}
+    if _missing_list:
+        _nominal_weights = {"quality": 20, "behavior": 15}
+        _missing_pct = sum(_nominal_weights.get(f, 0) for f in _missing_list)
+        _completeness = 100 - _missing_pct
+        _warn_items = "　".join(
+            f'⚠️ {_factor_label.get(f, f)} 資料缺失' for f in _missing_list
+        )
+        _rw_note = "　".join(
+            f'{_factor_label.get(f, f)} {_nominal_weights.get(f, 0)}% → 重分配至技術面'
+            for f in _missing_list
+        )
+        st.html(
+            f'<div style="background:#fff8e1;border:1px solid #ffe082;border-radius:7px;'
+            f'padding:8px 12px;margin-bottom:8px">'
+            f'<span style="font-size:0.68rem;color:#f57f17;font-weight:700">資料完整度 {_completeness}%</span>'
+            f'<span style="font-size:0.68rem;color:#e65100;margin-left:10px">{_warn_items}</span>'
+            f'<div style="font-size:0.63rem;color:#9e9e9e;margin-top:3px">{_rw_note}；此分數與完整資料的同分標的可信度不同</div>'
+            f'</div>'
+        )
+
     # ── Evidence panel ──────────────────────────────────────────────────────────
     signal = r.get("trade_signal") or "wait"
     if setup != "none" and signal != "sell":
