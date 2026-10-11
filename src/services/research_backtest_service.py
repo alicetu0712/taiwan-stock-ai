@@ -79,12 +79,15 @@ def ma60_bracket(gap) -> str:
     return "> 5%"
 
 
-def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict) -> pd.DataFrame:
+def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict,
+                       market_calendar: list = None) -> pd.DataFrame:
     """
     同股票在 n_days 個「交易日」內只保留第一筆 signal，消除前向報酬重疊。
 
-    計數邏輯：利用 sorted_dates[stock_id] 直接 bisect，O(log N) per row。
-    若該股無 price 資料，以日曆天 / 1.4 近似。
+    計數邏輯（優先順序）：
+      1. sorted_dates[stock_id]：用個股自身的交易日序列 bisect（最精確）
+      2. market_calendar（建議傳入 sorted_dates["0050"]）：台灣市場交易日作 fallback
+      3. 最後手段：日曆天 / 1.4（已棄用，僅在無任何市場資料時啟動）
     """
     if df.empty:
         return df.copy()
@@ -101,9 +104,9 @@ def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict) -> pd.
         else:
             sdates = sorted_dates.get(sid, [])
             if sdates:
-                lo = bisect.bisect_right(sdates, prev)
-                hi = bisect.bisect_right(sdates, d)
-                tdays = hi - lo
+                tdays = bisect.bisect_right(sdates, d) - bisect.bisect_right(sdates, prev)
+            elif market_calendar:
+                tdays = bisect.bisect_right(market_calendar, d) - bisect.bisect_right(market_calendar, prev)
             else:
                 tdays = int((d - prev).days / 1.4)
             if tdays >= n_days:
@@ -215,8 +218,9 @@ class ResearchBacktestService:
         # ── Dedup cohorts ──────────────────────────────────────
         # All grouped statistics use their respective dedup cohort.
         # Raw N is preserved in sample_independence for diagnostics only.
-        dedup_20 = dedup_observations(usable, 20, sorted_dates)
-        dedup_60 = dedup_observations(usable, 60, sorted_dates)
+        market_cal = sorted_dates.get("0050", [])
+        dedup_20 = dedup_observations(usable, 20, sorted_dates, market_cal)
+        dedup_60 = dedup_observations(usable, 60, sorted_dates, market_cal)
 
         pt_dedup_20 = dedup_20[dedup_20["pt_bucket"] != "N/A"]
         pt_dedup_60 = dedup_60[dedup_60["pt_bucket"] != "N/A"]

@@ -98,6 +98,39 @@ def _compute_0050_regime_map(engine=None) -> dict:
         return {}
 
 
+def _dedup_obs_tuples(
+    signals: list,
+    n_trading_days: int,
+    sorted_dates_map: dict,
+    market_calendar: list,
+) -> list:
+    """
+    Per-stock trading-day cooldown dedup on (stock_id, date) tuples.
+
+    Priority: stock's own price dates → market_calendar (0050) → calendar/1.4 fallback.
+    Input must be sorted ascending by date.
+    """
+    last_kept: dict = {}
+    result = []
+    for stock_id, d in signals:
+        prev = last_kept.get(stock_id)
+        if prev is None:
+            result.append((stock_id, d))
+            last_kept[stock_id] = d
+        else:
+            sdates = sorted_dates_map.get(stock_id, [])
+            if sdates:
+                tdays = bisect.bisect_right(sdates, d) - bisect.bisect_right(sdates, prev)
+            elif market_calendar:
+                tdays = bisect.bisect_right(market_calendar, d) - bisect.bisect_right(market_calendar, prev)
+            else:
+                tdays = int((d - prev).days / 1.4)
+            if tdays >= n_trading_days:
+                result.append((stock_id, d))
+                last_kept[stock_id] = d
+    return result
+
+
 def _compute_forward_alpha(
     observations: list,
     price_map: dict,
@@ -212,23 +245,35 @@ def research_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         p0050_map = price_map.get("0050", {})
         sorted_0050 = sorted(p0050_map.keys())
 
-        observations = [
-            (sid, sig_date, price_map.get(sid, {}).get(sig_date))
-            for sid, sig_date in matching
-            if price_map.get(sid, {}).get(sig_date)
+        sorted_matching = sorted(matching, key=lambda x: x[1])
+        dedup_m20 = _dedup_obs_tuples(sorted_matching, 20, sorted_dates_map, sorted_0050)
+        dedup_m60 = _dedup_obs_tuples(sorted_matching, 60, sorted_dates_map, sorted_0050)
+
+        obs_20 = [
+            (sid, d, price_map.get(sid, {}).get(d))
+            for sid, d in dedup_m20
+            if price_map.get(sid, {}).get(d)
+        ]
+        obs_60 = [
+            (sid, d, price_map.get(sid, {}).get(d))
+            for sid, d in dedup_m60
+            if price_map.get(sid, {}).get(d)
         ]
 
-        alphas_20 = _compute_forward_alpha(observations, price_map, sorted_dates_map, p0050_map, sorted_0050, 20)
-        alphas_60 = _compute_forward_alpha(observations, price_map, sorted_dates_map, p0050_map, sorted_0050, 60)
+        alphas_20 = _compute_forward_alpha(obs_20, price_map, sorted_dates_map, p0050_map, sorted_0050, 20)
+        alphas_60 = _compute_forward_alpha(obs_60, price_map, sorted_dates_map, p0050_map, sorted_0050, 60)
 
         n = len(alphas_20)
         tier_emoji, tier_label = _evidence_tier(n)
         return {
-            "n": n,
+            "n":          n,
+            "n_raw":      len(matching),
+            "n_dedup_20": len(dedup_m20),
+            "n_dedup_60": len(dedup_m60),
             "setup_type": setup_type,
-            "regime": market_regime,
-            "alpha_20d": _alpha_stats(alphas_20),
-            "alpha_60d": _alpha_stats(alphas_60),
+            "regime":     market_regime,
+            "alpha_20d":  _alpha_stats(alphas_20),
+            "alpha_60d":  _alpha_stats(alphas_60),
             "tier_emoji": tier_emoji,
             "tier_label": tier_label,
         }
@@ -295,17 +340,24 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         p0050_map = price_map.get("0050", {})
         sorted_0050 = sorted(p0050_map.keys())
 
+        matching_sorted = sorted(matching, key=lambda r: r.trade_date)
+        matching_tuples = [(r.stock_id, r.trade_date) for r in matching_sorted]
+
+        dedup_pairs_20 = set(_dedup_obs_tuples(matching_tuples, 20, sorted_dates_map, sorted_0050))
+        dedup_pairs_60 = set(_dedup_obs_tuples(matching_tuples, 60, sorted_dates_map, sorted_0050))
+
         observations_20 = []
         observations_60 = []
-        for r in matching:
+        for r in matching_sorted:
             entry = r.close_at_signal or price_map.get(r.stock_id, {}).get(r.trade_date)
             if not entry:
                 continue
             sdates = sorted_dates_map.get(r.stock_id, [])
             idx_s = bisect.bisect_right(sdates, r.trade_date)
-            if idx_s + 19 < len(sdates):
+            pair = (r.stock_id, r.trade_date)
+            if pair in dedup_pairs_20 and idx_s + 19 < len(sdates):
                 observations_20.append((r.stock_id, r.trade_date, entry))
-            if idx_s + 59 < len(sdates):
+            if pair in dedup_pairs_60 and idx_s + 59 < len(sdates):
                 observations_60.append((r.stock_id, r.trade_date, entry))
 
         alphas_20 = _compute_forward_alpha(observations_20, price_map, sorted_dates_map, p0050_map, sorted_0050, 20)
@@ -315,12 +367,14 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         tier_emoji, tier_label = _evidence_tier(n_m20)
         return {
             "total_recorded": total,
-            "matured_20d": n_m20,
-            "matured_60d": len(alphas_60),
-            "alpha_20d": _alpha_stats(alphas_20),
-            "alpha_60d": _alpha_stats(alphas_60),
-            "tier_emoji": tier_emoji,
-            "tier_label": tier_label,
+            "n_dedup_20":     len(dedup_pairs_20),
+            "n_dedup_60":     len(dedup_pairs_60),
+            "matured_20d":    n_m20,
+            "matured_60d":    len(alphas_60),
+            "alpha_20d":      _alpha_stats(alphas_20),
+            "alpha_60d":      _alpha_stats(alphas_60),
+            "tier_emoji":     tier_emoji,
+            "tier_label":     tier_label,
         }
     except Exception as e:
         logger.warning(f"forward_evidence({setup_type}, {market_regime}): {e}")
