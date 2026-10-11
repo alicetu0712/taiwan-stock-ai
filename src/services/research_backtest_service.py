@@ -469,42 +469,67 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     凍結當日 analysis_results 為 forward_signals。
 
     Append-only：(trade_date, stock_id) 已存在則 skip，永不 UPDATE。
-    Returns: 實際插入筆數
+    Returns: 實際插入筆數（個別訊號缺價格者 skip，不計入）
 
-    Validity gate（fail-closed）:
-    - trade_date 必須有對應的 DailyPrice 記錄（表示是交易日且資料已入庫）
-    - 若無，直接 return 0，不寫入任何資料
-    - 防止 non-trading-day analysis 污染 OOS evidence
+    Validity gate（5 層，fail-closed）:
+    L1 Trading Calendar   : trade_date 必須是交易日（TaiwanTradingCalendar）
+    L2 Market Coverage    : 當日 DailyPrice 筆數 >= _FORWARD_MIN_MARKET_COVERAGE
+                            防止 API 抓取失敗只進來少數幾筆
+    L3 Benchmark Exact    : 0050 必須有 trade_date 當日的 close
+                            Alpha 計算要求股票與基準同日進場
+    L4 Per-Signal Price   : 每筆 AR 的 stock_id 必須有 trade_date 的 DailyPrice
+                            若缺失則 skip 該筆訊號（不中止整批）
+    L5 Analysis Date      : 由 L1 Trading Calendar 覆蓋（非交易日不會有正常分析）
     """
     from src.database import DailyPrice, ForwardSignal, MODEL_VERSION, Recommendation, Stock
     from src.core.trading_calendar import TaiwanTradingCalendar
+    from sqlalchemy import func
     from datetime import timedelta
+
+    _FORWARD_MIN_MARKET_COVERAGE = 200  # 低於此數量視為資料抓取失敗
 
     if not today_ars:
         return 0
 
-    # ── Validity Gate ────────────────────────────────────────────────
+    # ── L1: Trading Calendar ─────────────────────────────────────────
     cal = TaiwanTradingCalendar()
     if not cal.is_trading_day(trade_date):
         logger.warning(
-            f"[write_forward_signals] REJECTED: {trade_date} 非交易日，"
-            f"不寫入 Forward signals（OOS evidence integrity gate）"
+            f"[write_forward_signals] REJECTED L1: {trade_date} 非交易日"
         )
         return 0
 
-    price_exists = (
-        session.query(DailyPrice.stock_id)
-        .filter(DailyPrice.date == trade_date)
-        .limit(1)
-        .first()
-    )
-    if not price_exists:
+    # ── L2: Market Coverage ──────────────────────────────────────────
+    market_count = (
+        session.query(func.count(DailyPrice.stock_id))
+        .filter(DailyPrice.date == trade_date, DailyPrice.close.isnot(None))
+        .scalar()
+    ) or 0
+    if market_count < _FORWARD_MIN_MARKET_COVERAGE:
         logger.warning(
-            f"[write_forward_signals] REJECTED: {trade_date} 無 DailyPrice 資料，"
-            f"不寫入 Forward signals（OOS evidence integrity gate）"
+            f"[write_forward_signals] REJECTED L2: {trade_date} 市場資料不足 "
+            f"({market_count} 檔 < 門檻 {_FORWARD_MIN_MARKET_COVERAGE})，"
+            f"疑似資料抓取失敗，不寫入 Forward signals"
         )
         return 0
-    # ── End Validity Gate ────────────────────────────────────────────
+
+    # ── L3: Benchmark (0050) Exact Date ─────────────────────────────
+    has_0050 = (
+        session.query(DailyPrice.close)
+        .filter(
+            DailyPrice.stock_id == "0050",
+            DailyPrice.date == trade_date,
+            DailyPrice.close.isnot(None),
+        )
+        .first()
+    )
+    if not has_0050:
+        logger.warning(
+            f"[write_forward_signals] REJECTED L3: {trade_date} 無 0050 收盤價，"
+            f"Alpha 計算基準缺失，不寫入 Forward signals"
+        )
+        return 0
+    # ── End Global Gates ─────────────────────────────────────────────
 
     stock_ids = [ar.stock_id for ar in today_ars]
 
@@ -610,9 +635,18 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     }
 
     inserted = 0
+    skipped_no_price = 0
     for ar in today_ars:
         if ar.stock_id in existing:
             continue  # append-only: 永不覆寫
+
+        # ── L4: Per-Signal Price Gate ────────────────────────────────
+        if ar.stock_id not in close_on_day:
+            skipped_no_price += 1
+            logger.debug(
+                f"[write_forward_signals] SKIP L4: {ar.stock_id} 在 {trade_date} 無 DailyPrice，略過此訊號"
+            )
+            continue
 
         ma60_gap_v, ma60_slope_v = _ma60_features(ar.stock_id)
         rec = rec_snap.get(ar.stock_id)
@@ -650,6 +684,10 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
 
     if inserted:
         session.commit()
+    if skipped_no_price:
+        logger.warning(
+            f"[write_forward_signals] {trade_date}: {skipped_no_price} 筆訊號因缺當日 DailyPrice 而略過（L4 gate）"
+        )
     return inserted
 
 
