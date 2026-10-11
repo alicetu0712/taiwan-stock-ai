@@ -119,13 +119,16 @@ class BacktestService:
             if s20 is None and entry is not None and (today_dt - r.date).days > 35:
                 after_rec = [(d, c) for d, c in sp if d > r.date and c]
                 if after_rec:
+                    # Has prices after signal but horizon not reached — forced exit at last close.
                     s20 = round(
                         (after_rec[-1][1] - entry) / entry * 100 - ROUND_TRIP_COST, 2
                     )
                     data_flag = "⚠️ 停牌"
                 else:
-                    s20 = round(-100.0 - ROUND_TRIP_COST, 2)
-                    data_flag = "❌ 下市"
+                    # No price data after signal date. Cannot confirm delisting vs data gap —
+                    # exclude from return stats rather than assuming -100%.
+                    data_flag = "❓ 無價格"
+                    # s20 stays None → excluded from all return statistics via dropna()
 
             if s20 is not None and data_flag is None:
                 s20 = round(s20 - ROUND_TRIP_COST, 2)
@@ -561,16 +564,19 @@ class BacktestService:
             s20, entry = _ret_at(sp_close, r.date, 20)
             s60, _     = _ret_at(sp_close, r.date, 60)
 
-            # 補全停牌/下市
+            # 補全停牌/無價格
             data_flag = None
             if s20 is None and entry is not None and (today_dt - r.date).days > 35:
                 after = [(d, c) for d, c in sp_close if d > r.date and c]
                 if after:
+                    # Has prices after signal but horizon not reached — forced exit at last close.
                     s20 = round((after[-1][1] - entry) / entry * 100 - ROUND_TRIP_COST, 2)
                     data_flag = "⚠️ 停牌"
                 else:
-                    s20 = round(-100.0 - ROUND_TRIP_COST, 2)
-                    data_flag = "❌ 下市"
+                    # No price data after signal date. Cannot confirm delisting vs data gap —
+                    # exclude from return stats rather than assuming -100%.
+                    data_flag = "❓ 無價格"
+                    # s20 stays None → excluded from all return statistics via dropna()
 
             if s20 is not None and data_flag is None:
                 s20 = round(s20 - ROUND_TRIP_COST, 2)
