@@ -69,9 +69,10 @@ def _load_scorecard_rows(limit: int = 300) -> list:
 _PREFERRED_CODE_DEFAULTS = list(buy_codes())  # ["strong_buy", "buy"]
 
 _OUTCOME_ICON = {
-    "T1_HIT":         "🎯",
-    "STOP_TRIGGERED": "🛑",
-    "EXPIRED":        "⏱️",
+    "T1_HIT":             "🎯",
+    "STOP_TRIGGERED":     "🛑",
+    "SAME_DAY_AMBIGUOUS": "⚠️",
+    "EXPIRED":            "⏱️",
 }
 
 
@@ -80,6 +81,8 @@ def _outcome_color(outcome_note: str | None, alpha: float | None) -> str:
         return "#1a7f4b"
     if outcome_note == "STOP_TRIGGERED":
         return "#e74c3c"
+    if outcome_note == "SAME_DAY_AMBIGUOUS":
+        return "#f39c12"
     if alpha is not None:
         return "#1a7f4b" if alpha > 0 else "#e74c3c"
     return "#666"
@@ -96,20 +99,25 @@ def _summary_stats(rows: list) -> dict:
     buy_rows = [r for r in rows if r["decision_label"] in buy_codes()]
     matured  = [r for r in buy_rows if r["alpha_20d"] is not None]
     if not matured:
-        return {"n_buy": len(buy_rows), "matured": 0, "winrate": None, "avg_alpha": None, "t1_rate": None, "stop_rate": None}
+        return {"n_buy": len(buy_rows), "matured": 0, "winrate": None,
+                "avg_alpha": None, "t1_rate": None, "stop_rate": None, "ambiguous_rate": None}
 
     alphas = [r["alpha_20d"] for r in matured]
     winrate = round(sum(1 for a in alphas if a > 0) / len(alphas) * 100, 1)
     avg_alpha = round(sum(alphas) / len(alphas), 2)
-    t1_rate = round(sum(1 for r in matured if r["outcome_note"] == "T1_HIT") / len(matured) * 100, 1)
-    stop_rate = round(sum(1 for r in matured if r["outcome_note"] == "STOP_TRIGGERED") / len(matured) * 100, 1)
+    # SAME_DAY_AMBIGUOUS is excluded from both t1_rate and stop_rate to avoid
+    # inflating or deflating either metric with unresolvable intraday order.
+    t1_rate   = round(sum(1 for r in matured if r["outcome_note"] == "T1_HIT")             / len(matured) * 100, 1)
+    stop_rate = round(sum(1 for r in matured if r["outcome_note"] == "STOP_TRIGGERED")      / len(matured) * 100, 1)
+    ambiguous_rate = round(sum(1 for r in matured if r["outcome_note"] == "SAME_DAY_AMBIGUOUS") / len(matured) * 100, 1)
     return {
-        "n_buy":     len(buy_rows),
-        "matured":   len(matured),
-        "winrate":   winrate,
-        "avg_alpha": avg_alpha,
-        "t1_rate":   t1_rate,
-        "stop_rate": stop_rate,
+        "n_buy":          len(buy_rows),
+        "matured":        len(matured),
+        "winrate":        winrate,
+        "avg_alpha":      avg_alpha,
+        "t1_rate":        t1_rate,
+        "stop_rate":      stop_rate,
+        "ambiguous_rate": ambiguous_rate,
     }
 
 
@@ -172,17 +180,20 @@ def page_scorecard() -> None:
     # ── 摘要統計 ──────────────────────────────────────────────
     stats = _summary_stats(filtered)
     st.markdown("---")
-    sc1, sc2, sc3, sc4, sc5 = st.columns(5)
+    sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
     sc1.metric("BUY / BUY ★ 信號", stats["n_buy"])
     sc2.metric("已成熟（20D）", stats["matured"])
     if stats["winrate"] is not None:
         sc3.metric("勝率（Alpha > 0）", f"{stats['winrate']}%")
         sc4.metric("平均 Alpha 20D", f"{stats['avg_alpha']:+.2f}%")
         sc5.metric("達 T1 率", f"{stats['t1_rate']}%")
+        sc6.metric("⚠️ 同日模糊", f"{stats['ambiguous_rate']}%",
+                   help="同一交易日 High≥T1 且 Low≤Stop，日線資料無法判斷先後順序，不計入 T1 率或停損率")
     else:
         sc3.metric("勝率", "—")
         sc4.metric("平均 Alpha", "—")
         sc5.metric("達 T1 率", "—")
+        sc6.metric("⚠️ 同日模糊", "—")
     st.caption("報酬均為淨報酬，已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）。Alpha = 股票淨報酬 − 0050 淨報酬。")
     st.markdown("---")
 
@@ -239,9 +250,10 @@ def page_scorecard() -> None:
                     st.markdown("⏳ 尚未成熟（等待 20 交易日後回填）")
                 else:
                     outcome_display = {
-                        "T1_HIT":         "🎯 盤中觸及目標 T1（High ≥ T1）",
-                        "STOP_TRIGGERED": "🛑 盤中觸及停損（Low ≤ Stop）",
-                        "EXPIRED":        "⏱️ 時間到期（20 交易日內未觸發）",
+                        "T1_HIT":             "🎯 盤中觸及目標 T1（High ≥ T1）",
+                        "STOP_TRIGGERED":     "🛑 盤中觸及停損（Low ≤ Stop）",
+                        "SAME_DAY_AMBIGUOUS": "⚠️ 同日觸及停損與目標（無法判斷順序）",
+                        "EXPIRED":            "⏱️ 時間到期（20 交易日內未觸發）",
                     }.get(r["outcome_note"], r["outcome_note"])
                     st.markdown(f"結果：**{outcome_display}**")
                     if r["stop_triggered_day"]:
@@ -254,4 +266,4 @@ def page_scorecard() -> None:
                         f"60D 淨報酬：{_fmt(r['fwd_return_60d'], '%', plus=True)}  \n"
                         f"60D Alpha：{_fmt(r['alpha_60d'], '%', plus=True)}"
                     )
-                    st.caption("淨報酬已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）。同日 Stop 與 T1 同時觸及時以 Stop 為準。")
+                    st.caption("淨報酬已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）。同日 Stop 與 T1 同時觸及時標記為「同日模糊」，不計入 T1 率或停損率。")

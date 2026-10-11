@@ -829,7 +829,15 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                     break
 
         if t1_day and stop_day:
-            note = "T1_HIT" if t1_day < stop_day else "STOP_TRIGGERED"
+            if t1_day < stop_day:
+                note = "T1_HIT"
+            elif stop_day < t1_day:
+                note = "STOP_TRIGGERED"
+            else:
+                # Same trading day: daily OHLC cannot determine intraday order.
+                # Marking as ambiguous rather than silently assuming stop-first,
+                # so the scorecard win-rate is not artificially inflated or deflated.
+                note = "SAME_DAY_AMBIGUOUS"
         elif t1_day:
             note = "T1_HIT"
         elif stop_day:
