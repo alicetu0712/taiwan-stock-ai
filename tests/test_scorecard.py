@@ -10,8 +10,17 @@ test_scorecard.py — Overlapping Samples dedup 邏輯測試
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Stub streamlit before importing scorecard so the module loads without
+# the real streamlit package.  cache_data must be a passthrough decorator
+# so @st.cache_data(ttl=...) annotated functions remain callable.
+if "streamlit" not in sys.modules:
+    _st = MagicMock()
+    _st.cache_data = lambda **_kw: (lambda f: f)
+    sys.modules["streamlit"] = _st
 
 from dashboard._pages.scorecard import (
     _dedup_cohort,
