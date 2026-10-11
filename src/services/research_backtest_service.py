@@ -212,9 +212,14 @@ class ResearchBacktestService:
         # PT bucket 統計只含有真實 pt_score 的列，N/A 不得納入績效比較
         pt_usable = usable[usable["pt_bucket"] != "N/A"]
 
-        # ── 樣本獨立性診斷 ─────────────────────────────────────
+        # ── Dedup cohorts ──────────────────────────────────────
+        # All grouped statistics use their respective dedup cohort.
+        # Raw N is preserved in sample_independence for diagnostics only.
         dedup_20 = dedup_observations(usable, 20, sorted_dates)
         dedup_60 = dedup_observations(usable, 60, sorted_dates)
+
+        pt_dedup_20 = dedup_20[dedup_20["pt_bucket"] != "N/A"]
+        pt_dedup_60 = dedup_60[dedup_60["pt_bucket"] != "N/A"]
 
         def _si_stats(df):
             return {
@@ -230,15 +235,23 @@ class ResearchBacktestService:
 
         return {
             "raw_df":             usable,
-            "by_pt_bucket":       self._group_stats(pt_usable, "pt_bucket", PT_BUCKET_ORDER),
-            "by_setup":           self._group_stats(usable, "setup_type",   None),
-            "by_ma20":            self._group_stats(usable, "ma20_bracket", MA20_BRACKET_ORDER),
-            "by_ma60":            self._group_stats(usable, "ma60_bracket", MA60_BRACKET_ORDER),
-            "by_month":           self._group_stats(usable, "ym",           None),
-            "by_regime":          self._group_stats(usable, "regime",       ["bull", "neutral", "bear"]),
+            "by_pt_bucket":       self._group_stats(pt_dedup_20, "pt_bucket", PT_BUCKET_ORDER,
+                                                    df_60=pt_dedup_60),
+            "by_setup":           self._group_stats(dedup_20, "setup_type",   None,
+                                                    df_60=dedup_60),
+            "by_ma20":            self._group_stats(dedup_20, "ma20_bracket", MA20_BRACKET_ORDER,
+                                                    df_60=dedup_60),
+            "by_ma60":            self._group_stats(dedup_20, "ma60_bracket", MA60_BRACKET_ORDER,
+                                                    df_60=dedup_60),
+            "by_month":           self._group_stats(dedup_20, "ym",           None,
+                                                    df_60=dedup_60),
+            "by_regime":          self._group_stats(dedup_20, "regime",       ["bull", "neutral", "bear"],
+                                                    df_60=dedup_60),
             "cutoff":             _get_cutoff(),
             "n_total_candidates": n_total,
             "n_usable":           len(usable),
+            "n_dedup_20":         len(dedup_20),
+            "n_dedup_60":         len(dedup_60),
             "n_with_pt":          n_with_pt,
             "n_without_pt":       n_without_pt,
             "pt_coverage_pct":    pt_coverage,
@@ -419,17 +432,53 @@ class ResearchBacktestService:
     # ── 分組統計 ──────────────────────────────────────────────
 
     @staticmethod
-    def _group_stats(df: pd.DataFrame, group_col: str,
-                     order: Optional[list]) -> pd.DataFrame:
-        if group_col not in df.columns or df.empty:
+    def _group_stats(df_20: pd.DataFrame, group_col: str,
+                     order: Optional[list],
+                     df_60: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """
+        Compute grouped statistics with cohort isolation.
+
+        df_20: 20D dedup cohort — used for all 20D stats and for the 'n' column.
+        df_60: 60D dedup cohort — used for all 60D stats.
+               If None, falls back to df_20 (backward compat).
+        """
+        if group_col not in df_20.columns or df_20.empty:
             return pd.DataFrame()
 
+        if df_60 is None:
+            df_60 = df_20
+
+        _empty_s20 = {k: None for k in (
+            "n", "mean", "median", "std", "ci_low", "ci_high",
+            "p_value", "win_rate", "cohens_d", "boot_ci_low", "boot_ci_high",
+        )}
+        _empty_s60 = {k: None for k in (
+            "mean", "median", "std", "ci_low", "ci_high",
+            "p_value", "win_rate", "cohens_d", "boot_ci_low", "boot_ci_high",
+        )}
+        _empty_s20["n"] = 0
+
+        # Per-group stats from each dedup cohort
+        grp20 = {
+            k: compute_stats(g["alpha_20d"].tolist())
+            for k, g in df_20.groupby(group_col, sort=False)
+        }
+        grp60 = {
+            k: compute_stats(g["alpha_60d"].tolist())
+            for k, g in df_60.groupby(group_col, sort=False)
+            if group_col in df_60.columns
+        } if not df_60.empty else {}
+
+        all_keys = list(dict.fromkeys(
+            list(grp20.keys()) + list(grp60.keys())
+        ))
+
         rows = []
-        for grp_val, gdf in df.groupby(group_col, sort=False):
-            s20 = compute_stats(gdf["alpha_20d"].tolist())
-            s60 = compute_stats(gdf["alpha_60d"].tolist())
+        for k in all_keys:
+            s20 = grp20.get(k, _empty_s20)
+            s60 = grp60.get(k, _empty_s60)
             rows.append({
-                group_col:          grp_val,
+                group_col:          k,
                 "n":                s20["n"],
                 "20D均Alpha%":      s20["mean"],
                 "20D中位Alpha%":    s20["median"],

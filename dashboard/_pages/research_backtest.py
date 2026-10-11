@@ -184,20 +184,27 @@ def page_research_backtest() -> None:
             st.info("請點側欄「🔄 重新整理資料」清除快取後再試。")
             return
 
-        n_total = res.get("n_total_candidates", 0)
-        n_usable = res.get("n_usable", 0)
+        n_total    = res.get("n_total_candidates", 0)
+        n_usable   = res.get("n_usable", 0)
+        n_dedup_20 = res.get("n_dedup_20", "—")
+        n_dedup_60 = res.get("n_dedup_60", "—")
         raw_df = res.get("raw_df", pd.DataFrame())
 
         # 摘要指標
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Candidates（cutoff 前）", f"{n_total:,}")
-        c2.metric("有 20D Return", f"{n_usable:,}")
+        c2.metric("Raw N（有 20D Return）", f"{n_usable:,}",
+                  help="含重疊樣本的原始觀察數；不直接用於分組統計。")
+        c3.metric("20D Dedup N", f"{n_dedup_20:,}" if isinstance(n_dedup_20, int) else n_dedup_20,
+                  help="同股票 20 交易日冷卻後的樣本數；Setup / PT / MA / Regime 20D 統計基於此。")
+        c4.metric("60D Dedup N", f"{n_dedup_60:,}" if isinstance(n_dedup_60, int) else n_dedup_60,
+                  help="同股票 60 交易日冷卻後的樣本數；所有分組的 60D 統計基於此。")
         if not raw_df.empty:
             n_dates = raw_df["date"].nunique()
             date_min = raw_df["date"].min()
             date_max = raw_df["date"].max()
-            c3.metric("日期數", f"{n_dates}")
-            c4.metric("日期範圍", f"{date_min} ~ {date_max}")
+            c5.metric("日期數", f"{n_dates}")
+            c6.metric("日期範圍", f"{date_min} ~ {date_max}")
 
         if raw_df.empty:
             st.info("無可用資料。")
@@ -264,6 +271,11 @@ def page_research_backtest() -> None:
                 "表示原始顯著性很可能主要來自重複樣本，**非真實策略優勢**。"
                 "去重後 n 大幅縮水且 CI 跨越 0 則結論應保守。"
             )
+
+        st.caption(
+            "⬇️ 以下所有分組統計：20D 欄位基於 **20D Dedup 樣本**，60D 欄位基於 **60D Dedup 樣本**。"
+            "各組的 n 為該組在 20D Dedup 樣本中的筆數。Raw N 僅在上方樣本獨立性診斷中呈現。"
+        )
 
         st.divider()
 

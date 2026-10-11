@@ -338,3 +338,78 @@ def test_ma20_bracket_boundaries(gap, expected):
 ])
 def test_ma60_bracket_boundaries(gap, expected):
     assert ma60_bracket(gap) == expected
+
+
+# ── _group_stats cohort isolation ────────────────────────────
+
+from datetime import date as _date, timedelta as _td
+import pandas as pd
+from src.services.research_backtest_service import ResearchBacktestService
+
+
+def _make_df(rows):
+    return pd.DataFrame(rows)
+
+
+def _grp(stock_id, grp_val, alpha_20, alpha_60):
+    return {
+        "stock_id":     stock_id,
+        "date":         _date(2024, 1, 2),
+        "group":        grp_val,
+        "alpha_20d":    alpha_20,
+        "alpha_60d":    alpha_60,
+    }
+
+
+class TestGroupStatsCohortIsolation:
+    def test_20d_stats_come_from_df_20(self):
+        """When df_20 and df_60 have different rows, 20D stats must use df_20."""
+        df_20 = _make_df([
+            _grp("A", "setup1", 5.0, None),  # positive alpha_20
+            _grp("B", "setup1", 5.0, None),
+        ])
+        df_60 = _make_df([
+            _grp("A", "setup1", None, -3.0),  # negative alpha_60
+            _grp("B", "setup1", None, -3.0),
+        ])
+        out = ResearchBacktestService._group_stats(df_20, "group", None, df_60=df_60)
+        assert not out.empty
+        row = out[out["group"] == "setup1"].iloc[0]
+        # 20D stats from df_20: both +5.0 → mean=5.0, win_rate=100
+        assert row["20D均Alpha%"] == pytest.approx(5.0)
+        assert row["20D勝率%"] == 100.0
+        # 60D stats from df_60: both −3.0 → mean=−3.0, win_rate=0
+        assert row["60D均Alpha%"] == pytest.approx(-3.0)
+        assert row["60D勝率%"] == 0.0
+
+    def test_n_column_reflects_df_20_size(self):
+        """'n' must be the count in df_20, not df_60."""
+        df_20 = _make_df([_grp("A", "g", 1.0, None), _grp("B", "g", 1.0, None)])
+        df_60 = _make_df([_grp("A", "g", None, 2.0)])
+        out = ResearchBacktestService._group_stats(df_20, "group", None, df_60=df_60)
+        assert out[out["group"] == "g"].iloc[0]["n"] == 2
+
+    def test_group_with_no_df_60_entry_has_null_60d(self):
+        """If a group exists in df_20 but not df_60, 60D stats should be None."""
+        df_20 = _make_df([_grp("A", "g1", 2.0, None), _grp("B", "g1", 2.0, None)])
+        df_60 = _make_df([_grp("A", "g2", None, 1.0)])  # different group
+        out = ResearchBacktestService._group_stats(df_20, "group", None, df_60=df_60)
+        g1_row = out[out["group"] == "g1"].iloc[0]
+        assert g1_row["60D均Alpha%"] is None
+
+    def test_backward_compat_no_df_60(self):
+        """When df_60 is None, fall back to computing 60D stats from df_20."""
+        df = _make_df([_grp("A", "g", 1.0, 2.0), _grp("B", "g", 1.0, 2.0)])
+        out = ResearchBacktestService._group_stats(df, "group", None, df_60=None)
+        assert not out.empty
+        assert out.iloc[0]["60D均Alpha%"] == pytest.approx(2.0)
+
+    def test_ordering_preserved(self):
+        """Explicit order list must be applied to output rows."""
+        df = _make_df([
+            _grp("A", "C", 1.0, 1.0),
+            _grp("B", "A", 1.0, 1.0),
+            _grp("C", "B", 1.0, 1.0),
+        ])
+        out = ResearchBacktestService._group_stats(df, "group", ["A", "B", "C"])
+        assert list(out["group"]) == ["A", "B", "C"]
