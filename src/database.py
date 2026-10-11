@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Out-of-Sample: forward_signals.trade_date >= RESEARCH_CUTOFF_DATE
 RESEARCH_CUTOFF_DATE: _date = _date(2026, 10, 9)
 
-MODEL_VERSION = "v7.0"
+MODEL_VERSION = "v8.0"
 
 
 class Base(DeclarativeBase):

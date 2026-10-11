@@ -112,7 +112,7 @@ class TestMA60StructureOrdering:
         setup = self.az._detect_setup(
             cur=100.0, mas=mas,
             ma_trend="neutral", ma20_slope="down", ma60_slope="up",
-            breakout_20d=False, near_20d=False,
+            breakout_20d=False, near_20d=False, failed_breakout=False,
             vol_ratio=1.5,
         )
         assert setup != "ma60_support", (
@@ -125,7 +125,7 @@ class TestMA60StructureOrdering:
         setup = self.az._detect_setup(
             cur=100.0, mas=mas,
             ma_trend="neutral", ma20_slope="down", ma60_slope="up",
-            breakout_20d=False, near_20d=False,
+            breakout_20d=False, near_20d=False, failed_breakout=False,
             vol_ratio=0.7,
         )
         assert setup == "ma60_support", f"Low vol_ratio should yield ma60_support, got '{setup}'"

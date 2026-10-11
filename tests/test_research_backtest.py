@@ -54,7 +54,7 @@ def test_research_only_uses_pre_cutoff_data():
 
     svc = ResearchBacktestService()
     with patch("src.services.research_backtest_service.ResearchBacktestService._build_raw_df") as mock_build:
-        mock_build.return_value = (__import__("pandas").DataFrame(), 0)
+        mock_build.return_value = (__import__("pandas").DataFrame(), 0, {})
         svc.compute()
         mock_build.assert_called_once()
 

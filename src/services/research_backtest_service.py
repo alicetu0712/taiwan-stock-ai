@@ -340,7 +340,10 @@ class ResearchBacktestService:
             if not sdates:
                 return None, None
             idx = bisect.bisect_left(sdates, entry_date)
-            if idx >= len(sdates):
+            if idx >= len(sdates) or sdates[idx] != entry_date:
+                # Require exact match — do NOT slide to the next trading day.
+                # A non-trading-day analysis date means the pipeline ran on a
+                # holiday; using the next day's price would silently corrupt returns.
                 return None, None
             entry = price_dict[sid][sdates[idx]]
             if idx + n_days < len(sdates):
@@ -352,6 +355,11 @@ class ResearchBacktestService:
         rows = []
         for ar in ar_rows:
             d = ar.date if isinstance(ar.date, date) else ar.date
+
+            # Skip rows whose analysis date has no price record — indicates the
+            # pipeline ran on a non-trading day and produced invalid analysis.
+            if d not in price_dict.get(ar.stock_id, {}):
+                continue
 
             ret20, _ = _fwd(ar.stock_id, d, 20)
             ret60, _ = _fwd(ar.stock_id, d, 60)
@@ -462,12 +470,41 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
 
     Append-only：(trade_date, stock_id) 已存在則 skip，永不 UPDATE。
     Returns: 實際插入筆數
+
+    Validity gate（fail-closed）:
+    - trade_date 必須有對應的 DailyPrice 記錄（表示是交易日且資料已入庫）
+    - 若無，直接 return 0，不寫入任何資料
+    - 防止 non-trading-day analysis 污染 OOS evidence
     """
     from src.database import DailyPrice, ForwardSignal, MODEL_VERSION, Recommendation, Stock
+    from src.core.trading_calendar import TaiwanTradingCalendar
     from datetime import timedelta
 
     if not today_ars:
         return 0
+
+    # ── Validity Gate ────────────────────────────────────────────────
+    cal = TaiwanTradingCalendar()
+    if not cal.is_trading_day(trade_date):
+        logger.warning(
+            f"[write_forward_signals] REJECTED: {trade_date} 非交易日，"
+            f"不寫入 Forward signals（OOS evidence integrity gate）"
+        )
+        return 0
+
+    price_exists = (
+        session.query(DailyPrice.stock_id)
+        .filter(DailyPrice.date == trade_date)
+        .limit(1)
+        .first()
+    )
+    if not price_exists:
+        logger.warning(
+            f"[write_forward_signals] REJECTED: {trade_date} 無 DailyPrice 資料，"
+            f"不寫入 Forward signals（OOS evidence integrity gate）"
+        )
+        return 0
+    # ── End Validity Gate ────────────────────────────────────────────
 
     stock_ids = [ar.stock_id for ar in today_ars]
 
@@ -703,8 +740,9 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
             fwd_0050 = p0050.get(sorted_0050[t0050_idx])
             if not fwd_0050:
                 return None, None
-            ret = round((fwd_close - entry) / entry * 100, 2)
-            alpha = round(ret - (fwd_0050 - p0_entry) / p0_entry * 100, 2)
+            ret   = round((fwd_close - entry) / entry * 100 - ROUND_TRIP_COST, 2)
+            b_ret = round((fwd_0050 - p0_entry) / p0_entry * 100 - ROUND_TRIP_COST, 2)
+            alpha = round(ret - b_ret, 2)
             return ret, alpha
 
         ret_20, alpha_20 = _return_at(20)
@@ -728,7 +766,9 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                     t1_day = i - idx_s + 1
                     break
 
-        if t1_day:
+        if t1_day and stop_day:
+            note = "T1_HIT" if t1_day < stop_day else "STOP_TRIGGERED"
+        elif t1_day:
             note = "T1_HIT"
         elif stop_day:
             note = "STOP_TRIGGERED"

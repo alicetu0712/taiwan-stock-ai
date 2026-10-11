@@ -135,7 +135,7 @@ class TestFetchTwseDaily:
             ok=True,
             json=lambda: [self._make_twse_row()],
         )
-        df = fetch_twse_daily(date(2025, 7, 1))
+        df, api_date = fetch_twse_daily(date(2025, 7, 1))
         assert isinstance(df, pd.DataFrame)
 
     @patch("src.collectors.price_collector.requests.get")
@@ -143,7 +143,7 @@ class TestFetchTwseDaily:
         from src.collectors.price_collector import fetch_twse_daily
 
         mock_get.return_value = MagicMock(ok=False)
-        df = fetch_twse_daily(date(2025, 7, 1))
+        df, api_date = fetch_twse_daily(date(2025, 7, 1))
         assert df.empty
 
     @patch("src.collectors.price_collector.requests.get")
@@ -155,7 +155,7 @@ class TestFetchTwseDaily:
             self._make_twse_row(code="9999", close="---"),  # 停牌
         ]
         mock_get.return_value = MagicMock(ok=True, json=lambda: rows)
-        df = fetch_twse_daily(date(2025, 7, 1))
+        df, api_date = fetch_twse_daily(date(2025, 7, 1))
         if not df.empty:
             assert (
                 "9999" not in df["stock_id"].values

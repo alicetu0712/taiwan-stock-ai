@@ -183,6 +183,7 @@ def page_scorecard() -> None:
         sc3.metric("勝率", "—")
         sc4.metric("平均 Alpha", "—")
         sc5.metric("達 T1 率", "—")
+    st.caption("報酬均為淨報酬，已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）。Alpha = 股票淨報酬 − 0050 淨報酬。")
     st.markdown("---")
 
     if not filtered:
@@ -248,8 +249,9 @@ def page_scorecard() -> None:
                     if r["t1_hit_day"]:
                         st.caption(f"T1 達成日：第 {r['t1_hit_day']} 交易日")
                     st.markdown(
-                        f"20D 報酬：{_fmt(ret_20, '%', plus=True)}  \n"
+                        f"20D 淨報酬：{_fmt(ret_20, '%', plus=True)}  \n"
                         f"20D Alpha：{_fmt(alpha_20, '%', plus=True)}  \n"
-                        f"60D 報酬：{_fmt(r['fwd_return_60d'], '%', plus=True)}  \n"
+                        f"60D 淨報酬：{_fmt(r['fwd_return_60d'], '%', plus=True)}  \n"
                         f"60D Alpha：{_fmt(r['alpha_60d'], '%', plus=True)}"
                     )
+                    st.caption("淨報酬已扣估計交易成本 0.585%（手續費＋證交稅，不含滑價）")

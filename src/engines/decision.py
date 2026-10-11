@@ -77,7 +77,7 @@ class StockRecommendation:
     cooldown_override: bool = False
     # ── V2 Price Trend 欄位 ──────────────────────────────────
     price_trend_score: float = 0.0    # PriceTrend 0-100（V2: 45%）
-    setup_type: str = "none"          # breakout/pullback_buy/pullback_hold/trending/breakdown/none
+    setup_type: str = "none"          # breakout/near_breakout/failed_breakout/pullback_buy/pullback_hold/trending/breakdown/none
     ma20_gap: Optional[float] = None  # (close−MA20)/MA20 × 100%
     trade_signal: str = "wait"        # strong_buy/buy/wait/reduce/sell
     # ── 短線交易關鍵欄位 ─────────────────────────────────────
@@ -169,7 +169,9 @@ def entry_quality_label(r: dict) -> str:
         return "可進場"
     if setup == "pullback_buy":
         return "回檔機會"
-    if signal == "reduce":
+    if setup == "near_breakout":
+        return "等待突破確認"
+    if signal == "reduce" or setup == "failed_breakout":
         return "縮減部位"
     if setup == "breakdown" or signal == "sell":
         return "避開"
@@ -185,6 +187,12 @@ def tomorrow_triggers(r: dict) -> list:
     if setup == "breakout":
         triggers.append("突破後若量能同步增強且收在高位 → 買進條件增強")
         triggers.append("縮量整理未破突破位 → 正常鞏固，持續觀察")
+    elif setup == "near_breakout":
+        triggers.append("收盤站上前20日高點且量增 → 突破確認，可考慮進場")
+        triggers.append("量縮但未突破 → 繼續觀察，不急於追進")
+    elif setup == "failed_breakout":
+        triggers.append("若能重新站回前高並放量 → 突破重新有效")
+        triggers.append("持續低於前高且無量 → 多頭陷阱確認，建議減碼")
     elif setup == "pullback_buy":
         triggers.append("守住支撐區域且出現量縮回測 → 進場條件趨於成熟")
         triggers.append("跌破支撐且無收復跡象 → 訊號弱化，暫緩觀察")
@@ -218,10 +226,11 @@ def trade_thesis(r: dict) -> dict:
         return {"assumption": "", "invalidations": []}
 
     assumptions = {
-        "breakout":      "股價突破關鍵壓力且量能配合，預期延續上升趨勢。",
-        "pullback_buy":  "中期趨勢向上，目前回測至支撐區，預期重新轉強。",
-        "pullback_hold": "上升趨勢完整，正處於健康回測階段，MA60 仍向上。",
-        "trending":      "強勢多頭趨勢持續，目前無明顯轉弱跡象，順勢追蹤。",
+        "breakout":        "股價突破關鍵壓力且量能配合，預期延續上升趨勢。",
+        "near_breakout":   "股價接近前高壓力區，量能若配合有機會向上突破。",
+        "pullback_buy":    "中期趨勢向上，目前回測至支撐區，預期重新轉強。",
+        "pullback_hold":   "上升趨勢完整，正處於健康回測階段，MA60 仍向上。",
+        "trending":        "強勢多頭趨勢持續，目前無明顯轉弱跡象，順勢追蹤。",
     }
 
     struct_invalidations = {
@@ -781,19 +790,23 @@ class DecisionEngine:
 
     def _estimate_holding(self, setup_type: str) -> str:
         return {
-            "breakout":     "15–30 交易日",
-            "pullback_hold": "20–40 交易日",
-            "trending":     "20–50 交易日",
-            "none":         "20–40 交易日",
+            "breakout":        "15–30 交易日",
+            "near_breakout":   "等突破確認後評估",
+            "failed_breakout": "考慮降低持倉",
+            "pullback_hold":   "20–40 交易日",
+            "trending":        "20–50 交易日",
+            "none":            "20–40 交易日",
         }.get(setup_type, "20–40 交易日")
 
     def _build_summary(self, rec: StockRecommendation) -> str:
         """一句話推薦摘要（短線版）。"""
         setup_desc = {
-            "breakout":     "突破型，股價接近或站上20日新高",
-            "pullback_hold": "回踩守穩，回踩均線後支撐有效",
-            "trending":     "趨勢延伸，均線多頭排列中",
-            "none":         "等待更明確的進場訊號",
+            "breakout":        "突破型，今日收盤站上20日新高",
+            "near_breakout":   "接近前高，等待突破確認",
+            "failed_breakout": "突破失敗，多頭陷阱警示",
+            "pullback_hold":   "回踩守穩，回踩均線後支撐有效",
+            "trending":        "趨勢延伸，均線多頭排列中",
+            "none":            "等待更明確的進場訊號",
         }
         level_desc = {
             "A+": "Short-term Bullish（強勢）",
@@ -855,6 +868,10 @@ class DecisionEngine:
             st = getattr(technical_result, "setup_type", "none")
             if st == "breakout":
                 points.append("確認突破後能否站穩，量能是否持續")
+            elif st == "near_breakout":
+                points.append("觀察能否在放量配合下突破前高壓力")
+            elif st == "failed_breakout":
+                points.append("突破失敗，注意是否持續低於前高，部位需謹慎")
             elif st == "pullback_hold":
                 points.append("確認 MA20 是否守穩，不破支撐")
             elif st == "trending":

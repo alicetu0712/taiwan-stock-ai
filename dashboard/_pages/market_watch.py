@@ -26,14 +26,16 @@ logger = logging.getLogger(__name__)
 # ── 視覺常數 ──────────────────────────────────────────────────────
 
 _SETUP_META = {
-    "breakout":      {"label": "突破前高",      "color": "#0288d1", "bg": "#0d47a1", "icon": "🚀"},
-    "pullback_buy":  {"label": "回踩買點 MA10", "color": "#43a047", "bg": "#1b5e20", "icon": "🟢"},
-    "pullback_hold": {"label": "回踩守穩 MA20", "color": "#66bb6a", "bg": "#2e7d32", "icon": "🟩"},
-    "ma60_support":  {"label": "回踩MA60支撐",  "color": "#ab47bc", "bg": "#4a148c", "icon": "🔵"},
-    "trending":      {"label": "趨勢延伸",       "color": "#42a5f5", "bg": "#1565c0", "icon": "📈"},
-    "overextended":  {"label": "過度乖離",       "color": "#ffa726", "bg": "#e65100", "icon": "🔥"},
-    "breakdown":     {"label": "趨勢破壞",       "color": "#ef5350", "bg": "#b71c1c", "icon": "🔴"},
-    "none":          {"label": "無明確型態",     "color": "#78909c", "bg": "#263238", "icon": "⬜"},
+    "breakout":        {"label": "突破前高",       "color": "#0288d1", "bg": "#0d47a1", "icon": "🚀"},
+    "near_breakout":   {"label": "接近前高",        "color": "#29b6f6", "bg": "#01579b", "icon": "🎯"},
+    "failed_breakout": {"label": "突破失敗",        "color": "#ff7043", "bg": "#bf360c", "icon": "⚠️"},
+    "pullback_buy":    {"label": "回踩買點 MA10",   "color": "#43a047", "bg": "#1b5e20", "icon": "🟢"},
+    "pullback_hold":   {"label": "回踩守穩 MA20",   "color": "#66bb6a", "bg": "#2e7d32", "icon": "🟩"},
+    "ma60_support":    {"label": "回踩MA60支撐",    "color": "#ab47bc", "bg": "#4a148c", "icon": "🔵"},
+    "trending":        {"label": "趨勢延伸",         "color": "#42a5f5", "bg": "#1565c0", "icon": "📈"},
+    "overextended":    {"label": "過度乖離",         "color": "#ffa726", "bg": "#e65100", "icon": "🔥"},
+    "breakdown":       {"label": "趨勢破壞",         "color": "#ef5350", "bg": "#b71c1c", "icon": "🔴"},
+    "none":            {"label": "無明確型態",       "color": "#78909c", "bg": "#263238", "icon": "⬜"},
 }
 
 _SIGNAL_META = {

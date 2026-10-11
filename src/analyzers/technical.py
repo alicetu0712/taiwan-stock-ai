@@ -287,20 +287,18 @@ class TechnicalAnalyzer:
         # ── 20日新高（12分）─────────────────────────────────
         breakout_20d = False
         near_20d_high = False
-        if n >= 20:
-            high_20d = float(np.max(high[-20:]))
+        if n >= 21:
+            prev_20d_high = float(np.max(high[-21:-1]))   # exclude today
             cur_close = float(close[-1])
-            # 近5日有沒有創20日新高
-            recent_highs = high[-5:] if n >= 5 else high
-            if float(np.max(recent_highs)) >= high_20d * 0.999:
+            if cur_close > prev_20d_high:
                 breakout_20d = True
                 score += 12
                 patterns.append("20日新高")
-            elif cur_close >= high_20d * 0.95:
+            elif cur_close >= prev_20d_high * 0.97:
                 near_20d_high = True
                 score += 7
                 patterns.append("接近20日高點")
-            elif cur_close >= high_20d * 0.90:
+            elif cur_close >= prev_20d_high * 0.90:
                 score += 3
 
         # ── HH/HL 結構（8分）────────────────────────────────

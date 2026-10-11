@@ -110,8 +110,8 @@ class PriceTrendAnalyzer:
         # ── ④ Breakout / Pullback Setup（10分）───────────────────
         vol_ratio = self._calc_vol_ratio(volume)
         result.volume_ratio = vol_ratio
-        breakout_20d, near_20d = self._check_breakout(close, high)
-        setup = self._detect_setup(cur, ma_vals, ma_trend, ma20_slope, ma60_slope, breakout_20d, near_20d, vol_ratio)
+        breakout_20d, near_20d, failed_breakout = self._check_breakout(close, high)
+        setup = self._detect_setup(cur, ma_vals, ma_trend, ma20_slope, ma60_slope, breakout_20d, near_20d, failed_breakout, vol_ratio)
         result.setup_type = setup
         result.setup_score = self._score_setup(setup, vol_ratio)
 
@@ -264,18 +264,36 @@ class PriceTrendAnalyzer:
         vol_ma = float(np.mean(volume[-20:]))
         return round(float(volume[-1]) / vol_ma, 2) if vol_ma > 0 else None
 
-    def _check_breakout(self, close: np.ndarray, high: np.ndarray) -> Tuple[bool, bool]:
+    def _check_breakout(self, close: np.ndarray, high: np.ndarray) -> Tuple[bool, bool, bool]:
+        """
+        Returns (breakout_20d, near_20d, failed_breakout).
+
+        breakout_20d:    today's close strictly exceeds the previous 20 days' high
+                         (high[-21:-1], excluding today) — confirmed breakout.
+        near_20d:        today's close is within 3% below prev_20d_high — approaching.
+        failed_breakout: a recent bar (last 3 days excl. today) peaked above prev_20d_high
+                         but today's close retreated below it — breakout attempt rejected.
+        """
         n = len(close)
-        if n < 20:
-            return False, False
-        high_20d = float(np.max(high[-20:]))
-        cur_close = float(close[-1])
-        recent_high = float(np.max(high[-5:])) if n >= 5 else float(high[-1])
-        return (recent_high >= high_20d * 0.999), (cur_close >= high_20d * 0.95)
+        if n < 21:
+            return False, False, False
+        prev_20d_high = float(np.max(high[-21:-1]))   # exclude today
+        cur_close     = float(close[-1])
+
+        breakout_20d = cur_close > prev_20d_high
+        near_20d     = (not breakout_20d) and (cur_close >= prev_20d_high * 0.97)
+
+        recent_peak   = float(np.max(high[-4:-1])) if n >= 4 else float(high[-2]) if n >= 2 else 0.0
+        failed_breakout = (
+            not breakout_20d
+            and recent_peak >= prev_20d_high * 0.999
+            and cur_close < prev_20d_high * 0.97
+        )
+        return breakout_20d, near_20d, failed_breakout
 
     def _detect_setup(
         self, cur: float, mas: Dict, ma_trend: str, ma20_slope: str, ma60_slope: str,
-        breakout_20d: bool, near_20d: bool, vol_ratio: Optional[float]
+        breakout_20d: bool, near_20d: bool, failed_breakout: bool, vol_ratio: Optional[float]
     ) -> str:
         ma10 = mas.get("ma10")
         ma20 = mas.get("ma20")
@@ -289,9 +307,17 @@ class PriceTrendAnalyzer:
         if ma20 and ma20 > 0 and (cur - ma20) / ma20 * 100 > 15:
             return "overextended"
 
-        # Breakout：近20日高點突破（量的差異由 volume_score 體現）
-        if breakout_20d or near_20d:
+        # Failed Breakout：近期曾突破但今收回壓力帶以下
+        if failed_breakout:
+            return "failed_breakout"
+
+        # 真正 Breakout：今日收盤超越前20日高點
+        if breakout_20d:
             return "breakout"
+
+        # Near Breakout：接近但尚未突破（距前高 3% 以內）
+        if near_20d:
+            return "near_breakout"
 
         # Pullback Buy：多頭排列，回踩 MA10 附近（±5%），仍在 MA20 上，縮量
         if ma10 and ma20 and ma_trend in ("bullish", "bullish_weak") and \
@@ -319,14 +345,16 @@ class PriceTrendAnalyzer:
     def _score_setup(self, setup: str, vol_ratio: Optional[float]) -> float:
         """Setup 基礎分（10分）：突破依量比加減分"""
         base = {
-            "breakout":      8.0,
-            "pullback_buy":  9.0,
-            "pullback_hold": 7.0,
-            "ma60_support":  7.0,   # 中期支撐待確認，低於 pullback_buy
-            "trending":      6.0,
-            "overextended":  2.0,
-            "breakdown":     0.0,
-            "none":          3.0,
+            "breakout":        8.0,
+            "near_breakout":   6.0,  # 接近但未突破：潛力等待
+            "failed_breakout": 2.0,  # 突破失敗：警示訊號
+            "pullback_buy":    9.0,
+            "pullback_hold":   7.0,
+            "ma60_support":    7.0,
+            "trending":        6.0,
+            "overextended":    2.0,
+            "breakdown":       0.0,
+            "none":            3.0,
         }.get(setup, 3.0)
 
         if setup == "breakout" and vol_ratio is not None:
@@ -365,6 +393,15 @@ class PriceTrendAnalyzer:
             if vol_ratio <= 0.8:  return 6.0
             if vol_ratio <= 1.0:  return 4.0
             return 2.0            # 放量下跌至MA60：賣壓仍在，慎入
+
+        if setup == "near_breakout":
+            if vol_ratio >= 1.5:  return 5.0  # 量能已在醞釀，蓄勢
+            if vol_ratio >= 1.0:  return 4.0
+            return 3.0
+
+        if setup == "failed_breakout":
+            if vol_ratio >= 1.5:  return 1.0  # 放量衰竭，確認失敗
+            return 2.0
 
         if setup == "breakdown":
             if vol_ratio >= 2.0:  return 0.0  # 爆量跌破：強賣訊
@@ -408,6 +445,12 @@ class PriceTrendAnalyzer:
                 return "strong_buy"   # 放量突破
             return "buy"
 
+        if setup == "near_breakout":
+            return "wait"   # 接近但未穿，等突破確認再進場
+
+        if setup == "failed_breakout":
+            return "reduce"  # 突破後收回：多頭陷阱，降低曝險
+
         if setup in ("pullback_hold", "trending") and trend in ("bullish", "bullish_weak"):
             return "buy"
 
@@ -424,14 +467,16 @@ class PriceTrendAnalyzer:
             "wait": "等待", "reduce": "減碼", "sell": "賣出",
         }
         setup_label = {
-            "breakout":      "突破前高",
-            "pullback_buy":  "回踩MA10買點",
-            "pullback_hold": "回踩MA20守穩",
-            "ma60_support":  "回踩MA60支撐",
-            "trending":      "趨勢延伸",
-            "overextended":  "過度乖離",
-            "breakdown":     "趨勢破壞",
-            "none":          "無明確型態",
+            "breakout":        "突破前高",
+            "near_breakout":   "接近前高待突破",
+            "failed_breakout": "突破失敗撤退",
+            "pullback_buy":    "回踩MA10買點",
+            "pullback_hold":   "回踩MA20守穩",
+            "ma60_support":    "回踩MA60支撐",
+            "trending":        "趨勢延伸",
+            "overextended":    "過度乖離",
+            "breakdown":       "趨勢破壞",
+            "none":            "無明確型態",
         }
         trend_label = {
             "bullish": "均線多頭", "bullish_weak": "短均線偏多",

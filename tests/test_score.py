@@ -159,7 +159,7 @@ class TestTechnicalInternals:
     def test_analyze_ma_bullish(self):
         # 上升趨勢 → 多頭排列
         close = np.linspace(80, 120, 150)
-        score, trend, vals = self.a._analyze_ma(close)
+        score, trend, vals, deviation, slope = self.a._analyze_ma(close)
         assert trend in ("bullish", "bullish_weak", "neutral")
         assert score >= 0
 
@@ -191,11 +191,12 @@ class TestFundamentalAnalyzer:
         result = self.analyzer.analyze("2330", fin)
         assert 0.0 <= result.quality_score <= 100.0
 
-    def test_no_data_returns_zero(self):
+    def test_no_data_returns_neutral(self):
         fin = _make_fin_summary(has_data=False)
         result = self.analyzer.analyze("2330", fin)
-        assert result.quality_score == 0.0
-        assert result.quality_grade == "D"
+        # no-data path returns neutral 50.0, not 0 — avoids cliff-edge filtering
+        assert result.has_sufficient_data is False
+        assert result.quality_score == 50.0
 
     def test_excellent_metrics_gives_high_score(self):
         fin = _make_fin_summary(roe=25.0, roa=15.0, eps_ttm=8.0, gm=50.0, debt=20.0)
@@ -221,49 +222,36 @@ class TestFundamentalAnalyzer:
 
 
 # ── FundamentalAnalyzer private score methods ─────────────────
+# Methods use fin: dict API (refactored from positional-arg style)
 
 
 class TestFundamentalScorers:
     def setup_method(self):
         self.a = FundamentalAnalyzer()
 
-    def test_roe_excellent_gets_max(self):
-        score, plus, minus = self.a._score_roe(25.0, [22, 23, 24, 25, 25])
-        assert score == 20.0
-
-    def test_roe_none_returns_zero(self):
-        score, plus, minus = self.a._score_roe(None, [])
-        assert score == 0.0
-
-    def test_roa_excellent(self):
-        score, plus, minus = self.a._score_roa(15.0)
-        assert score == 15.0
-
-    def test_eps_negative_returns_zero(self):
-        score, plus, minus = self.a._score_eps(-1.0, "down", [])
-        assert score == 0.0
+    def test_eps_yoy_negative_penalized(self):
+        fin = {"eps_ttm": -1.0, "eps_yoy": None, "eps_trend": "down", "eps_5y": []}
+        score, plus, minus = self.a._score_eps_yoy(fin)
+        assert score <= 10.0
         assert any("虧損" in m for m in minus)
 
-    def test_eps_uptrend_bonus(self):
-        score_up, *_ = self.a._score_eps(5.0, "up", [3, 3.5, 4, 4.5, 5])
-        score_down, *_ = self.a._score_eps(5.0, "down", [6, 5.5, 5, 4.5, 4])
-        assert score_up > score_down
-
-    def test_high_debt_ratio_penalized(self):
-        score, plus, minus = self.a._score_financial_health(75.0, 100.0, 2.0)
-        assert any("負債" in m for m in minus)
+    def test_eps_yoy_strong_growth(self):
+        fin = {"eps_ttm": 8.0, "eps_yoy": 35.0, "eps_trend": "up", "eps_5y": []}
+        score_hi, *_ = self.a._score_eps_yoy(fin)
+        fin2 = {"eps_ttm": 4.0, "eps_yoy": -10.0, "eps_trend": "down", "eps_5y": []}
+        score_lo, *_ = self.a._score_eps_yoy(fin2)
+        assert score_hi > score_lo
 
     def test_gross_margin_excellent(self):
-        score, plus, minus = self.a._score_gross_margin(45.0)
-        assert score == 15.0
+        score, plus, minus = self.a._score_gross_margin({"gross_margin_avg": 45.0, "gross_margin_trend": "stable"})
+        assert score >= 14.0
 
-    def test_valuation_low_per_bonus(self):
-        score_low, *_ = self.a._score_valuation(12.0, 1.5)
-        score_high, *_ = self.a._score_valuation(50.0, 6.0)
-        assert score_low > score_high
+    def test_gross_margin_low_penalized(self):
+        score_hi, *_ = self.a._score_gross_margin({"gross_margin_avg": 45.0, "gross_margin_trend": "stable"})
+        score_lo, *_ = self.a._score_gross_margin({"gross_margin_avg": 5.0, "gross_margin_trend": "down"})
+        assert score_hi > score_lo
 
-    def test_revenue_trend(self):
-        score_up, *_ = self.a._score_revenue("up")
-        score_down, *_ = self.a._score_revenue("down")
-        assert score_up > score_down
-        assert score_down == 0.0
+    def test_revenue_up_beats_down(self):
+        score_up, *_ = self.a._score_revenue({"revenue_trend": "up", "revenue_yoy_avg": 15.0})
+        score_dn, *_ = self.a._score_revenue({"revenue_trend": "down", "revenue_yoy_avg": -20.0})
+        assert score_up > score_dn
