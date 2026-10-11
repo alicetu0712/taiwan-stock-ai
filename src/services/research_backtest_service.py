@@ -86,7 +86,8 @@ def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict,
     同股票在 n_days 個「交易日」內只保留第一筆 signal，消除前向報酬重疊。
 
     委派至 dedup_by_trading_days()（src/utils/dedup_utils.py）。
-    計數邏輯優先順序：個股自身價格日→市場交易日曆(0050)→日曆天/1.4 最後手段。
+    計數邏輯優先順序：個股自身價格日 → 市場交易日曆(0050)。
+    若兩者均無資料，訊號以 fail-closed 方式排除（不猜日曆天數）。
     """
     if df.empty:
         return df.copy()

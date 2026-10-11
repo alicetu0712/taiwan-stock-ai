@@ -1,10 +1,10 @@
 """
 test_dedup_utils.py — 共用 dedup_by_trading_days() 單元測試
 
-驗證三種計數路徑：
+驗證兩種計數路徑 + fail-closed 行為：
   1. 個股自身 sorted_dates_map
   2. market_calendar (0050 proxy)
-  3. /1.4 日曆天 fallback
+  3. 無日曆：fail-closed（訊號排除，不猜）
 """
 
 import sys
@@ -48,29 +48,32 @@ class TestDedupByTradingDaysBasic:
         assert len(result) == 2
 
     def test_gap_below_threshold_drops_second(self):
+        cal = _mon_fri(date(2024, 1, 1), date(2024, 3, 31))
         signals = [
             ("A", date(2024, 1, 2)),
-            ("A", date(2024, 1, 10)),  # 8 cal → 5 tdays < 20 (fallback)
+            ("A", date(2024, 1, 10)),  # 5 tdays < 20 → dropped
         ]
-        result = dedup_by_trading_days(signals, 20)
+        result = dedup_by_trading_days(signals, 20, market_calendar=cal)
         assert result == [("A", date(2024, 1, 2))]
 
     def test_gap_above_threshold_keeps_both(self):
+        cal = _mon_fri(date(2024, 1, 1), date(2024, 3, 31))
         signals = [
             ("A", date(2024, 1, 2)),
-            ("A", date(2024, 3, 1)),  # 59 cal → 42 tdays >> 20 (fallback)
+            ("A", date(2024, 3, 1)),  # ~42 tdays >> 20 → kept
         ]
-        result = dedup_by_trading_days(signals, 20)
+        result = dedup_by_trading_days(signals, 20, market_calendar=cal)
         assert len(result) == 2
 
     def test_result_is_subsequence_of_input(self):
+        cal = _mon_fri(date(2024, 1, 1), date(2024, 3, 31))
         signals = [
             ("A", date(2024, 1, 2)),
             ("A", date(2024, 1, 5)),
             ("B", date(2024, 1, 3)),
             ("A", date(2024, 3, 1)),
         ]
-        result = dedup_by_trading_days(signals, 20)
+        result = dedup_by_trading_days(signals, 20, market_calendar=cal)
         for item in result:
             assert item in signals
 
@@ -161,22 +164,41 @@ class TestDedupWithSortedDatesMap:
         assert len(result) == 2
 
 
-# ── /1.4 fallback path ─────────────────────────────────────────
+# ── fail-closed (no calendar) ─────────────────────────────────
 
-class TestDedupFallback:
-    def test_boundary_28_cal_days_equals_20_tdays(self):
-        # int(28 / 1.4) = 20 → exactly at threshold → kept
+class TestDedupNoCalendar:
+    """When no trading calendar is available, independence cannot be confirmed.
+    The first signal per stock is always kept; any subsequent signal is excluded."""
+
+    def test_first_signal_always_kept(self):
+        signals = [("A", date(2024, 1, 2))]
+        result = dedup_by_trading_days(signals, 20)  # no calendar
+        assert result == [("A", date(2024, 1, 2))]
+
+    def test_subsequent_signal_excluded_no_calendar(self):
+        # No calendar → independence unknown → second signal excluded (fail-closed)
         signals = [
-            ("A", date(2024, 1, 1)),
-            ("A", date(2024, 1, 29)),  # 28 days later
+            ("A", date(2024, 1, 2)),
+            ("A", date(2024, 3, 1)),  # far apart but still excluded without calendar
+        ]
+        result = dedup_by_trading_days(signals, 20)
+        assert result == [("A", date(2024, 1, 2))]
+
+    def test_different_stocks_kept_regardless(self):
+        # Different stocks never interact; each first signal is always kept
+        signals = [
+            ("A", date(2024, 1, 2)),
+            ("B", date(2024, 1, 2)),
         ]
         result = dedup_by_trading_days(signals, 20)  # no calendar
         assert len(result) == 2
 
-    def test_below_threshold_dropped(self):
+    def test_no_calendar_warning_logged(self, caplog):
+        import logging
         signals = [
-            ("A", date(2024, 1, 1)),
-            ("A", date(2024, 1, 14)),  # 13 cal → int(9.28) = 9 < 20
+            ("A", date(2024, 1, 2)),
+            ("A", date(2024, 3, 1)),
         ]
-        result = dedup_by_trading_days(signals, 20)
-        assert len(result) == 1
+        with caplog.at_level(logging.WARNING, logger="src.utils.dedup_utils"):
+            dedup_by_trading_days(signals, 20)
+        assert any("fail-closed" in r.message for r in caplog.records)

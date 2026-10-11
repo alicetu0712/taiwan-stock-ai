@@ -6,6 +6,9 @@ dedup_utils.py — 共用的「交易日冷卻去重」邏輯
 """
 
 import bisect
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def dedup_by_trading_days(
@@ -23,7 +26,10 @@ def dedup_by_trading_days(
     Counting priority:
       1. sorted_dates_map[stock_id] — stock's own price dates (most precise)
       2. market_calendar            — Taiwan market proxy, e.g. sorted 0050 dates
-      3. (d - prev).days / 1.4      — calendar-day approximation, last resort only
+
+    Fail-closed: if neither source is available for a stock, the independence of
+    the signal cannot be confirmed → signal is excluded (not kept). A warning is
+    logged. No calendar-day approximation is used.
 
     Args:
         signals:          list of (stock_id, date), sorted ascending by date
@@ -50,7 +56,12 @@ def dedup_by_trading_days(
             elif market_calendar:
                 tdays = bisect.bisect_right(market_calendar, d) - bisect.bisect_right(market_calendar, prev)
             else:
-                tdays = int((d - prev).days / 1.4)
+                logger.warning(
+                    "dedup_by_trading_days: no trading calendar for %s at %s "
+                    "(prev kept: %s); signal excluded (fail-closed)",
+                    stock_id, d, prev,
+                )
+                continue  # independence unknown → exclude from independent sample
             if tdays >= n_trading_days:
                 result.append((stock_id, d))
                 last_kept[stock_id] = d

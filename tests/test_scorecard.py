@@ -4,7 +4,7 @@ test_scorecard.py — Overlapping Samples dedup 邏輯測試
 核心驗證：
   - _dedup_cohort 正確去除同一股票在冷卻期（交易日）內的重複訊號
   - _summary_stats 的 20D 和 60D 統計使用各自的 Dedup 樣本，而非 Raw N
-  - 不傳 market_calendar 時，退回 /1.4 fallback（純邏輯測試用途）
+  - 測試使用 Mon-Fri 模擬日曆（與 dedup_utils 保持一致）
 """
 
 import sys
@@ -20,6 +20,20 @@ from dashboard._pages.scorecard import (
 
 
 # ── helpers ───────────────────────────────────────────────────
+
+def _mon_fri(start: date, end: date) -> list:
+    """Generate Mon-Fri trading dates between start and end inclusive."""
+    cal, d = [], start
+    while d <= end:
+        if d.weekday() < 5:
+            cal.append(d)
+        d += timedelta(days=1)
+    return cal
+
+
+# Mon-Fri calendar covering Jan-Mar 2024 (used across tests)
+_TEST_CAL = _mon_fri(date(2024, 1, 1), date(2024, 3, 31))
+
 
 def _row(stock_id: str, trade_date: date, alpha_20: float | None = None,
          alpha_60: float | None = None, outcome: str | None = None) -> dict:
@@ -38,55 +52,64 @@ def _row(stock_id: str, trade_date: date, alpha_20: float | None = None,
 # ── _dedup_cohort ─────────────────────────────────────────────
 
 class TestDedupCohort:
-    """Tests use no market_calendar → /1.4 fallback.
-    28 calendar days / 1.4 = 20 trading days (exact), so boundary tests hold."""
+    """Tests use _TEST_CAL (Mon-Fri Jan–Mar 2024). Exact trading-day counts."""
 
     def test_no_overlap_keeps_all(self):
         rows = [
             _row("2330", date(2024, 1, 2)),
             _row("2454", date(2024, 1, 2)),
-            _row("2330", date(2024, 3, 1)),  # 59 cal days → 42 tdays >> 20
+            _row("2330", date(2024, 3, 1)),  # ~42 tdays >> 20 → kept
         ]
-        result = _dedup_cohort(rows, n_trading_days=20)
+        result = _dedup_cohort(rows, n_trading_days=20, market_calendar=_TEST_CAL)
         assert len(result) == 3
 
     def test_within_cooldown_drops_second(self):
         rows = [
             _row("2330", date(2024, 1, 2)),
-            _row("2330", date(2024, 1, 15)),  # 13 cal days → 9 tdays < 20
+            _row("2330", date(2024, 1, 15)),  # 9 tdays < 20 → dropped
         ]
-        result = _dedup_cohort(rows, n_trading_days=20)
+        result = _dedup_cohort(rows, n_trading_days=20, market_calendar=_TEST_CAL)
         assert len(result) == 1
         assert result[0]["trade_date"] == "2024-01-02"  # earliest kept
 
     def test_exactly_at_boundary_kept(self):
+        # Jan 2 → Jan 30 = exactly 20 Mon-Fri tdays → kept (boundary)
         rows = [
             _row("2330", date(2024, 1, 2)),
-            _row("2330", date(2024, 1, 30)),  # 28 cal days → int(28/1.4)=20 → kept
+            _row("2330", date(2024, 1, 30)),
         ]
-        result = _dedup_cohort(rows, n_trading_days=20)
+        result = _dedup_cohort(rows, n_trading_days=20, market_calendar=_TEST_CAL)
         assert len(result) == 2
+
+    def test_one_below_boundary_dropped(self):
+        # Jan 2 → Jan 29 = 19 Mon-Fri tdays → dropped
+        rows = [
+            _row("2330", date(2024, 1, 2)),
+            _row("2330", date(2024, 1, 29)),
+        ]
+        result = _dedup_cohort(rows, n_trading_days=20, market_calendar=_TEST_CAL)
+        assert len(result) == 1
 
     def test_different_stocks_independent(self):
         rows = [
             _row("2330", date(2024, 1, 2)),
             _row("2454", date(2024, 1, 3)),  # different stock, not affected
-            _row("2330", date(2024, 1, 5)),  # same stock, within cooldown
+            _row("2330", date(2024, 1, 5)),  # same stock, 3 tdays < 20 → dropped
         ]
-        result = _dedup_cohort(rows, n_trading_days=20)
+        result = _dedup_cohort(rows, n_trading_days=20, market_calendar=_TEST_CAL)
         stock_ids = [r["stock_id"] for r in result]
         assert stock_ids.count("2330") == 1
         assert stock_ids.count("2454") == 1
 
     def test_chain_dedup_three_signals(self):
-        """First kept → second dropped → third kept (34 cal days from first > 20 tdays)."""
+        """Jan 2 kept → Jan 10 (5 tdays) dropped → Feb 5 (24 tdays) kept → Feb 10 (4 tdays) dropped."""
         rows = [
-            _row("2330", date(2024, 1, 2)),   # kept
-            _row("2330", date(2024, 1, 10)),  # 8 cal → 5 tdays < 20 → dropped
-            _row("2330", date(2024, 2, 5)),   # 34 cal → 24 tdays >= 20 → kept
-            _row("2330", date(2024, 2, 10)),  # 5 cal → 3 tdays < 20 → dropped
+            _row("2330", date(2024, 1, 2)),
+            _row("2330", date(2024, 1, 10)),
+            _row("2330", date(2024, 2, 5)),
+            _row("2330", date(2024, 2, 10)),  # Sat — 4 tdays < 20
         ]
-        result = _dedup_cohort(rows, n_trading_days=20)
+        result = _dedup_cohort(rows, n_trading_days=20, market_calendar=_TEST_CAL)
         kept_dates = [r["trade_date"] for r in result]
         assert "2024-01-02" in kept_dates
         assert "2024-02-05" in kept_dates
@@ -99,26 +122,24 @@ class TestSummaryStatsDedup:
     def _make_rows(self):
         """
         Stock A appears 5 times, each 5 days apart (Jan 2, 7, 12, 17, 22).
-        Max span = 20 cal days → 14 tdays (via /1.4 fallback) < 20 → only first kept.
-        Stock B appears once on Jan 2 → always kept.
+        Via Mon-Fri calendar: Jan7 is Sun, so spans are 3/8/11/14 tdays — all < 20.
+        Only the first A signal is kept; Stock B (once) always kept → n_dedup_20 = 2.
         """
         base = date(2024, 1, 2)
         rows = []
-        # 5 A signals, 5 days apart — all within 14 tdays of the first
         for i in range(5):
             rows.append(_row("A", base + timedelta(days=5 * i), alpha_20=2.0))
-        # 1 B signal
         rows.append(_row("B", base, alpha_20=-1.0))
         return rows
 
     def test_raw_n_counts_all_buy_rows(self):
         rows = self._make_rows()
-        stats = _summary_stats(rows)
+        stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         assert stats["n_raw"] == 6
 
     def test_20d_dedup_n_reduced(self):
         rows = self._make_rows()
-        stats = _summary_stats(rows)
+        stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         # A: 5 signals but only 1 kept; B: 1 kept → dedup_20 = 2
         assert stats["n_dedup_20"] == 2
 
@@ -126,7 +147,7 @@ class TestSummaryStatsDedup:
         """With Raw N=6 the stats would be +2,+2,+2,+2,+2,−1 → avg=1.5, wr=83%.
         With 20D Dedup (A once + B once): avg=(2−1)/2=0.5, wr=50%."""
         rows = self._make_rows()
-        stats = _summary_stats(rows)
+        stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         s20 = stats["s20"]
         assert s20["n"] == 2
         assert abs(s20["avg_alpha"] - 0.5) < 0.01, f"Expected 0.5 got {s20['avg_alpha']}"
@@ -135,19 +156,18 @@ class TestSummaryStatsDedup:
     def test_60d_dedup_n_leq_20d_dedup_n(self):
         """60D Dedup is always a subset of (or equal to) 20D Dedup."""
         rows = self._make_rows()
-        stats = _summary_stats(rows)
+        stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         assert stats["n_dedup_60"] <= stats["n_dedup_20"]
 
     def test_empty_rows_returns_zero_n(self):
-        stats = _summary_stats([])
+        stats = _summary_stats([], market_calendar=_TEST_CAL)
         assert stats["n_raw"] == 0
         assert stats["s20"]["n"] == 0
         assert stats["s60"]["n"] == 0
 
     def test_ci95_none_when_only_one_sample(self):
         rows = [_row("A", date(2024, 1, 2), alpha_20=1.0)]
-        stats = _summary_stats(rows)
-        # 1 matured sample → CI cannot be computed
+        stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         assert stats["s20"]["ci95"] is None
 
     def test_ci95_present_with_two_samples(self):
@@ -155,6 +175,6 @@ class TestSummaryStatsDedup:
             _row("A", date(2024, 1, 2), alpha_20=2.0),
             _row("B", date(2024, 1, 2), alpha_20=0.0),
         ]
-        stats = _summary_stats(rows)
+        stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         assert stats["s20"]["ci95"] is not None
         assert stats["s20"]["ci95"] > 0

@@ -169,7 +169,8 @@ def _summary_stats(rows: list, market_calendar: list = None) -> dict:
     20D statistics are computed from the 20D-dedup cohort only.
     60D statistics are computed from the 60D-dedup cohort only.
     Raw N is reported for reference but NOT used in any statistic.
-    market_calendar: sorted list of 0050 trading dates; if None falls back to /1.4 approx.
+    market_calendar: sorted list of 0050 trading dates; if None, signals after the first
+    per stock have unknown independence and are excluded (fail-closed).
     """
     buy_rows = [r for r in rows if r["decision_label"] in buy_codes()]
 
