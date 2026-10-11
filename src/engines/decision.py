@@ -185,8 +185,13 @@ def tomorrow_triggers(r: dict) -> list:
 
     triggers = []
     if setup == "breakout":
-        triggers.append("突破後若量能同步增強且收在高位 → 買進條件增強")
-        triggers.append("縮量整理未破突破位 → 正常鞏固，持續觀察")
+        vol = r.get("vol_ratio")
+        if vol is not None and vol < 1.0:
+            triggers.append(f"⚠️ 突破成立但量比偏低（{vol:.1f}x），等明日放量確認後再考慮進場")
+            triggers.append("若明日量比 ≥ 1.0x 且收在突破位以上 → 訊號轉強")
+        else:
+            triggers.append("突破後若量能同步增強且收在高位 → 買進條件增強")
+            triggers.append("縮量整理未破突破位 → 正常鞏固，持續觀察")
     elif setup == "near_breakout":
         triggers.append("收盤站上前20日高點且量增 → 突破確認，可考慮進場")
         triggers.append("量縮但未突破 → 繼續觀察，不急於追進")

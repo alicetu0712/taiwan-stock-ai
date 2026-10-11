@@ -130,6 +130,11 @@ class PriceTrendAnalyzer:
             risk_signals.append(f"MA20 乖離 {ma20_gap:.1f}%，留意拉回")
         if setup == "breakdown":
             risk_signals.append("跌破 MA20 且均線下彎，趨勢破壞")
+        if setup == "breakout" and vol_ratio is not None and vol_ratio < 1.0:
+            risk_signals.append(
+                f"突破成立，但量比僅 {vol_ratio:.1f}x（低於均量），"
+                f"建議等放量確認再進場（現為觀察性突破）"
+            )
         result.risk_signals = risk_signals
 
         # ── Trade Signal ──────────────────────────────────────────
