@@ -96,29 +96,81 @@ def _fmt(v, suffix="", places=1, plus=False):
     return fmt
 
 
-def _summary_stats(rows: list) -> dict:
-    buy_rows = [r for r in rows if r["decision_label"] in buy_codes()]
-    matured  = [r for r in buy_rows if r["alpha_20d"] is not None]
-    if not matured:
-        return {"n_buy": len(buy_rows), "matured": 0, "winrate": None,
-                "avg_alpha": None, "t1_rate": None, "stop_rate": None, "ambiguous_rate": None}
+def _dedup_cohort(rows: list, cooldown_calendar_days: int) -> list:
+    """Per-stock cooldown dedup: keep first signal per stock in each cooldown window.
 
-    alphas = [r["alpha_20d"] for r in matured]
-    winrate = round(sum(1 for a in alphas if a > 0) / len(alphas) * 100, 1)
-    avg_alpha = round(sum(alphas) / len(alphas), 2)
-    # SAME_DAY_AMBIGUOUS is excluded from both t1_rate and stop_rate to avoid
-    # inflating or deflating either metric with unresolvable intraday order.
-    t1_rate   = round(sum(1 for r in matured if r["outcome_note"] == "T1_HIT")             / len(matured) * 100, 1)
-    stop_rate = round(sum(1 for r in matured if r["outcome_note"] == "STOP_TRIGGERED")      / len(matured) * 100, 1)
-    ambiguous_rate = round(sum(1 for r in matured if r["outcome_note"] == "SAME_DAY_AMBIGUOUS") / len(matured) * 100, 1)
+    Rows are assumed to contain 'stock_id' and 'trade_date' (ISO string or date).
+    Sorted ascending by trade_date; earliest signal in each window is retained.
+    """
+    from datetime import date as _date
+    last_kept: dict = {}
+    result = []
+    for r in sorted(rows, key=lambda x: x["trade_date"]):
+        td = r["trade_date"]
+        if isinstance(td, str):
+            td = _date.fromisoformat(td)
+        last = last_kept.get(r["stock_id"])
+        if last is None or (td - last).days >= cooldown_calendar_days:
+            result.append(r)
+            last_kept[r["stock_id"]] = td
+    return result
+
+
+def _ci95_mean(values: list) -> float | None:
+    """95% CI half-width for the mean: 1.96 × std / sqrt(n). Returns None if n < 2."""
+    import statistics
+    n = len(values)
+    if n < 2:
+        return None
+    return round(1.96 * statistics.stdev(values) / (n ** 0.5), 2)
+
+
+def _stats_block(matured: list, alpha_key: str) -> dict:
+    """Compute a standard stats dict from a list of matured rows."""
+    alphas = [r[alpha_key] for r in matured if r[alpha_key] is not None]
+    if not alphas:
+        return {"n": 0, "winrate": None, "avg_alpha": None, "ci95": None,
+                "t1_rate": None, "stop_rate": None, "ambiguous_rate": None}
+    n = len(alphas)
     return {
-        "n_buy":          len(buy_rows),
-        "matured":        len(matured),
-        "winrate":        winrate,
-        "avg_alpha":      avg_alpha,
-        "t1_rate":        t1_rate,
-        "stop_rate":      stop_rate,
-        "ambiguous_rate": ambiguous_rate,
+        "n":             n,
+        "winrate":       round(sum(1 for a in alphas if a > 0) / n * 100, 1),
+        "avg_alpha":     round(sum(alphas) / n, 2),
+        "ci95":          _ci95_mean(alphas),
+        # outcome rates are only meaningful on 20D outcomes
+        "t1_rate":       round(sum(1 for r in matured if r["outcome_note"] == "T1_HIT")              / n * 100, 1),
+        "stop_rate":     round(sum(1 for r in matured if r["outcome_note"] == "STOP_TRIGGERED")       / n * 100, 1),
+        "ambiguous_rate":round(sum(1 for r in matured if r["outcome_note"] == "SAME_DAY_AMBIGUOUS")   / n * 100, 1),
+    }
+
+
+# 20 trading days ≈ 28 calendar days; 60 trading days ≈ 84 calendar days
+_DEDUP_20_DAYS = 28
+_DEDUP_60_DAYS = 84
+
+
+def _summary_stats(rows: list) -> dict:
+    """
+    Compute dedup-aware stats.
+
+    20D statistics are computed from the 20D-dedup cohort only.
+    60D statistics are computed from the 60D-dedup cohort only.
+    Raw N is reported for reference but NOT used in any statistic.
+    """
+    buy_rows = [r for r in rows if r["decision_label"] in buy_codes()]
+
+    dedup_20 = _dedup_cohort(buy_rows, _DEDUP_20_DAYS)
+    dedup_60 = _dedup_cohort(buy_rows, _DEDUP_60_DAYS)
+
+    matured_20 = [r for r in dedup_20 if r["alpha_20d"] is not None]
+    matured_60 = [r for r in dedup_60 if r["alpha_60d"] is not None]
+
+    return {
+        "n_raw":       len(buy_rows),
+        "n_dedup_20":  len(dedup_20),
+        "n_dedup_60":  len(dedup_60),
+        "s20":         _stats_block(matured_20, "alpha_20d"),
+        "s60":         _stats_block(matured_60, "alpha_60d"),
     }
 
 
@@ -180,22 +232,66 @@ def page_scorecard() -> None:
 
     # ── 摘要統計 ──────────────────────────────────────────────
     stats = _summary_stats(filtered)
+    s20, s60 = stats["s20"], stats["s60"]
     st.markdown("---")
-    sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
-    sc1.metric("BUY / BUY ★ 信號", stats["n_buy"])
-    sc2.metric("已成熟（20D）", stats["matured"])
-    if stats["winrate"] is not None:
-        sc3.metric("勝率（Alpha > 0）", f"{stats['winrate']}%")
-        sc4.metric("平均 Alpha 20D", f"{stats['avg_alpha']:+.2f}%")
-        sc5.metric("達 T1 率", f"{stats['t1_rate']}%")
-        sc6.metric("⚠️ 同日模糊", f"{stats['ambiguous_rate']}%",
-                   help="同一交易日 High≥T1 且 Low≤Stop，日線資料無法判斷先後順序，不計入 T1 率或停損率")
+
+    # 樣本計數
+    cnt1, cnt2, cnt3, cnt4, cnt5, cnt6 = st.columns(6)
+    cnt1.metric(
+        "Raw N（BUY+）", stats["n_raw"],
+        help="全部 BUY / BUY★ 信號數量（含重疊）。不直接用於統計。",
+    )
+    cnt2.metric(
+        "20D Dedup N", stats["n_dedup_20"],
+        help=f"同一股票 {_DEDUP_20_DAYS} 日冷卻去重後的樣本數。20D 統計基於此集合。",
+    )
+    cnt3.metric(
+        "60D Dedup N", stats["n_dedup_60"],
+        help=f"同一股票 {_DEDUP_60_DAYS} 日冷卻去重後的樣本數。60D 統計基於此集合。",
+    )
+
+    # ── 20D 統計（基於 20D Dedup 樣本）──────────────────────────
+    st.markdown("**20D 統計**（基於 20D Dedup 樣本）")
+    d1, d2, d3, d4, d5, d6 = st.columns(6)
+    d1.metric("20D 已成熟", s20["n"] if s20["n"] else "—")
+    if s20["avg_alpha"] is not None:
+        ci_str = f"±{s20['ci95']:.2f}%" if s20["ci95"] is not None else ""
+        d2.metric("20D Alpha", f"{s20['avg_alpha']:+.2f}%",
+                  delta=ci_str or None, delta_color="off",
+                  help="20D Dedup 樣本的平均 Alpha；delta 為 95% CI 半寬")
+        d3.metric("20D 勝率", f"{s20['winrate']}%",
+                  help="Alpha > 0 的比例（20D Dedup 樣本）")
+        d4.metric("T1 率", f"{s20['t1_rate']}%")
+        d5.metric("停損率", f"{s20['stop_rate']}%")
+        d6.metric("⚠️ 同日模糊", f"{s20['ambiguous_rate']}%",
+                  help="同一交易日 High≥T1 且 Low≤Stop，日線資料無法判斷先後順序")
     else:
-        sc3.metric("勝率", "—")
-        sc4.metric("平均 Alpha", "—")
-        sc5.metric("達 T1 率", "—")
-        sc6.metric("⚠️ 同日模糊", "—")
-    st.caption("報酬均為淨報酬，已扣保守假設交易成本 0.585%（保守固定假設值；實際成本依券商折扣、標的類型而異，不含滑價）。Alpha = 股票淨報酬 − 0050 淨報酬。")
+        for col in (d2, d3, d4, d5, d6):
+            col.metric("—", "—")
+
+    # ── 60D 統計（基於 60D Dedup 樣本）──────────────────────────
+    if s60["n"] > 0:
+        st.markdown("**60D 統計**（基於 60D Dedup 樣本）")
+        e1, e2, e3, e4, *_ = st.columns(6)
+        e1.metric("60D 已成熟", s60["n"])
+        ci_str60 = f"±{s60['ci95']:.2f}%" if s60["ci95"] is not None else ""
+        e2.metric("60D Alpha", f"{s60['avg_alpha']:+.2f}%",
+                  delta=ci_str60 or None, delta_color="off",
+                  help="60D Dedup 樣本的平均 Alpha；delta 為 95% CI 半寬")
+        e3.metric("60D 勝率", f"{s60['winrate']}%",
+                  help="Alpha > 0 的比例（60D Dedup 樣本）")
+
+    st.caption(
+        "報酬均為淨報酬，已扣保守假設交易成本 0.585%。Alpha = 股票淨報酬 − 0050 淨報酬。"
+        f"Dedup：同一股票 20D/60D 冷卻（約 {_DEDUP_20_DAYS}/{_DEDUP_60_DAYS} 日曆日）去除重疊樣本；"
+        "統計直接在 Dedup 樣本上計算，Raw N 僅顯示用。"
+    )
+    st.caption(
+        "⚠️ **研究母體限制** — "
+        "統計來自「歷史 Analysis Candidate Pool」（每日通過前置篩選的個股），非台股全市場。 "
+        "**Historical Research may contain survivorship bias.** "
+        "歷史股票池未完整納入已下市證券，因此結果可能高估實際策略績效。"
+    )
     st.markdown("---")
 
     if not filtered:

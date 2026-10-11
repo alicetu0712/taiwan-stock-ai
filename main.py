@@ -289,8 +289,13 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
                 logger.warning(f"[Step 2] DB 無 {trade_date} 法人資料，使用空資料")
                 inst_df = pd.DataFrame()
         else:
-            inst_df = fetch_all_institutional(trade_date)
-            # 當日 API 未更新時，fallback 至 DB 最近一日法人資料（T-1）
+            inst_df, inst_source_date = fetch_all_institutional(trade_date)
+            if inst_source_date and trade_date and inst_source_date != trade_date:
+                logger.warning(
+                    f"[Step 2] CHIP_DATE_MISMATCH: 法人 API 實際日期 {inst_source_date}"
+                    f" ≠ 請求日期 {trade_date}，已拒絕，fallback 至 DB 最近資料。"
+                )
+            # 當日 API 未更新（或日期不符被拒絕）時，fallback 至 DB 最近一日法人資料（T-1）
             if inst_df is None or inst_df.empty:
                 from src.database import InstitutionalData
                 latest_chip_date = (

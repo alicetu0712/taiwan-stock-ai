@@ -8,7 +8,7 @@ chip_collector.py — 籌碼資料蒐集
 import logging
 import time
 from datetime import date
-from typing import Optional
+from typing import Optional, Tuple
 
 import pandas as pd
 import requests
@@ -39,9 +39,21 @@ def _get(url: str) -> Optional[list]:
     return None
 
 
-def fetch_twse_institutional() -> pd.DataFrame:
-    """TWSE 三大法人每日買賣超（上市）。"""
+def _parse_roc_date(roc_str: str) -> Optional[date]:
+    """民國日期字串（如 '1130706'）→ 西元 date，失敗回傳 None。"""
+    try:
+        s = str(roc_str).strip()
+        if len(s) < 7:
+            return None
+        return date(int(s[:3]) + 1911, int(s[3:5]), int(s[5:7]))
+    except Exception:
+        return None
+
+
+def fetch_twse_institutional() -> Tuple[pd.DataFrame, Optional[date]]:
+    """TWSE 三大法人每日買賣超（上市）。回傳 (DataFrame, api_date)。"""
     records = []
+    api_date: Optional[date] = None  # 從第一筆 Date 欄位取得 API 實際交易日
 
     # 外資
     data = _get(TWSE_API["foreign_net"])
@@ -50,6 +62,8 @@ def fetch_twse_institutional() -> pd.DataFrame:
             sid = str(row.get("Code", "")).strip()
             if not sid:
                 continue
+            if api_date is None:
+                api_date = _parse_roc_date(row.get("Date", ""))
             records.append(
                 {
                     "stock_id": sid,
@@ -69,6 +83,8 @@ def fetch_twse_institutional() -> pd.DataFrame:
             sid = str(row.get("Code", "")).strip()
             if not sid:
                 continue
+            if api_date is None:
+                api_date = _parse_roc_date(row.get("Date", ""))
             records_trust.append(
                 {
                     "stock_id": sid,
@@ -89,6 +105,8 @@ def fetch_twse_institutional() -> pd.DataFrame:
             sid = str(row.get("Code", "")).strip()
             if not sid:
                 continue
+            if api_date is None:
+                api_date = _parse_roc_date(row.get("Date", ""))
             records_dealer.append(
                 {
                     "stock_id": sid,
@@ -116,7 +134,7 @@ def fetch_twse_institutional() -> pd.DataFrame:
 
     df = df.reset_index().rename(columns={"index": "stock_id"})
     df["market"] = "TWSE"
-    df["date"] = date.today()
+    df["date"] = api_date or date.today()
 
     for col in ["foreign_net", "trust_net", "dealer_net"]:
         if col not in df.columns:
@@ -124,26 +142,29 @@ def fetch_twse_institutional() -> pd.DataFrame:
         df[col] = df[col].fillna(0)
 
     df["total_net"] = df["foreign_net"] + df["trust_net"] + df["dealer_net"]
-    logger.info(f"TWSE institutional: {len(df)} stocks")
-    return df
+    logger.info(f"TWSE institutional: {len(df)} stocks (api_date={api_date})")
+    return df, api_date
 
 
-def fetch_tpex_institutional() -> pd.DataFrame:
-    """TPEx 三大法人每日買賣超（上櫃）。"""
+def fetch_tpex_institutional() -> Tuple[pd.DataFrame, Optional[date]]:
+    """TPEx 三大法人每日買賣超（上櫃）。回傳 (DataFrame, api_date)。"""
     data = _get(TPEX_API["institutional"])
     if not data:
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
     records = []
+    api_date: Optional[date] = None  # 從第一筆 Date 欄位取得 API 實際交易日
     for row in data:
         sid = str(row.get("SecuritiesCompanyCode", "")).strip()
         if not sid:
             continue
+        if api_date is None:
+            api_date = _parse_roc_date(row.get("Date", ""))
         records.append(
             {
                 "stock_id": sid,
                 "market": "TPEx",
-                "date": date.today(),
+                "date": api_date or date.today(),
                 "foreign_net": _to_float(row.get("ForeignInvestorBuySellDifference")),
                 "trust_net": _to_float(row.get("InvestmentTrustBuySellDifference")),
                 "dealer_net": _to_float(row.get("DealerBuySellDifference")),
@@ -152,23 +173,43 @@ def fetch_tpex_institutional() -> pd.DataFrame:
 
     df = pd.DataFrame(records)
     if df.empty:
-        return df
+        return df, api_date
     for col in ["foreign_net", "trust_net", "dealer_net"]:
         df[col] = df[col].fillna(0)
     df["total_net"] = df["foreign_net"] + df["trust_net"] + df["dealer_net"]
-    logger.info(f"TPEx institutional: {len(df)} stocks")
-    return df
+    logger.info(f"TPEx institutional: {len(df)} stocks (api_date={api_date})")
+    return df, api_date
 
 
-def fetch_all_institutional(trade_date: Optional[date] = None) -> pd.DataFrame:
-    """合併上市 + 上櫃三大法人。"""
-    twse = fetch_twse_institutional()
-    tpex = fetch_tpex_institutional()
-    df = pd.concat([twse, tpex], ignore_index=True)
-    if trade_date:
+def fetch_all_institutional(
+    trade_date: Optional[date] = None,
+) -> Tuple[pd.DataFrame, Optional[date]]:
+    """合併上市 + 上櫃三大法人。回傳 (DataFrame, actual_source_date)。
+
+    actual_source_date = API 實際回傳的資料日期（可能 != trade_date）。
+    若 trade_date 與 actual_source_date 不符 → 拒絕入庫並回傳空 DataFrame，
+    呼叫方應 fallback 至 DB 最近一日資料，勿強制覆蓋日期。
+    """
+    twse_df, twse_api_date = fetch_twse_institutional()
+    tpex_df, tpex_api_date = fetch_tpex_institutional()
+    df = pd.concat([twse_df, tpex_df], ignore_index=True)
+
+    # TWSE 資料量更大，以其日期為主；TPEx 為備選
+    actual_source_date = twse_api_date or tpex_api_date
+
+    if trade_date and actual_source_date and trade_date != actual_source_date:
+        logger.error(
+            f"[DQ Gate] CHIP_DATE_MISMATCH: 要求 {trade_date} 的法人資料，"
+            f"但 API 回傳 {actual_source_date}。"
+            f"拒絕入庫，請等待 API 更新後重試。"
+        )
+        return pd.DataFrame(), actual_source_date
+
+    if trade_date and not df.empty:
         df["date"] = trade_date
+
     logger.info(f"Total institutional data: {len(df)} stocks")
-    return df
+    return df, actual_source_date
 
 
 def fetch_institutional_history_finmind(
@@ -291,7 +332,8 @@ class ChipCollector(BaseCollector):
     name = "chip"
 
     def collect(self, trade_date: Optional[date] = None, **kwargs) -> pd.DataFrame:
-        return fetch_all_institutional(trade_date)
+        df, _ = fetch_all_institutional(trade_date)
+        return df
 
     def validate(self, data: pd.DataFrame) -> tuple:
         if data is None or data.empty:

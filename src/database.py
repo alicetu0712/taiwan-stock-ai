@@ -53,6 +53,8 @@ class Stock(Base):
     market = Column(String(10))  # TWSE / TPEx
     industry = Column(String(50))
     listing_date = Column(Date)
+    delisted_date = Column(Date)     # None = 仍上市；非 None = 下市日期（供 survivorship bias 修正）
+    security_status = Column(String(20), default="listed")  # listed / delisted / suspended / unknown
     capital = Column(Float)  # 資本額（億）
     outstanding_shares = Column(Float)  # 流通股數（千股）
     is_excluded = Column(Boolean, default=False)
@@ -481,6 +483,30 @@ def get_engine() -> Engine:
     return engine
 
 
+def _migrate_stocks(engine) -> None:
+    """stocks テーブルに新カラムを追加（自動マイグレーション）。"""
+    from sqlalchemy import inspect, text
+
+    new_cols = [
+        ("delisted_date",   "DATE"),
+        ("security_status", "VARCHAR(20) DEFAULT 'listed'"),
+    ]
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns("stocks")}
+    except Exception:
+        return
+    with engine.begin() as conn:
+        for col_name, col_type in new_cols:
+            if col_name not in existing:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE stocks ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info(f"stocks: added column {col_name}")
+                except Exception as exc:
+                    logger.warning(f"stocks migration {col_name}: {exc}")
+
+
 def _migrate_forward_signals(engine) -> None:
     """forward_signals に新カラムを追加（既存 DB の自動マイグレーション）。"""
     from sqlalchemy import inspect, text
@@ -594,6 +620,7 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
+    _migrate_stocks(engine)
     _migrate_forward_signals(engine)
     _migrate_recommendations(engine)
     _migrate_decision_label_to_codes(engine)
