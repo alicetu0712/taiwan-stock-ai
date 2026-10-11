@@ -592,11 +592,29 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
             )
             no_rec_reason = no_rec_ai or no_rec_reason
 
+        # ── Stock-level Data Quality Map ──────────────────────────
+        from src.validators.stock_data_quality import assess_stock_quality
+        _inst_ids = set(inst_df["stock_id"].tolist()) if not inst_df.empty else set()
+        _dq_map: dict = {}
+        for _rec in top_recs:
+            _has_fin = bool(_dry_run_fin_summaries.get(_rec.stock_id, {}).get("has_data")) if dry_run else (_rec.quality_score > 5)
+            _dq_map[_rec.stock_id] = assess_stock_quality(
+                stock_id           = _rec.stock_id,
+                close              = _rec.close,
+                vol_ratio          = _rec.vol_ratio,
+                pt_score           = _rec.price_trend_score,
+                quality_score      = _rec.quality_score,
+                intelligence_score = _rec.intelligence_score,
+                has_inst_data      = _rec.stock_id in _inst_ids,
+                has_financial_data = _has_fin,
+            )
+
         # ── 持久化推薦與分析結果至資料庫 ─────────────────────────
         _save_recommendations(
             session, trade_date, top_recs, candidates, ai_reports, market_sentiment,
             opp_recs=opp_recs, watch_recs=watch_recs,
             source_price_date=source_price_date,
+            data_quality_map=_dq_map,
         )
 
         # ── Pipeline 漏斗統計 ──────────────────────────────────
@@ -886,7 +904,14 @@ def _sample_institutional(trade_date: date, stock_ids):
     return df
 
 
-def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment, opp_recs=None, watch_recs=None, source_price_date=None):
+def _dq_json(dq_map, stock_id) -> str | None:
+    """Serialize StockDataQuality to JSON string for DB storage."""
+    import json as _json
+    dq = (dq_map or {}).get(stock_id)
+    return _json.dumps(dq.to_dict()) if dq is not None else None
+
+
+def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_reports, market_sentiment, opp_recs=None, watch_recs=None, source_price_date=None, data_quality_map=None):
     """將推薦、分析結果、Decision Journal 持久化至資料庫。"""
     import json
     try:
@@ -981,6 +1006,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                     target2           = rec.target2,
                     atr               = rec.atr,
                     vol_ratio         = rec.vol_ratio,
+                    data_quality_json = _dq_json(data_quality_map, rec.stock_id),
                     is_valid          = True,
                     source_price_date = source_price_date,
                 )

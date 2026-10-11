@@ -221,6 +221,29 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
   </ul>
 </div>"""
 
+    # ── Stock-level Data Quality ────────────────────────────────
+    dq_html = ""
+    dq = r.get("data_quality")
+    if dq:
+        from src.validators.stock_data_quality import DQFlag, _FLAG_ICON, _CONFIDENCE_LABEL, _CONFIDENCE_COLOR
+        _icon   = lambda v: _FLAG_ICON.get(DQFlag(v), "?") if v else "❌"
+        _dq_lvl = dq.get("confidence", "medium")
+        cf_lbl  = _CONFIDENCE_LABEL.get(_dq_lvl, _dq_lvl)
+        cf_col  = _CONFIDENCE_COLOR.get(_dq_lvl, "#888")
+        dq_html = (
+            f'<div style="display:flex;align-items:center;gap:6px;margin:5px 0;'
+            f'font-size:0.68rem;color:#546e7a;flex-wrap:wrap">'
+            f'<span style="font-weight:600;color:#78909c">Data</span>'
+            f'<span>股價{_icon(dq.get("price"))}</span>'
+            f'<span>MA60{_icon(dq.get("ma60"))}</span>'
+            f'<span>量能{_icon(dq.get("volume"))}</span>'
+            f'<span>PT{_icon(dq.get("pt_score"))}</span>'
+            f'<span>法人{_icon(dq.get("institution"))}</span>'
+            f'<span>財務{_icon(dq.get("financial"))}</span>'
+            f'<span style="margin-left:4px;color:{cf_col};font-weight:600">信心：{cf_lbl}</span>'
+            f'</div>'
+        )
+
     # ── Entry quality badge ─────────────────────────────────────
     eq_color = "#e53935" if eq_label in ("追高", "避開") else "#00897b" if eq_label in ("理想進場點", "回檔機會") else "#7e57c2"
     eq_badge  = f'<span style="font-size:0.7rem;background:{eq_color}22;color:{eq_color};padding:2px 7px;border-radius:10px;font-weight:600">{eq_label}</span>'
@@ -255,6 +278,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
   {portfolio_html}
   {why_html}
   {trig_html}
+  {dq_html}
   <div style="font-size:0.7rem;color:#aaa;margin-top:6px">信心度 {conf}% · {level} 級 · {setup} {ma20_note}</div>
 </div>""",
         unsafe_allow_html=True,

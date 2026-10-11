@@ -221,6 +221,8 @@ class Recommendation(Base):
     target2     = Column(Float)
     atr         = Column(Float)
     vol_ratio   = Column(Float)
+    # Stock-level data quality (JSON: price/ma60/volume/pt_score/institution/financial + confidence)
+    data_quality_json = Column(Text)
     # Data Integrity — validity gate
     is_valid          = Column(Boolean, default=True)    # False = 此紀錄不得參與任何績效統計
     invalid_reason    = Column(String(60))               # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH / etc.
@@ -529,6 +531,8 @@ def _migrate_recommendations(engine) -> None:
         ("target2",           "FLOAT"),
         ("atr",               "FLOAT"),
         ("vol_ratio",         "FLOAT"),
+        # Stock-level data quality
+        ("data_quality_json", "TEXT"),
         # Data Integrity validity gate
         ("is_valid",          "BOOLEAN DEFAULT 1"),
         ("invalid_reason",    "VARCHAR(60)"),
