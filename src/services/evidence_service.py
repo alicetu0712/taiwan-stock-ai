@@ -260,92 +260,61 @@ def research_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
 def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
     """
     OOS evidence: ForwardSignal records matching setup_type + market_regime_at_signal.
-    Forward returns computed on-the-fly from DailyPrice.
+    Uses stored alpha_20d/alpha_60d (computed by compute_signal_outcomes with correct
+    NEXT_OPEN execution assumption).
+
+    STRICT: NEXT_OPEN and SIGNAL_CLOSE_LEGACY records are NEVER mixed.
+    Only NEXT_OPEN records with execution_price filled contribute to alpha stats.
+    Legacy records are counted but excluded from alpha computation.
     """
     empty = {
         "total_recorded": 0, "matured_20d": 0, "matured_60d": 0,
-        "alpha_20d": {"mean": None, "median": None, "winrate": None},
-        "alpha_60d": {"mean": None, "median": None, "winrate": None},
+        "n_legacy": 0,
+        "alpha_20d": {"mean": None, "median": None, "winrate": None, "p25": None, "p75": None, "p10": None, "p90": None},
+        "alpha_60d": {"mean": None, "median": None, "winrate": None, "p25": None, "p75": None, "p10": None, "p90": None},
         "tier_emoji": "🔴", "tier_label": "尚無 OOS 資料",
     }
     try:
-        from src.database import ForwardSignal, DailyPrice, get_session
+        from src.database import ForwardSignal, get_session
         s = get_session(engine)
         fs_rows = (
             s.query(ForwardSignal)
             .filter(ForwardSignal.setup_type == setup_type)
             .all()
         )
-        if not fs_rows:
-            s.close()
-            return empty
-
-        # Strict regime match only.
-        # Legacy records where market_regime_at_signal is NULL are excluded from
-        # regime-specific evidence (unknown regime ≠ bull/neutral/bear).
-        matching = [
-            r for r in fs_rows
-            if r.market_regime_at_signal == market_regime
-        ]
-        total = len(matching)
-        if total == 0:
-            s.close()
-            return empty
-
-        stock_ids = list({r.stock_id for r in matching})
-        min_date = min(r.trade_date for r in matching)
-        max_date = max(r.trade_date for r in matching) + timedelta(days=120)
-
-        price_rows = (
-            s.query(DailyPrice)
-            .filter(
-                DailyPrice.stock_id.in_(stock_ids + ["0050"]),
-                DailyPrice.date >= min_date,
-                DailyPrice.date <= max_date,
-            )
-            .order_by(DailyPrice.stock_id, DailyPrice.date)
-            .all()
-        )
         s.close()
+        if not fs_rows:
+            return empty
 
-        price_map: dict = {}
-        for row in price_rows:
-            if row.stock_id not in price_map:
-                price_map[row.stock_id] = {}
-            price_map[row.stock_id][row.date] = row.close
-        sorted_dates_map = {sid: sorted(dm.keys()) for sid, dm in price_map.items()}
-        p0050_map = price_map.get("0050", {})
-        sorted_0050 = sorted(p0050_map.keys())
+        # Strict regime match; NULL market_regime_at_signal excluded
+        matching = [r for r in fs_rows if r.market_regime_at_signal == market_regime]
+        if not matching:
+            return empty
 
-        matching_sorted = sorted(matching, key=lambda r: r.trade_date)
-        matching_tuples = [(r.stock_id, r.trade_date) for r in matching_sorted]
+        # ── STRICT TYPE SPLIT ──────────────────────────────────────────
+        # NEXT_OPEN and SIGNAL_CLOSE_LEGACY use different execution assumptions
+        # (next-day open vs signal-day close). Mixing them produces a blended
+        # alpha that is meaningless because the two entry prices are not comparable.
+        next_open = [r for r in matching if r.execution_price_type == "NEXT_OPEN"]
+        legacy    = [r for r in matching if r.execution_price_type != "NEXT_OPEN"]
+        n_legacy  = len(legacy)
 
-        dedup_pairs_20 = set(dedup_by_trading_days(matching_tuples, 20, sorted_dates_map, sorted_0050))
-        dedup_pairs_60 = set(dedup_by_trading_days(matching_tuples, 60, sorted_dates_map, sorted_0050))
+        # Use stored alpha from compute_signal_outcomes() — already correctly computed
+        # with NEXT_OPEN logic (execution_date open vs 0050 open same day).
+        # Stored as %, convert to decimal for _alpha_stats().
+        matured_20 = [r for r in next_open
+                      if r.outcomes_computed_at is not None and r.alpha_20d is not None]
+        matured_60 = [r for r in next_open
+                      if r.outcomes_computed_at is not None and r.alpha_60d is not None]
 
-        observations_20 = []
-        observations_60 = []
-        for r in matching_sorted:
-            entry = r.close_at_signal or price_map.get(r.stock_id, {}).get(r.trade_date)
-            if not entry:
-                continue
-            sdates = sorted_dates_map.get(r.stock_id, [])
-            idx_s = bisect.bisect_right(sdates, r.trade_date)
-            pair = (r.stock_id, r.trade_date)
-            if pair in dedup_pairs_20 and idx_s + 19 < len(sdates):
-                observations_20.append((r.stock_id, r.trade_date, entry))
-            if pair in dedup_pairs_60 and idx_s + 59 < len(sdates):
-                observations_60.append((r.stock_id, r.trade_date, entry))
-
-        alphas_20 = _compute_forward_alpha(observations_20, price_map, sorted_dates_map, p0050_map, sorted_0050, 20)
-        alphas_60 = _compute_forward_alpha(observations_60, price_map, sorted_dates_map, p0050_map, sorted_0050, 60)
+        alphas_20 = [r.alpha_20d / 100.0 for r in matured_20]
+        alphas_60 = [r.alpha_60d / 100.0 for r in matured_60]
 
         n_m20 = len(alphas_20)
         tier_emoji, tier_label = _evidence_tier(n_m20)
         return {
-            "total_recorded": total,
-            "n_dedup_20":     len(dedup_pairs_20),
-            "n_dedup_60":     len(dedup_pairs_60),
+            "total_recorded": len(next_open),
+            "n_legacy":       n_legacy,
             "matured_20d":    n_m20,
             "matured_60d":    len(alphas_60),
             "alpha_20d":      _alpha_stats(alphas_20),

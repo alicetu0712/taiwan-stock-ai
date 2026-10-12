@@ -970,6 +970,10 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                 b_ret = round((fwd_0050 - _p0) / _p0 * 100 - ROUND_TRIP_COST, 2)
                 return ret, round(ret - b_ret, 2)
         else:
+            # NEXT_OPEN records must never fall back to signal_close execution.
+            # If execution_price is not yet filled, skip — will retry on next pipeline run.
+            if fs.execution_price_type == "NEXT_OPEN":
+                continue
             if not fs.close_at_signal:
                 continue
             idx_s = bisect.bisect_right(sdates, fs.trade_date)
