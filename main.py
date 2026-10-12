@@ -1015,6 +1015,13 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
 
         # ── 儲存推薦紀錄（今日 Top N）────────────────────────
         top_ids = {r.stock_id for r in top_recs}
+
+        # 重跑同一天時，先把不在本次 top_recs 的舊 recommend 記錄設為 invalid
+        old_recs = session.query(Recommendation).filter_by(date=trade_date, tier="recommend").all()
+        for old in old_recs:
+            if old.stock_id not in top_ids:
+                old.is_valid = False
+
         for rec in top_recs:
             ai = ai_reports.get(rec.stock_id, {})
             # 避免同一天重複新增
