@@ -123,25 +123,33 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
 <div style="background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:8px 0">
   <div style="font-size:0.7rem;color:#666;margin-bottom:6px;font-weight:600">交易計劃</div>
   <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <div style="flex:1;min-width:65px;background:#e8f5e9;border-radius:6px;padding:5px 8px;text-align:center">
-      <div style="font-size:0.6rem;color:#2e7d32;font-weight:600">目標一</div>
-      <div style="font-size:0.88rem;font-weight:800;color:#2e7d32">{t1:.1f}{t2_str}</div>
-      <div style="font-size:0.6rem;color:#2e7d32">+{t1_pct}%</div>
+    <div style="flex:1;min-width:65px;background:#fff8e1;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.6rem;color:#f57f17;font-weight:600">理想進場</div>
+      <div style="font-size:0.88rem;font-weight:800;color:#f57f17">{entry_str}</div>
     </div>
     <div style="flex:1;min-width:65px;background:#fce4ec;border-radius:6px;padding:5px 8px;text-align:center">
       <div style="font-size:0.6rem;color:#c62828;font-weight:600">停損</div>
       <div style="font-size:0.88rem;font-weight:800;color:#c62828">{stop_p:.1f}</div>
       <div style="font-size:0.6rem;color:#c62828">{stop_pct}%</div>
     </div>
-    <div style="flex:1;min-width:65px;background:#fff8e1;border-radius:6px;padding:5px 8px;text-align:center">
-      <div style="font-size:0.6rem;color:#f57f17;font-weight:600">進場區間</div>
-      <div style="font-size:0.88rem;font-weight:800;color:#f57f17">{entry_str}</div>
+    <div style="flex:1;min-width:65px;background:#e8f5e9;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.6rem;color:#2e7d32;font-weight:600">目標一 / 二</div>
+      <div style="font-size:0.88rem;font-weight:800;color:#2e7d32">{t1:.1f}{t2_str}</div>
+      <div style="font-size:0.6rem;color:#2e7d32">+{t1_pct}%</div>
     </div>
     <div style="flex:1;min-width:65px;background:#e3f2fd;border-radius:6px;padding:5px 8px;text-align:center">
       <div style="font-size:0.6rem;color:#1565c0;font-weight:600">R/R</div>
       <div style="font-size:0.88rem;font-weight:800;color:{rr_color}">{rr}x</div>
     </div>
   </div>
+</div>"""
+    elif entry_low and entry_high and r.get("trade_signal") in ("strong_buy", "buy"):
+        # 有進場區間但缺止損/目標時，至少顯示進場區間
+        rr_html = f"""
+<div style="background:#fff8e1;border-left:3px solid #f57f17;border-radius:0 6px 6px 0;padding:7px 11px;margin:6px 0">
+  <div style="font-size:0.63rem;color:#e65100;font-weight:600;margin-bottom:2px">理想進場區間</div>
+  <div style="font-size:0.95rem;font-weight:800;color:#e65100">NT$ {entry_low:.1f} – {entry_high:.1f}</div>
+  <div style="font-size:0.65rem;color:#bf360c;margin-top:2px">停損 / 目標數據待補全，完整交易計劃暫不顯示</div>
 </div>"""
 
     # ── Position sizing ─────────────────────────────────────────

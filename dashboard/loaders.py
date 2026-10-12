@@ -16,6 +16,39 @@ from config import REPORTS_DIR
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_trading_plan(d: dict) -> dict:
+    """
+    Recompute entry/stop/target from current price + stored ATR
+    when the stored values are stale (computed from a different price era).
+    Stale = stop_price >= price, or entry_low > price * 1.5.
+    """
+    price     = d.get("price")
+    atr       = d.get("atr")
+    stop_p    = d.get("stop_price")
+    entry_low = d.get("entry_low")
+    if not price or price <= 0:
+        return d
+    stale = (
+        (stop_p  is not None and stop_p  >= price) or
+        (entry_low is not None and entry_low > price * 1.5)
+    )
+    if not stale:
+        return d
+    if atr and atr > 0 and atr < price * 0.5:
+        d["entry_low"]  = round(price - 0.3 * atr, 2)
+        d["entry_high"] = round(price + 0.3 * atr, 2)
+        d["stop_price"] = round(price - 2.0 * atr, 2)
+        d["target1"]    = round(price + 2.5 * atr, 2)
+        d["target2"]    = round(price + 5.0 * atr, 2)
+    else:
+        d["entry_low"]  = None
+        d["entry_high"] = None
+        d["stop_price"] = None
+        d["target1"]    = None
+        d["target2"]    = None
+    return d
+
+
 @st.cache_data(ttl=1800)
 def load_report(report_date: date) -> str:
     try:
@@ -347,6 +380,7 @@ def load_db_recommendations(target_date: date) -> list:
                     "missing_data_factors":   getattr(r, "missing_data_factors", None),
                 }
             )
+            _sanitize_trading_plan(result[-1])
         return result
     except Exception as e:
         logger.warning(f"load_db_recommendations failed: {e}")

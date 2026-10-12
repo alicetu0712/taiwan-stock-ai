@@ -142,7 +142,20 @@ def decision_label(r: dict) -> dict:
                 "is_override": True,
             }
         code = DecisionCode.STRONG_BUY.value if signal == "strong_buy" else DecisionCode.BUY.value
-        reason = "強烈買進訊號，型態與量能均佳" if signal == "strong_buy" else "買進訊號，進場條件成立"
+        vol_r = r.get("vol_ratio") or 0.0
+        if setup == "pullback_buy":
+            reason = "回測量縮，支撐確認，進場條件成立" if signal == "strong_buy" else "回測至支撐，進場條件成立"
+        elif setup == "breakout":
+            reason = (f"突破放量（量比 {vol_r:.1f}x），買進訊號確立" if vol_r >= 1.0
+                      else f"突破成立（量比 {vol_r:.1f}x，待確認），型態偏多")
+        elif setup == "near_breakout":
+            reason = "接近突破關鍵壓力，等待放量確認"
+        elif setup == "trending":
+            reason = "多頭趨勢延伸，動能持續，符合買進條件" if signal == "strong_buy" else "趨勢向上，進場條件成立"
+        elif setup == "pullback_hold":
+            reason = "上升趨勢健康回測，MA20 支撐守穩"
+        else:
+            reason = "強烈買進訊號，技術面與籌碼面同步偏多" if signal == "strong_buy" else "買進訊號，進場條件成立"
         return {"code": code, "label": to_display(code), "color": to_color(code), "reason": reason, "is_override": False}
 
     # Default: wait
@@ -201,8 +214,15 @@ def tomorrow_triggers(r: dict) -> list:
         triggers.append("若能重新站回前高並放量 → 突破重新有效")
         triggers.append("持續低於前高且無量 → 多頭陷阱確認，建議減碼")
     elif setup == "pullback_buy":
-        triggers.append("守住支撐區域且出現量縮回測 → 進場條件趨於成熟")
-        triggers.append("跌破支撐且無收復跡象 → 訊號弱化，暫緩觀察")
+        if signal in ("strong_buy", "buy"):
+            # BUY 已確立 → 執行框架：維持 / 不追 / 取消
+            triggers.append("✓ 守住 MA10 支撐且量縮整理 → 維持 BUY，可依交易計畫進場")
+            triggers.append("⚠ 開高明顯脫離進場區（乖離 MA10 > 3%）→ 不追價，等待下次回測")
+            triggers.append("❌ 跌破 MA10 / MA20 且收盤無法收復 → 取消 BUY，訊號失效")
+        else:
+            # 尚未達 BUY → 確認框架
+            triggers.append("守住支撐（MA10 附近）且量縮 → 進場條件趨於成熟")
+            triggers.append("跌破支撐且無收復跡象 → 訊號弱化，暫緩觀察")
     elif setup == "pullback_hold":
         triggers.append("觀察能否守住 MA20")
         triggers.append("跌破 MA20 收盤 → 趨勢考驗，留意部位風險")
@@ -232,13 +252,27 @@ def trade_thesis(r: dict) -> dict:
     if signal not in ("strong_buy", "buy"):
         return {"assumption": "", "invalidations": []}
 
-    assumptions = {
-        "breakout":        "股價突破關鍵壓力且量能配合，預期延續上升趨勢。",
-        "near_breakout":   "股價接近前高壓力區，量能若配合有機會向上突破。",
-        "pullback_buy":    "中期趨勢向上，目前回測至支撐區，預期重新轉強。",
-        "pullback_hold":   "上升趨勢完整，正處於健康回測階段，MA60 仍向上。",
-        "trending":        "強勢多頭趨勢持續，目前無明顯轉弱跡象，順勢追蹤。",
-    }
+    vol_r    = r.get("vol_ratio") or 0.0
+    ma20_gap = r.get("ma20_gap") or 0.0
+    ma60_gap = r.get("ma60_gap") or 0.0
+
+    # Evidence-based assumption text per setup
+    if setup == "pullback_buy":
+        vol_str  = f"量縮（量比 {vol_r:.1f}x）" if vol_r and vol_r <= 1.2 else "量能正常"
+        ma20_str = f"收在 MA20 上方 {ma20_gap:.1f}%" if ma20_gap > 0 else "近 MA20 支撐"
+        assumption = f"多頭排列，回踩 MA10，{vol_str}，{ma20_str}，支撐確認待轉強。"
+    elif setup == "breakout":
+        vol_str = f"放量突破（量比 {vol_r:.1f}x）" if vol_r and vol_r >= 1.0 else f"量比 {vol_r:.1f}x，量能待確認"
+        assumption = f"股價突破前20日高點，{vol_str}，預期延續上升趨勢。"
+    elif setup == "near_breakout":
+        assumption = "股價接近前高壓力區，量能若配合有機會向上突破。"
+    elif setup == "pullback_hold":
+        ma60_str = f"MA60 上方 {ma60_gap:.1f}%" if ma60_gap > 0 else "MA60 附近支撐"
+        assumption = f"上升趨勢完整，正處健康回測，{ma60_str}，MA20 仍向上。"
+    elif setup == "trending":
+        assumption = "強勢多頭趨勢持續，MA 多頭排列完整，目前無明顯轉弱跡象，順勢追蹤。"
+    else:
+        assumption = "目前條件符合買進標準。"
 
     struct_invalidations = {
         "breakout": [
@@ -246,7 +280,7 @@ def trade_thesis(r: dict) -> dict:
             "MA20 由上升轉下降",
         ],
         "pullback_buy": [
-            "跌破支撐後未見反彈（Support Fail）",
+            "跌破 MA10 / MA20 收盤且無法收復（Support Fail）",
             "MA60 由上升轉下降",
         ],
         "pullback_hold": [
@@ -265,7 +299,7 @@ def trade_thesis(r: dict) -> dict:
     invalidations.extend(struct_invalidations.get(setup, ["跌破近期支撐低點"]))
 
     return {
-        "assumption": assumptions.get(setup, "目前條件符合買進標準。"),
+        "assumption": assumption,
         "invalidations": invalidations,
     }
 

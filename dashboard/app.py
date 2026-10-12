@@ -261,6 +261,7 @@ def main() -> None:
     tabs = st.tabs(
         [
             "📊今日",
+            "📡盤中",
             "📈看盤",
             "🔍個股",
             "📋歷史",
@@ -278,28 +279,31 @@ def main() -> None:
     with tabs[0]:
         page_today(sel_date)
     with tabs[1]:
+        from dashboard._pages.live_monitor import page_live_monitor
+        page_live_monitor(sel_date)
+    with tabs[2]:
         from dashboard._pages.market_watch import page_market_watch
         page_market_watch(sel_date)
-    with tabs[2]:
-        page_search()
     with tabs[3]:
-        page_history()
+        page_search()
     with tabs[4]:
-        page_positions()
+        page_history()
     with tabs[5]:
-        page_backtest()
+        page_positions()
     with tabs[6]:
-        page_research_backtest()
+        page_backtest()
     with tabs[7]:
-        page_my_trades()
+        page_research_backtest()
     with tabs[8]:
+        page_my_trades()
+    with tabs[9]:
         from dashboard._pages.scorecard import page_scorecard
         page_scorecard()
-    with tabs[9]:
-        page_data_health()
     with tabs[10]:
-        page_guide()
+        page_data_health()
     with tabs[11]:
+        page_guide()
+    with tabs[12]:
         page_settings(sel_date)
 
     st.markdown(
