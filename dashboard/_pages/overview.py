@@ -29,11 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure: dict = None) -> None:
-    from src.engines.decision import decision_label, entry_quality_label, tomorrow_triggers
+    from src.engines.decision import decision_label, tomorrow_triggers, trade_thesis, position_sizing as _ps
 
+    # ── Raw data ────────────────────────────────────────────────
     dl         = decision_label(r)
-    eq_label   = entry_quality_label(r)
     triggers   = tomorrow_triggers(r)
+    thesis     = trade_thesis(r)
     price      = r.get("price")
     entry_low  = r.get("entry_low")
     entry_high = r.get("entry_high")
@@ -46,259 +47,463 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     level      = r.get("level", "B")
     name       = r.get("name", "")
     sid        = r.get("sid", "")
-    advantages = r.get("advantages", [])
-    risks      = r.get("risks", [])
     setup      = r.get("setup_type") or "none"
+    signal     = r.get("trade_signal") or "wait"
     ma20_gap   = r.get("ma20_gap") or 0.0
-    pt_val     = r.get("price_trend_score", 0) or 0
-
-    label_color   = dl["color"]
-    label_text    = dl["label"]
-    override_note = ""
-    if dl.get("is_override"):
-        override_note = '<span style="font-size:0.7rem;color:#888;margin-left:8px">（進場品質 override）</span>'
-
-    # ── Consecutive recommendation badge (P4) ──────────────────
+    pt_val     = r.get("price_trend_score") or 0
+    vol_r      = r.get("vol_ratio") or 0.0
+    advantages = r.get("advantages", [])
+    risks_raw  = r.get("risks", [])
     consecutive = r.get("consecutive_days", 1)
-    consec_badge = ""
-    if consecutive >= 2:
-        consec_badge = (
-            f'<div style="font-size:0.68rem;color:#546e7a;background:#eceff1;'
-            f'padding:2px 8px;border-radius:10px;display:inline-block;margin-top:3px">'
-            f'🔄 連續第 {consecutive} 個交易日入選</div>'
-        )
+    is_buy     = signal in ("strong_buy", "buy")
 
-    # ── "Why again today?" block (P4) ──────────────────────────
-    why_again_html = ""
-    if consecutive >= 2:
-        pt_now = r.get("price_trend_score") or 0
-        ma20   = r.get("ma20_gap") or 0.0
-        vol_r  = r.get("vol_ratio") or 0.0
-        conditions = []
-        if pt_now > 0:
-            conditions.append(f"PT {pt_now:.0f}")
-        if ma20:
-            conditions.append(f"MA20 乖離 {ma20:+.1f}%")
-        if vol_r:
-            conditions.append(f"量比 {vol_r:.1f}x")
-        cond_str = "　".join(conditions) if conditions else "條件持續符合"
-        why_again_html = f"""
-<div style="background:#f1f8e9;border-left:3px solid #8bc34a;padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0">
-  <div style="font-size:0.63rem;color:#558b2f;font-weight:600;margin-bottom:2px">今日仍入選原因</div>
-  <div style="font-size:0.73rem;color:#33691e">{cond_str}</div>
+    # ── Classify items: financial vs technical ──────────────────
+    _FIN_KW = ("EPS", "毛利率", "營益率", "獲利", "財務", "ROE", "負債", "股利", "現金流", "本益比")
+    def _is_fin(s): return any(kw in s for kw in _FIN_KW)
+    tech_adv  = [a for a in advantages if not _is_fin(a)]
+    fin_adv   = [a for a in advantages if _is_fin(a)]
+    tech_risk = [x for x in risks_raw if not _is_fin(x)]
+    fin_risk  = [x for x in risks_raw if _is_fin(x)]
+
+    # ── Setup-specific narratives ───────────────────────────────
+    def _professional_judgment():
+        """一行技術判斷，精簡不白話。"""
+        if setup == "near_breakout":
+            return f"股價接近前 20 日高點，量比 {vol_r:.1f}x，但尚未完成有效突破。"
+        if setup == "pullback_buy":
+            return "回踩至支撐區，量縮整理後出現轉強訊號，進場條件已成立。" if is_buy else f"多頭趨勢仍在，股價回踩至 MA10 附近（量比 {vol_r:.1f}x），等待止穩確認。"
+        if setup == "breakout":
+            return f"股價突破前 20 日高點，量比 {vol_r:.1f}x，突破型態確立。"
+        if setup == "trending":
+            return "多頭趨勢延伸，均線排列健康，動能持續。"
+        if setup == "breakdown":
+            return "均線轉為空頭排列，趨勢結構已轉弱。"
+        if setup == "pullback_hold":
+            return "上升趨勢健康回測，MA20 支撐守穩。"
+        if setup == "failed_breakout":
+            return "突破嘗試失敗，多方假設不再成立。"
+        return dl.get("reason", "")
+
+    def _plain_language():
+        """💬 白話解釋：不解釋名詞，解釋這對買賣代表什麼。"""
+        if setup == "near_breakout":
+            return (
+                "這檔股票目前走勢不差，也有人在買，但前面還有一道「之前漲不上去的價格」。<br>"
+                "現在先不要急著買，等它真的漲過這個位置，證明有能力繼續往上。<br>"
+                "突破後如果漲太多、價格已經離合理區間太遠，那就不追，等它回來再說。"
+            )
+        if setup == "pullback_buy":
+            if is_buy:
+                return (
+                    "這檔股票在上漲途中拉回休息，現在已經確認這個位置撐得住，準備繼續往上。<br>"
+                    "這是比較好的進場時機——不是漲很多才追，而是等它回來確認後再買，進場成本相對低。"
+                )
+            return (
+                "這檔股票原本在上漲，最近只是回到平均成本附近休息，目前還沒有明顯轉壞。<br>"
+                "現在要看的不是它能不能創新高，而是這個位置能不能撐住。<br>"
+                "撐住後重新往上 → 可以考慮買；跌破而且站不回來 → 先不要買。"
+            )
+        if setup == "breakout":
+            return (
+                "股價已經突破之前一直過不去的位置，代表買方目前比較強。<br>"
+                "現在不是在等突破，而是在看「突破後的價格還值不值得買」。<br>"
+                "價格還在合理範圍 → 可以考慮進場；已經衝太高 → 不追，等回檔。"
+            )
+        if setup == "trending":
+            return (
+                "這檔股票持續在上漲軌道內，不是突破也不是回踩，就是一路走高。<br>"
+                "進場邏輯是：只要趨勢不轉壞，可以繼續跟著走。<br>"
+                "最重要的是設好停損，因為趨勢跟蹤最怕突然反轉，停損是保護自己的防線。"
+            )
+        if setup == "breakdown":
+            return (
+                "這檔股票的走勢已經往下破壞，不適合用「跌很多所以便宜」的邏輯去買。<br>"
+                "持有的人要考慮要不要先出場；沒有持有的人，現在不是買進的時機。"
+            )
+        if setup == "pullback_hold":
+            return (
+                "這檔股票目前只是在上漲途中正常整理，趨勢還沒有被破壞。<br>"
+                "不需要特別操作，繼續持有，等趨勢回復往上。"
+            )
+        if setup == "failed_breakout":
+            return (
+                "原本以為要突破，結果沒成功，而且之後表現疲軟。<br>"
+                "這代表之前「準備要上漲」的理由已經不成立了，需要重新評估。"
+            )
+        return ""
+
+    def _checklist_conclusion():
+        """checklist 下方的「所以現在」結論，setup-specific。"""
+        if setup == "near_breakout":
+            return (
+                "<b>所以現在：先等。</b><br>"
+                "如果突破成功：看價格是否仍在合理進場區 → 可以買。<br>"
+                "如果突破後漲太高：不追，等回檔。<br>"
+                "如果一直突破不了：繼續觀察，不要因為等太久而降低標準。"
+            )
+        if setup == "pullback_buy":
+            return (
+                "<b>所以現在：等止穩確認。</b><br>"
+                "量縮守住支撐 → 進場條件成立，可依計畫買進。<br>"
+                "跌破支撐且無法收復 → 觀望，這次回踩可能是轉弱。"
+            )
+        if setup == "trending":
+            return (
+                "<b>所以現在：可以考慮進場。</b><br>"
+                "在合理進場區買進，設好停損，跟著趨勢走。<br>"
+                "若股價短期衝太高脫離均線太遠，等一次小回後再進場。"
+            )
+        return ""
+
+    def _tech_label():
+        if pt_val >= 70: return "偏強", "#2e7d32", "#e8f5e9"
+        if pt_val >= 50: return "普通", "#f57f17", "#fff8e1"
+        return "偏弱", "#c62828", "#ffebee"
+
+    def _fin_label():
+        n_pos, n_neg = len(fin_adv), len(fin_risk)
+        if n_pos == 0 and n_neg == 0: return "—", "#888", "#f5f5f5"
+        if n_pos > n_neg: return "改善", "#2e7d32", "#e8f5e9"
+        if n_neg > n_pos: return "惡化", "#c62828", "#ffebee"
+        return "穩定", "#1565c0", "#e3f2fd"
+
+    def _plain_tech():
+        if setup == "near_breakout":
+            return "趨勢與量能都偏強，目前唯一缺少的是價格正式突破前波壓力。"
+        if setup == "pullback_buy":
+            return "回踩至支撐已確認止穩，趨勢與量能均符合進場條件。" if is_buy else "趨勢仍在，目前處於回踩整理階段，觀察能否在支撐位止穩轉強。"
+        if setup == "breakout":
+            vol_desc = f"成交量放大（量比 {vol_r:.1f}x）" if vol_r >= 1.5 else "成交量尚可"
+            return f"股價突破前高，{vol_desc}，型態已正式確立。"
+        if setup == "trending":
+            return "多頭趨勢延伸，均線排列健康，動能持續。"
+        if setup == "breakdown":
+            return "均線轉為空頭排列，趨勢已轉弱，不宜逢低接。"
+        return ""
+
+    def _plain_fundamental():
+        n_pos, n_neg = len(fin_adv), len(fin_risk)
+        if n_pos == 0 and n_neg == 0:
+            return "財務資料不完整，基本面評估暫不可用。"
+        if n_pos > n_neg:
+            return "公司基本面持續改善，獲利成長提供技術訊號的基本面支撐。"
+        if n_neg > n_pos:
+            main_risk = fin_risk[0] if fin_risk else ""
+            return f"基本面存在隱憂（{main_risk}），技術訊號需搭配更嚴格的進場紀律。"
+        return "基本面加分，但獲利空間仍有限，不代表可以忽略買進價格。"
+
+    def _plain_invalidation():
+        stop_str = f"${stop_p:.1f}" if stop_p else "停損價"
+        if setup == "near_breakout":
+            return f"突破失敗後若股價明顯轉弱，或跌破 {stop_str}，原本「準備向上突破」的假設已不成立，不要因為它之前是 {level} 級而硬等。"
+        if setup == "pullback_buy":
+            return f"若跌破 MA10 且無法收復，或 {stop_str} 被穿破，回踩健康的假設失效，不適合繼續等待。"
+        if setup == "breakout":
+            return f"若股價回跌至突破點以下且量縮，或跌破 {stop_str}，突破假設失敗，應出場觀望。"
+        if setup == "trending":
+            return f"若均線出現死叉或 {stop_str} 被跌破，趨勢延伸假設失效。"
+        return f"若 {stop_str} 被跌破，訊號假設已不成立。"
+
+    def _checklist():
+        if setup == "near_breakout":
+            vol_ok = vol_r >= 1.5
+            return [
+                ("🟢", "趨勢", "符合"),
+                ("🟢" if vol_ok else "🟡", "量能", f"符合｜{vol_r:.1f}x" if vol_ok else f"待觀察｜{vol_r:.1f}x"),
+                ("🟡", "突破", "尚未確認"),
+            ]
+        if setup == "pullback_buy":
+            vol_ok = vol_r <= 1.2
+            return [
+                ("🟢", "趨勢", "符合"),
+                ("🟢" if is_buy else "🟡", "支撐", "已確認止穩" if is_buy else "近MA10，待確認"),
+                ("🟢" if vol_ok else "🟡", "量縮", f"符合｜{vol_r:.1f}x" if vol_ok else f"{vol_r:.1f}x，待收斂"),
+            ]
+        if setup == "breakout":
+            vol_ok = vol_r >= 1.5
+            return [
+                ("🟢", "趨勢", "符合"),
+                ("🟢", "突破", "已確認"),
+                ("🟢" if vol_ok else "🟡", "量能", f"符合｜{vol_r:.1f}x" if vol_ok else f"量比 {vol_r:.1f}x，偏弱"),
+            ]
+        if setup == "trending":
+            has_pressure = any("壓力" in x for x in tech_risk)
+            return [
+                ("🟢", "趨勢", "符合"),
+                ("🟢", "動能", "持續延伸"),
+                ("🟡" if has_pressure else "🟢", "壓力", "注意前波壓力" if has_pressure else "無明顯壓力"),
+            ]
+        return []
+
+    # ── Build HTML blocks ────────────────────────────────────────
+    price_str = f"NT$ {price:,.1f}" if price else "—"
+    sig_bg    = "#e8f5e9" if signal == "strong_buy" else "#e3f2fd" if signal == "buy" else "#eceff1"
+    sig_col   = "#1a7f4b" if signal == "strong_buy" else "#1565c0" if signal == "buy" else "#546e7a"
+    label_text = dl["label"]
+
+    consec_html = (
+        f'<span style="font-size:0.63rem;color:#546e7a;background:#eceff1;'
+        f'padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">'
+        f'🔄 連續第 {consecutive} 日入選</span>'
+    ) if consecutive >= 2 else ""
+
+    t_lbl, t_col, t_bg = _tech_label()
+    f_lbl, f_col, f_bg = _fin_label()
+    tech_metrics = f"PT {pt_val:.0f}　｜　MA20 {ma20_gap:+.1f}%　｜　量比 {vol_r:.1f}x"
+
+    tech_rows = (
+        "".join(f'<div style="color:#2e7d32">✓ {a}</div>' for a in tech_adv[:3]) +
+        "".join(f'<div style="color:#c62828">⚠ {x}</div>' for x in tech_risk[:2])
+    )
+    fin_rows = (
+        "".join(f'<div style="color:#2e7d32">✓ {a}</div>' for a in fin_adv[:3]) +
+        "".join(f'<div style="color:#c62828">⚠ {x}</div>' for x in fin_risk[:2])
+    )
+
+    pt_html = f'<div style="font-size:0.7rem;color:#666;margin-top:4px;font-style:italic">{_plain_tech()}</div>'
+    pf_html = f'<div style="font-size:0.7rem;color:#666;margin-top:4px;font-style:italic">{_plain_fundamental()}</div>'
+
+    # Checklist (WAIT only)
+    checklist = _checklist()
+    check_html = ""
+    if checklist and not is_buy:
+        rows = "".join(
+            f'<div style="display:flex;gap:8px;align-items:center;padding:2px 0">'
+            f'<span style="width:20px">{icon}</span>'
+            f'<span style="width:50px;font-weight:600;font-size:0.76rem;color:#333">{lbl}</span>'
+            f'<span style="font-size:0.76rem;color:#555">{val}</span>'
+            f'</div>'
+            for icon, lbl, val in checklist
+        )
+        conclusion = _checklist_conclusion()
+        conclusion_html = (
+            f'<div style="margin-top:8px;font-size:0.75rem;color:#37474f;line-height:1.65;'
+            f'border-top:1px solid #e0e0e0;padding-top:7px">{conclusion}</div>'
+        ) if conclusion else ""
+        check_html = f"""
+<div style="background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:10px 0">
+  <div style="font-size:0.62rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:6px">現在還差什麼</div>
+  {rows}
+  {conclusion_html}
 </div>"""
 
-    # ── Trade thesis + invalidation (BUY only) ──────────────────
-    from src.engines.decision import trade_thesis, position_sizing as _ps
-    thesis      = trade_thesis(r)
-    thesis_html = ""
-    if r.get("trade_signal") in ("strong_buy", "buy") and thesis.get("assumption"):
-        inv_items = "".join(
-            f'<li style="color:#c62828">❌ {inv}</li>'
-            for inv in thesis["invalidations"]
-        )
-        thesis_html = f"""
-<div style="background:#fff3e0;border-left:3px solid #ff8f00;padding:7px 11px;margin:6px 0;border-radius:0 6px 6px 0">
-  <div style="font-size:0.63rem;color:#e65100;font-weight:600;margin-bottom:3px">核心假設</div>
-  <div style="font-size:0.76rem;color:#bf360c;margin-bottom:5px">{thesis['assumption']}</div>
-  <div style="font-size:0.63rem;color:#e65100;font-weight:600;margin-bottom:3px">交易失效條件</div>
-  <ul style="margin:0;padding-left:14px;font-size:0.74rem;line-height:1.65">
-    {inv_items}
-  </ul>
+    # Triggers (WAIT only — skip BUY)
+    trig_html = ""
+    if not is_buy and triggers:
+        trig_rows = "".join(f'<div style="padding:2px 0;font-size:0.76rem;color:#37474f">{t}</div>' for t in triggers)
+        trig_html = f"""
+<div style="background:#fafafa;border-left:3px solid #90a4ae;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:0.62rem;font-weight:700;color:#546e7a;letter-spacing:.05em;margin-bottom:5px">轉為 BUY 的條件</div>
+  {trig_rows}
 </div>"""
 
-    # ── R/R ratio and trading plan ─────────────────────────────
-    rr_html = ""
+    # Trading plan
+    plan_html = ""
+    plan_label = "交易計畫" if is_buy else "確認後，怎麼交易"
+    plan_opacity = "1" if is_buy else "0.65"
     if price and stop_p and t1:
-        risk_pts   = price - stop_p
-        reward_pts = t1 - price
+        risk_pts = price - stop_p
         if risk_pts > 0:
-            rr        = round(reward_pts / risk_pts, 1)
-            rr_color  = "#00897b" if rr >= 2.0 else "#ffb300" if rr >= 1.5 else "#e53935"
-            entry_str = f"{entry_low:.1f}–{entry_high:.1f}" if (entry_low and entry_high) else f"{price:.1f}"
-            t2_str    = f" / {t2:.1f}" if t2 else ""
-            stop_pct  = round((stop_p - price) / price * 100, 1)
-            t1_pct    = round((t1 - price) / price * 100, 1)
-            rr_html = f"""
-<div style="background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:8px 0">
-  <div style="font-size:0.7rem;color:#666;margin-bottom:6px;font-weight:600">交易計劃</div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <div style="flex:1;min-width:65px;background:#fff8e1;border-radius:6px;padding:5px 8px;text-align:center">
-      <div style="font-size:0.6rem;color:#f57f17;font-weight:600">理想進場</div>
-      <div style="font-size:0.88rem;font-weight:800;color:#f57f17">{entry_str}</div>
+            rr       = round((t1 - price) / risk_pts, 1)
+            rr_col   = "#00897b" if rr >= 2.0 else "#ffb300" if rr >= 1.5 else "#e53935"
+            e_str    = f"{entry_low:.1f}–{entry_high:.1f}" if (entry_low and entry_high) else f"~{price:.1f}"
+            t2_str   = f" / {t2:.1f}" if t2 else ""
+            stop_pct = round((stop_p - price) / price * 100, 1)
+            t1_pct   = round((t1 - price) / price * 100, 1)
+            plan_html = f"""
+<div style="opacity:{plan_opacity};background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:10px 0">
+  <div style="font-size:0.62rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:6px">{plan_label}</div>
+  <div style="display:flex;gap:7px;flex-wrap:wrap">
+    <div style="flex:1;min-width:60px;background:#fff8e1;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.58rem;color:#f57f17;font-weight:600">進場</div>
+      <div style="font-size:0.84rem;font-weight:800;color:#f57f17">{e_str}</div>
     </div>
-    <div style="flex:1;min-width:65px;background:#fce4ec;border-radius:6px;padding:5px 8px;text-align:center">
-      <div style="font-size:0.6rem;color:#c62828;font-weight:600">停損</div>
-      <div style="font-size:0.88rem;font-weight:800;color:#c62828">{stop_p:.1f}</div>
-      <div style="font-size:0.6rem;color:#c62828">{stop_pct}%</div>
+    <div style="flex:1;min-width:60px;background:#fce4ec;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.58rem;color:#c62828;font-weight:600">停損</div>
+      <div style="font-size:0.84rem;font-weight:800;color:#c62828">{stop_p:.1f}</div>
+      <div style="font-size:0.58rem;color:#c62828">{stop_pct}%</div>
     </div>
-    <div style="flex:1;min-width:65px;background:#e8f5e9;border-radius:6px;padding:5px 8px;text-align:center">
-      <div style="font-size:0.6rem;color:#2e7d32;font-weight:600">目標一 / 二</div>
-      <div style="font-size:0.88rem;font-weight:800;color:#2e7d32">{t1:.1f}{t2_str}</div>
-      <div style="font-size:0.6rem;color:#2e7d32">+{t1_pct}%</div>
+    <div style="flex:1;min-width:60px;background:#e8f5e9;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.58rem;color:#2e7d32;font-weight:600">目標</div>
+      <div style="font-size:0.84rem;font-weight:800;color:#2e7d32">{t1:.1f}{t2_str}</div>
+      <div style="font-size:0.58rem;color:#2e7d32">+{t1_pct}%</div>
     </div>
-    <div style="flex:1;min-width:65px;background:#e3f2fd;border-radius:6px;padding:5px 8px;text-align:center">
-      <div style="font-size:0.6rem;color:#1565c0;font-weight:600">R/R</div>
-      <div style="font-size:0.88rem;font-weight:800;color:{rr_color}">{rr}x</div>
+    <div style="flex:1;min-width:60px;background:#e3f2fd;border-radius:6px;padding:5px 8px;text-align:center">
+      <div style="font-size:0.58rem;color:#1565c0;font-weight:600">R/R</div>
+      <div style="font-size:0.84rem;font-weight:800;color:{rr_col}">{rr}x</div>
     </div>
   </div>
 </div>"""
-    elif entry_low and entry_high and r.get("trade_signal") in ("strong_buy", "buy"):
-        # 有進場區間但缺止損/目標時，至少顯示進場區間
-        rr_html = f"""
-<div style="background:#fff8e1;border-left:3px solid #f57f17;border-radius:0 6px 6px 0;padding:7px 11px;margin:6px 0">
-  <div style="font-size:0.63rem;color:#e65100;font-weight:600;margin-bottom:2px">理想進場區間</div>
+    elif entry_low and entry_high and is_buy:
+        plan_html = f"""
+<div style="background:#fff8e1;border-left:3px solid #f57f17;border-radius:0 6px 6px 0;padding:7px 11px;margin:8px 0">
+  <div style="font-size:0.62rem;font-weight:700;color:#e65100;margin-bottom:2px">進場區間</div>
   <div style="font-size:0.95rem;font-weight:800;color:#e65100">NT$ {entry_low:.1f} – {entry_high:.1f}</div>
-  <div style="font-size:0.65rem;color:#bf360c;margin-top:2px">停損 / 目標數據待補全，完整交易計劃暫不顯示</div>
+  <div style="font-size:0.62rem;color:#bf360c;margin-top:2px">停損 / 目標數據待補全</div>
 </div>"""
 
-    # ── Position sizing ─────────────────────────────────────────
+    # Position sizing (BUY only)
     ps_html = ""
-    if price and stop_p and t1 and price > stop_p:
+    if is_buy and price and stop_p and t1 and price > stop_p:
         from config import POSITION_SIZING as _PS_CFG
         capital      = st.session_state.get("ps_capital",      _PS_CFG["capital_ntd"])
         max_risk_pct = st.session_state.get("ps_max_risk_pct", _PS_CFG["max_risk_pct"])
-        ps = _ps(
-            entry=price, stop=stop_p, capital=capital,
-            max_risk_pct=max_risk_pct,
-            max_single_pct=_PS_CFG["max_single_pct"],
-            lot_size=_PS_CFG["lot_size"],
-        )
+        ps = _ps(entry=price, stop=stop_p, capital=capital,
+                 max_risk_pct=max_risk_pct,
+                 max_single_pct=_PS_CFG["max_single_pct"],
+                 lot_size=_PS_CFG["lot_size"])
         if ps and ps.get("lots", 0) == 0 and ps.get("min_lot_ntd"):
             ps_html = (
-                f'<div style="background:#fff3e0;border-left:3px solid #ff8f00;'
-                f'padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0;font-size:0.72rem;color:#bf360c">'
-                f'⚠ 1張需 NT${ps["min_lot_ntd"]:,}，超出曝險上限 NT${ps["max_exposure_ntd"]:,}，無法試算部位。</div>'
+                f'<div style="background:#fff3e0;border-left:3px solid #ff8f00;padding:5px 10px;'
+                f'margin:4px 0;border-radius:0 6px 6px 0;font-size:0.72rem;color:#bf360c">'
+                f'⚠ 1張需 NT${ps["min_lot_ntd"]:,}，超出曝險上限，無法試算部位。</div>'
             )
         elif ps and ps.get("lots", 0) > 0:
             cap_note = '<span style="color:#e65100">（已達曝險上限）</span>' if ps["capped"] else ""
             ps_html = f"""
 <div style="background:#f3e5f5;border-radius:8px;padding:8px 12px;margin:4px 0">
-  <div style="font-size:0.65rem;color:#6a1b9a;font-weight:600;margin-bottom:5px">部位試算（風控 {max_risk_pct}% / NT${capital:,.0f}）</div>
+  <div style="font-size:0.62rem;color:#6a1b9a;font-weight:700;margin-bottom:5px">部位試算　風控 {max_risk_pct}% ／ 資金 NT${capital:,.0f}</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap">
-    <div style="flex:1;min-width:60px;text-align:center">
-      <div style="font-size:0.6rem;color:#7b1fa2">每股風險</div>
-      <div style="font-size:0.85rem;font-weight:700;color:#4a148c">${ps['risk_per_share']:.2f}</div>
+    <div style="flex:1;min-width:52px;text-align:center">
+      <div style="font-size:0.58rem;color:#7b1fa2">建議張數</div>
+      <div style="font-size:0.84rem;font-weight:700;color:#4a148c">{ps['lots']} 張{cap_note}</div>
     </div>
-    <div style="flex:1;min-width:60px;text-align:center">
-      <div style="font-size:0.6rem;color:#7b1fa2">建議張數</div>
-      <div style="font-size:0.85rem;font-weight:700;color:#4a148c">{ps['lots']} 張{cap_note}</div>
+    <div style="flex:1;min-width:52px;text-align:center">
+      <div style="font-size:0.58rem;color:#7b1fa2">部位金額</div>
+      <div style="font-size:0.84rem;font-weight:700;color:#4a148c">NT${ps['position_ntd']:,}</div>
     </div>
-    <div style="flex:1;min-width:60px;text-align:center">
-      <div style="font-size:0.6rem;color:#7b1fa2">部位金額</div>
-      <div style="font-size:0.85rem;font-weight:700;color:#4a148c">NT${ps['position_ntd']:,}</div>
-    </div>
-    <div style="flex:1;min-width:60px;text-align:center">
-      <div style="font-size:0.6rem;color:#7b1fa2">實際風險</div>
-      <div style="font-size:0.85rem;font-weight:700;color:#c62828">NT${ps['actual_risk_ntd']:,} ({ps['actual_risk_pct']}%)</div>
+    <div style="flex:1;min-width:52px;text-align:center">
+      <div style="font-size:0.58rem;color:#7b1fa2">實際風險</div>
+      <div style="font-size:0.84rem;font-weight:700;color:#c62828">NT${ps['actual_risk_ntd']:,}</div>
     </div>
   </div>
-  <div style="font-size:0.6rem;color:#9c27b0;margin-top:4px">⚠ 試算值，實際下單請考慮整體帳戶曝險與流動性。</div>
 </div>"""
 
-    # ── Portfolio context (only for BUY signals when exposure data available) ──
+    # Portfolio context (BUY only)
     portfolio_html = ""
-    if portfolio_exposure and r.get("trade_signal") in ("strong_buy", "buy"):
+    if portfolio_exposure and is_buy:
         try:
             from src.services.portfolio_risk_service import portfolio_context_for_stock
             ctx = portfolio_context_for_stock(r.get("industry"), portfolio_exposure)
             if ctx.get("message"):
-                warn_bg    = "#fff3cd" if ctx["should_warn"] else "#e8f5e9"
-                warn_border = "#ff8f00" if ctx["should_warn"] else "#43a047"
-                warn_color  = "#bf360c" if ctx["should_warn"] else "#2e7d32"
+                w_bg  = "#fff3cd" if ctx["should_warn"] else "#e8f5e9"
+                w_bd  = "#ff8f00" if ctx["should_warn"] else "#43a047"
+                w_col = "#bf360c" if ctx["should_warn"] else "#2e7d32"
                 portfolio_html = f"""
-<div style="background:{warn_bg};border-left:3px solid {warn_border};padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0">
-  <div style="font-size:0.63rem;color:{warn_color};font-weight:600;margin-bottom:1px">組合角度</div>
-  <div style="font-size:0.73rem;color:{warn_color}">{ctx['message']}</div>
+<div style="background:{w_bg};border-left:3px solid {w_bd};padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:0.62rem;color:{w_col};font-weight:600;margin-bottom:1px">組合角度</div>
+  <div style="font-size:0.73rem;color:{w_col}">{ctx['message']}</div>
 </div>"""
         except Exception:
             pass
 
-    # ── Why bullets ────────────────────────────────────────────
-    adv_items  = "".join(f"<li style='color:#2e7d32'>✓ {a}</li>" for a in advantages[:3])
-    risk_items = "".join(f"<li style='color:#c62828'>⚠ {r2}</li>" for r2 in risks[:2])
-    why_html   = ""
-    if adv_items or risk_items:
-        why_html = f"""
-<div style="margin:6px 0">
-  <ul style="margin:0;padding-left:16px;font-size:0.78rem;line-height:1.6">
-    {adv_items}{risk_items}
-  </ul>
+    # Invalidation
+    inv_html = ""
+    inv_items = (thesis.get("invalidations") or []) if thesis else []
+    if inv_items:
+        inv_rows = "".join(
+            f'<div style="color:#c62828;font-size:0.75rem;padding:1px 0">❌ {inv}</div>'
+            for inv in inv_items
+        )
+        inv_html = f"""
+<div style="background:#fff8f8;border-left:3px solid #ef9a9a;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0">
+  <div style="font-size:0.62rem;font-weight:700;color:#b71c1c;letter-spacing:.05em;margin-bottom:5px">什麼情況代表判斷錯了</div>
+  {inv_rows}
+  <div style="font-size:0.7rem;color:#888;margin-top:5px;font-style:italic">{_plain_invalidation()}</div>
 </div>"""
 
-    # ── Tomorrow triggers ───────────────────────────────────────
-    trig_items = "".join(f"<li>{t}</li>" for t in triggers)
-    trig_html  = f"""
-<div style="background:#fafafa;border-left:3px solid #90a4ae;padding:6px 10px;margin:6px 0;border-radius:0 6px 6px 0">
-  <div style="font-size:0.65rem;color:#546e7a;font-weight:600;margin-bottom:4px">明日觀察觸發條件</div>
-  <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:#37474f;line-height:1.6">
-    {trig_items}
-  </ul>
-</div>"""
-
-    # ── Stock-level Data Quality ────────────────────────────────
-    dq_html = ""
+    # Data quality footer string
+    dq_str = ""
     dq = r.get("data_quality")
     if dq:
-        from src.validators.stock_data_quality import DQFlag, _FLAG_ICON, _CONFIDENCE_LABEL, _CONFIDENCE_COLOR
-        _icon   = lambda v: _FLAG_ICON.get(DQFlag(v), "?") if v else "❌"
-        _dq_lvl = dq.get("confidence", "medium")
-        cf_lbl  = _CONFIDENCE_LABEL.get(_dq_lvl, _dq_lvl)
-        cf_col  = _CONFIDENCE_COLOR.get(_dq_lvl, "#888")
-        dq_html = (
-            f'<div style="display:flex;align-items:center;gap:6px;margin:5px 0;'
-            f'font-size:0.68rem;color:#546e7a;flex-wrap:wrap">'
-            f'<span style="font-weight:600;color:#78909c">Data</span>'
-            f'<span>股價{_icon(dq.get("price"))}</span>'
-            f'<span>MA60{_icon(dq.get("ma60"))}</span>'
-            f'<span>量能{_icon(dq.get("volume"))}</span>'
-            f'<span>PT{_icon(dq.get("pt_score"))}</span>'
-            f'<span>法人{_icon(dq.get("institution"))}</span>'
-            f'<span>財務{_icon(dq.get("financial"))}</span>'
-            f'<span style="margin-left:4px;color:{cf_col};font-weight:600">信心：{cf_lbl}</span>'
-            f'</div>'
-        )
+        try:
+            from src.validators.stock_data_quality import DQFlag, _FLAG_ICON
+            _icon = lambda v: _FLAG_ICON.get(DQFlag(v), "?") if v else "❌"
+            _dq_lvl = dq.get("confidence", "medium")
+            completeness = "100%" if _dq_lvl == "high" else "85%" if _dq_lvl == "medium" else "70%"
+            dq_str = (
+                f"資料完整度 {completeness}　"
+                f"股價{_icon(dq.get('price'))}　MA60{_icon(dq.get('ma60'))}　"
+                f"量能{_icon(dq.get('volume'))}　PT{_icon(dq.get('pt_score'))}　"
+                f"法人{_icon(dq.get('institution'))}　財務{_icon(dq.get('financial'))}"
+            )
+        except Exception:
+            pass
 
-    # ── Entry quality badge ─────────────────────────────────────
-    eq_color = "#e53935" if eq_label in ("追高", "避開") else "#00897b" if eq_label in ("理想進場點", "回檔機會") else "#7e57c2"
-    eq_badge  = f'<span style="font-size:0.7rem;background:{eq_color}22;color:{eq_color};padding:2px 7px;border-radius:10px;font-weight:600">{eq_label}</span>'
-
-    # ── Stock header ────────────────────────────────────────────
-    price_str = f"　NT$ {price:,.1f}" if price else ""
-    name_html = (
-        f'<div style="font-size:1.05rem;font-weight:700">{name}</div>'
-        f'<div style="font-size:0.75rem;color:#888">{sid} · TWSE{price_str}</div>'
-        if name and name != sid
-        else f'<div style="font-size:1.05rem;font-weight:700">{sid}</div>'
-        f'<div style="font-size:0.75rem;color:#888">TWSE{price_str}</div>'
-    )
-    ma20_note    = f'<span style="font-size:0.65rem;color:#888">MA20 乖離 {ma20_gap:+.1f}%</span>' if ma20_gap else ""
     _total_score = scores.get("total") or 0
 
-    st.html(
-        f"""
-<div style="border:1px solid #e0e0e0;border-radius:10px;padding:14px 16px;margin-bottom:12px;background:#fff">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-    <div>{name_html}{consec_badge}</div>
+    # ── Main card HTML ───────────────────────────────────────────
+    st.html(f"""
+<div style="border:1px solid #e0e0e0;border-radius:12px;padding:16px 18px;margin-bottom:4px;background:#fff">
+
+  <!-- 1. Header -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+    <div>
+      <span style="font-size:1.1rem;font-weight:800;color:#1a1a2e">{name}</span>
+      <span style="font-size:0.78rem;font-weight:400;color:#888;margin-left:6px">{sid}</span>
+      {consec_html}
+      <div style="font-size:1rem;font-weight:700;color:#333;margin-top:2px">{price_str}</div>
+    </div>
     <div style="text-align:right">
-      <div style="font-size:1.3rem;font-weight:900;color:{label_color}">{label_text}</div>
-      {override_note}
-      <div style="margin-top:3px">{eq_badge}</div>
+      <span style="background:{sig_bg};color:{sig_col};font-weight:800;font-size:0.95rem;padding:5px 14px;border-radius:20px">{label_text}</span>
     </div>
   </div>
-  <div style="font-size:0.78rem;color:#555;margin-bottom:6px">{dl['reason']}</div>
-  {why_again_html}
-  {thesis_html}
-  {rr_html}
-  {ps_html}
-  {portfolio_html}
-  {why_html}
-  {trig_html}
-  {dq_html}
-  <div style="font-size:0.7rem;color:#aaa;margin-top:6px">模型評分：PT {pt_val:.0f} ｜ 綜合 {_total_score:.0f} ｜ 信心度 {conf}% ｜ {level} 級 · {setup} {ma20_note}</div>
-</div>"""
-    )
 
+  <!-- 2. 專業判斷 + 白話解釋 -->
+  <div style="margin-bottom:14px">
+    <div style="font-size:0.75rem;color:#546e7a;margin-bottom:6px">{_professional_judgment()}</div>
+    <div style="background:#f0f4ff;border-left:3px solid #667eea;border-radius:0 8px 8px 0;
+                padding:9px 13px;font-size:0.79rem;color:#333;line-height:1.65">
+      <span style="font-weight:700;color:#667eea">💬 白話解釋</span><br>
+      {_plain_language()}
+    </div>
+  </div>
+
+  <!-- 3a. 技術面 -->
+  <div style="margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="font-size:0.68rem;font-weight:700;color:#90a4ae;letter-spacing:.06em">技術面</span>
+      <span style="background:{t_bg};color:{t_col};font-size:0.63rem;font-weight:700;padding:1px 8px;border-radius:10px">{t_lbl}</span>
+      <span style="font-size:0.66rem;color:#b0bec5">{tech_metrics}</span>
+    </div>
+    <div style="font-size:0.76rem;line-height:1.65;padding-left:4px">{tech_rows}</div>
+    {pt_html}
+  </div>
+
+  <!-- 3b. 基本面 -->
+  <div style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="font-size:0.68rem;font-weight:700;color:#90a4ae;letter-spacing:.06em">基本面</span>
+      <span style="background:{f_bg};color:{f_col};font-size:0.63rem;font-weight:700;padding:1px 8px;border-radius:10px">{f_lbl}</span>
+    </div>
+    <div style="font-size:0.76rem;line-height:1.65;padding-left:4px">{fin_rows}</div>
+    {pf_html}
+  </div>
+
+  <!-- 4. 現在還差什麼 (WAIT only) -->
+  {check_html}
+
+  <!-- 5. 轉為 BUY 的條件 (WAIT only) -->
+  {trig_html}
+
+  <!-- 6. 交易計畫 -->
+  {plan_html}
+
+  <!-- 7. 部位試算 + 組合角度 (BUY only) -->
+  {ps_html}{portfolio_html}
+
+  <!-- 8. 什麼情況代表判斷錯了 -->
+  {inv_html}
+
+  <!-- 9. 模型資訊（dimmed） -->
+  <div style="font-size:0.62rem;color:#ccc;margin-top:10px;border-top:1px solid #f5f5f5;padding-top:6px;line-height:1.6">
+    模型資訊　PT {pt_val:.0f}｜綜合 {_total_score:.0f}｜信心 {conf}%｜{level} 級｜{setup}
+    <br>{dq_str}
+  </div>
+
+</div>""")
+
+    # ── Expander: raw scores + AI conclusion ────────────────────
     with st.expander("📊 原始評分"):
         col1, col2 = st.columns(2)
         with col1:
@@ -314,7 +519,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         if conclusion:
             st.markdown(f"> {conclusion}")
 
-    # ── Data Completeness badge ─────────────────────────────────────────────────
+    # ── Data completeness badge ─────────────────────────────────
     _missing_raw = r.get("missing_data_factors") or ""
     _missing_list = [f for f in _missing_raw.split(",") if f] if _missing_raw else []
     _factor_label = {"quality": "基本面", "behavior": "籌碼"}
@@ -322,13 +527,8 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         _nominal_weights = {"quality": 20, "behavior": 15}
         _missing_pct = sum(_nominal_weights.get(f, 0) for f in _missing_list)
         _completeness = 100 - _missing_pct
-        _warn_items = "　".join(
-            f'⚠️ {_factor_label.get(f, f)} 資料缺失' for f in _missing_list
-        )
-        _rw_note = "　".join(
-            f'{_factor_label.get(f, f)} {_nominal_weights.get(f, 0)}% → 重分配至技術面'
-            for f in _missing_list
-        )
+        _warn_items = "　".join(f'⚠️ {_factor_label.get(f, f)} 資料缺失' for f in _missing_list)
+        _rw_note    = "　".join(f'{_factor_label.get(f, f)} {_nominal_weights.get(f, 0)}% → 重分配至技術面' for f in _missing_list)
         st.html(
             f'<div style="background:#fff8e1;border:1px solid #ffe082;border-radius:7px;'
             f'padding:8px 12px;margin-bottom:8px">'
@@ -338,13 +538,12 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             f'</div>'
         )
 
-    # ── Evidence panel ──────────────────────────────────────────────────────────
-    signal = r.get("trade_signal") or "wait"
+    # ── Evidence panel ───────────────────────────────────────────
     if setup != "none" and signal != "sell":
         ev = load_evidence_stats(setup, current_regime)
         re_ev = ev.get("research", {})
         fe_ev = ev.get("forward", {})
-        narrative = ev.get("narrative", "")
+        narrative    = ev.get("narrative", "")
         r_n          = re_ev.get("n", 0)
         r_tier_emoji = re_ev.get("tier_emoji", "🔴")
         r_tier_label = re_ev.get("tier_label", "樣本不足")
@@ -353,15 +552,8 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         f_m60        = fe_ev.get("matured_60d", 0)
         f_tier_emoji = fe_ev.get("tier_emoji", "🔴")
         f_tier_label = fe_ev.get("tier_label", "尚無 OOS 資料")
-
-        # ── Inline evidence summary (always visible) ─────────────────────────
-        _r_wr = re_ev.get("alpha_20d", {}).get("winrate")
-        _r_detail = (
-            f"（{r_n} 筆，20D 勝率 {_r_wr:.0f}%）"
-            if (r_n >= 10 and _r_wr is not None)
-            else f"（{r_n} 筆）"
-        )
-        _f_detail = f"（20D 成熟 {f_m20} 筆）"
+        _r_wr        = re_ev.get("alpha_20d", {}).get("winrate")
+        _r_detail    = (f"（{r_n} 筆，20D 勝率 {_r_wr:.0f}%）" if (r_n >= 10 and _r_wr is not None) else f"（{r_n} 筆）")
         _narrative_html = (
             f'<div style="font-size:0.73rem;color:#555;margin-top:7px;font-style:italic">💬 {narrative}</div>'
             if narrative else ""
@@ -372,12 +564,9 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             f'<div style="font-size:0.65rem;color:#888;font-weight:700;letter-spacing:.05em;margin-bottom:6px">驗證強度</div>'
             f'<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.76rem;color:#333">'
             f'<span>🧪 Research：{r_tier_emoji} {r_tier_label} {_r_detail}</span>'
-            f'<span>🔒 Forward：{f_tier_emoji} {f_tier_label} {_f_detail}</span>'
-            f'</div>'
-            f'{_narrative_html}'
-            f'</div>'
+            f'<span>🔒 Forward：{f_tier_emoji} {f_tier_label}（20D 成熟 {f_m20} 筆）</span>'
+            f'</div>{_narrative_html}</div>'
         )
-
         with st.expander(f"📊 類似訊號歷史績效（{setup} × {current_regime}）"):
             st.markdown("**🧪 Research（In-Sample）**")
             if r_n < 10:
@@ -385,37 +574,29 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             else:
                 r20 = re_ev.get("alpha_20d", {})
                 r60 = re_ev.get("alpha_60d", {})
-                col1, col2 = st.columns(2)
-                with col1:
+                c1, c2 = st.columns(2)
+                with c1:
                     st.metric("類似情境", f"{r_n} 次")
-                    if r20.get("mean") is not None:
-                        st.metric("20D Alpha 均值", f"{r20['mean']:+.1f}%")
-                    if r60.get("mean") is not None:
-                        st.metric("60D Alpha 均值", f"{r60['mean']:+.1f}%")
-                with col2:
-                    if r20.get("winrate") is not None:
-                        st.metric("20D 勝率", f"{r20['winrate']:.0f}%")
-                    if r60.get("winrate") is not None:
-                        st.metric("60D 勝率", f"{r60['winrate']:.0f}%")
+                    if r20.get("mean") is not None: st.metric("20D Alpha 均值", f"{r20['mean']:+.1f}%")
+                    if r60.get("mean") is not None: st.metric("60D Alpha 均值", f"{r60['mean']:+.1f}%")
+                with c2:
+                    if r20.get("winrate") is not None: st.metric("20D 勝率", f"{r20['winrate']:.0f}%")
+                    if r60.get("winrate") is not None: st.metric("60D 勝率", f"{r60['winrate']:.0f}%")
                 st.caption(f"證據強度：{r_tier_emoji} {r_tier_label}")
-
             st.divider()
-
             st.markdown("**🔒 Forward Validation（真實 OOS）**")
-            col3, col4 = st.columns(2)
-            with col3:
+            c3, c4 = st.columns(2)
+            with c3:
                 st.metric("已記錄訊號", f"{f_total} 筆")
                 st.metric("20D 已成熟", f"{f_m20} 筆")
                 if f_m20 >= 10:
                     f20 = fe_ev.get("alpha_20d", {})
-                    if f20.get("mean") is not None:
-                        st.metric("20D Alpha", f"{f20['mean']:+.1f}%")
-            with col4:
+                    if f20.get("mean") is not None: st.metric("20D Alpha", f"{f20['mean']:+.1f}%")
+            with c4:
                 st.metric("60D 已成熟", f"{f_m60} 筆")
                 if f_m20 >= 10:
                     f20 = fe_ev.get("alpha_20d", {})
-                    if f20.get("winrate") is not None:
-                        st.metric("20D 勝率", f"{f20['winrate']:.0f}%")
+                    if f20.get("winrate") is not None: st.metric("20D 勝率", f"{f20['winrate']:.0f}%")
             if f_m20 < 10:
                 st.caption(f"{f_tier_emoji} Forward 樣本累積中（{f_m20} 筆 20D 已成熟）")
             else:
