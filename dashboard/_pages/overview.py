@@ -132,6 +132,107 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             )
         return ""
 
+    def _scenario_paths():
+        """三條情境路徑，用實際 stop/t1/t2 價格。"""
+        s_str = f"${stop_p:.1f}" if stop_p else "停損價"
+        t1_str = f"${t1:.1f}" if t1 else "目標一"
+        t2_str = f"${t2:.1f}" if t2 else "目標二"
+        if setup == "near_breakout":
+            scenarios = [
+                ("🟢", "突破成功",   f"站上前 20 日高點且量能維持 → 往 {t1_str} / {t2_str} 發展，可依計畫進場。"),
+                ("🟡", "碰壓力回檔", f"衝高但無法收在壓力上方 → 拉回測試支撐，守住再等下次突破機會。"),
+                ("🔴", "型態失敗",   f"突破失敗後轉弱，跌破 {s_str} → Near Breakout 假設失效，不再等待。"),
+            ]
+        elif setup == "pullback_buy":
+            if is_buy:
+                scenarios = [
+                    ("🟢", "支撐守穩續升", f"守住 MA10，動能回升 → 往 {t1_str} / {t2_str} 推進。"),
+                    ("🟡", "震盪整理再上", "支撐反覆測試，短線震盪 → 整理完成後繼續觀察。"),
+                    ("🔴", "跌破支撐",     f"MA10 / MA20 均告失守，跌破 {s_str} → 訊號失效。"),
+                ]
+            else:
+                scenarios = [
+                    ("🟢", "止穩轉多",   f"量縮守住 MA10 後反彈 → 進入 BUY 情境，往 {t1_str} 發展。"),
+                    ("🟡", "繼續盤整",   "在支撐附近反覆測試 → 繼續 WAIT，觀察後續動能。"),
+                    ("🔴", "跌破支撐",   f"無法守住 MA10 / MA20，跌破 {s_str} → 回踩假設失效。"),
+                ]
+        elif setup == "breakout":
+            scenarios = [
+                ("🟢", "突破延伸",   f"站穩突破位置，量能持續 → 往 {t1_str} / {t2_str} 發展。"),
+                ("🟡", "突破後回測", "漲過快後拉回測試突破點 → 若守住可加碼；若跌破縮手觀望。"),
+                ("🔴", "假突破",     f"回跌至突破點以下，量縮 → 跌破 {s_str}，突破假設失效，出場。"),
+            ]
+        elif setup == "trending":
+            scenarios = [
+                ("🟢", "趨勢延伸",   f"均線繼續多頭，動能持續 → 往 {t1_str} / {t2_str} 推進。"),
+                ("🟡", "短線回測均線", "漲多後小回測試 MA20 → 守住則趨勢完整，繼續持有。"),
+                ("🔴", "趨勢反轉",   f"均線死叉或跌破 {s_str} → 趨勢假設失效，出場。"),
+            ]
+        elif setup == "breakdown":
+            scenarios = [
+                ("🟢", "強力反彈", "底部有強力量能支撐，有機會快速反彈，但概率低，需謹慎。"),
+                ("🟡", "低位盤整", "在低位橫盤，等待訊號明朗化再判斷。"),
+                ("🔴", "持續下跌", f"跌破 {s_str} 繼續探底 → 不宜逢低接。"),
+            ]
+        else:
+            return ""
+        rows = "".join(
+            f'<div style="display:flex;gap:8px;align-items:flex-start;padding:5px 0;'
+            f'border-bottom:1px solid #f0f0f0">'
+            f'<span style="font-size:0.95rem;flex-shrink:0;line-height:1.4">{icon}</span>'
+            f'<div><div style="font-weight:700;font-size:0.74rem;color:#333">{lbl}</div>'
+            f'<div style="font-size:0.72rem;color:#555;margin-top:1px;line-height:1.5">{desc}</div></div>'
+            f'</div>'
+            for icon, lbl, desc in scenarios
+        )
+        return f"""
+<div style="background:#fafafa;border:1px solid #e8eaf0;border-radius:8px;padding:10px 12px;margin:8px 0 4px">
+  <div style="font-size:0.62rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:6px">未來可能怎麼走</div>
+  {rows}
+</div>"""
+
+    def _historical_analog_html(ev: dict):
+        """歷史類似情境統計，接在情境路徑下方。"""
+        re_ev = ev.get("research", {})
+        r_n   = re_ev.get("n", 0)
+        if r_n < 5:
+            return ""
+        r20          = re_ev.get("alpha_20d", {})
+        r60          = re_ev.get("alpha_60d", {})
+        tier_emoji   = re_ev.get("tier_emoji", "🔴")
+        median_20    = r20.get("median")
+        wr_20        = r20.get("winrate")
+        p25_20       = r20.get("p25")
+        p75_20       = r20.get("p75")
+        median_60    = r60.get("median")
+        wr_60        = r60.get("winrate")
+        if median_20 is None:
+            return (
+                f'<div style="font-size:0.7rem;color:#888;padding:4px 0">'
+                f'📊 歷史相似情境 {r_n} 次 {tier_emoji}，統計數據尚在累積。</div>'
+            )
+        sign20 = "+" if median_20 >= 0 else ""
+        range_str = (
+            f"{p25_20:+.1f}% ～ {p75_20:+.1f}%"
+            if (p25_20 is not None and p75_20 is not None) else "—"
+        )
+        m60_str = f"60D 中位數 {median_60:+.1f}%　60D 勝率 {wr_60:.0f}%" if median_60 is not None else ""
+        return f"""
+<div style="background:#f8f9fa;border:1px dashed #cfd8dc;border-radius:8px;padding:9px 12px;margin:4px 0 10px">
+  <div style="font-size:0.62rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:5px">
+    📊 歷史相似走勢　{tier_emoji} {r_n} 次類似情境
+  </div>
+  <div style="font-size:0.75rem;color:#333;line-height:1.75">
+    20D 中位數 <b>{sign20}{median_20:.1f}%</b>
+    25–75% 範圍 <b>{range_str}</b>
+    20D 勝率 <b>{wr_20:.0f}%</b>
+    {f"<br>{m60_str}" if m60_str else ""}
+  </div>
+  <div style="font-size:0.62rem;color:#aaa;margin-top:4px">
+    以上為相同 Setup × 市場情境的歷史分布，非 AI 預測。實際路徑受多種因素影響。
+  </div>
+</div>"""
+
     def _checklist_conclusion():
         """checklist 下方的「所以現在」結論，setup-specific。"""
         if setup == "near_breakout":
@@ -234,6 +335,14 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
                 ("🟡" if has_pressure else "🟢", "壓力", "注意前波壓力" if has_pressure else "無明顯壓力"),
             ]
         return []
+
+    # ── Load evidence early (needed for historical analog) ──────
+    _ev = {}
+    if setup != "none" and signal != "sell":
+        try:
+            _ev = load_evidence_stats(setup, current_regime)
+        except Exception:
+            _ev = {}
 
     # ── Build HTML blocks ────────────────────────────────────────
     price_str = f"NT$ {price:,.1f}" if price else "—"
@@ -459,7 +568,11 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     </div>
   </div>
 
-  <!-- 3a. 技術面 -->
+  <!-- 3. 情境路徑 + 歷史類比 -->
+  {_scenario_paths()}
+  {_historical_analog_html(_ev)}
+
+  <!-- 4a. 技術面 -->
   <div style="margin-bottom:10px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
       <span style="font-size:0.68rem;font-weight:700;color:#90a4ae;letter-spacing:.06em">技術面</span>
@@ -538,9 +651,9 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             f'</div>'
         )
 
-    # ── Evidence panel ───────────────────────────────────────────
+    # ── Evidence panel (expander only, data already loaded above) ──
     if setup != "none" and signal != "sell":
-        ev = load_evidence_stats(setup, current_regime)
+        ev = _ev
         re_ev = ev.get("research", {})
         fe_ev = ev.get("forward", {})
         narrative    = ev.get("narrative", "")

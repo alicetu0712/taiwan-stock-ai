@@ -142,12 +142,16 @@ def _compute_forward_alpha(
 
 def _alpha_stats(alphas: list) -> dict:
     if not alphas:
-        return {"mean": None, "median": None, "winrate": None}
+        return {"mean": None, "median": None, "winrate": None, "p25": None, "p75": None, "p10": None, "p90": None}
     a = np.array(alphas) * 100
     return {
         "mean":    round(float(np.mean(a)), 2),
         "median":  round(float(np.median(a)), 2),
         "winrate": round(float(np.mean(a > 0)) * 100, 1),
+        "p25":     round(float(np.percentile(a, 25)), 2),
+        "p75":     round(float(np.percentile(a, 75)), 2),
+        "p10":     round(float(np.percentile(a, 10)), 2),
+        "p90":     round(float(np.percentile(a, 90)), 2),
     }
 
 
