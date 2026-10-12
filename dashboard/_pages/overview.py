@@ -483,7 +483,7 @@ def page_today(selected_date: date) -> None:
         from src.database import get_session as _gs
         _s = _gs()
         recs_cnt = _s.execute(
-            _text("SELECT COUNT(*) FROM recommendations WHERE date=:d AND tier='recommend'"),
+            _text("SELECT COUNT(*) FROM recommendations WHERE date=:d AND tier='recommend' AND is_valid IS NOT FALSE"),
             {"d": selected_date},
         ).scalar() or 0
         _s.close()
