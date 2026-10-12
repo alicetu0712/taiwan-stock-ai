@@ -290,27 +290,28 @@ def fetch_all_prices(trade_date: Optional[date] = None) -> tuple:
     # 取 TWSE 的 API 日期作為 source_price_date（代表性更強；TPEX 為備選）
     source_price_date = twse_api_date or tpex_api_date
 
-    # yfinance 備援：API 回傳日期 < 今天 → 嘗試抓今日資料
+    # yfinance 備援：API 回傳日期 < 目標日期 → 嘗試抓目標日期資料
     today = date.today()
-    if trade_date is None and not all_df.empty:
+    target = trade_date or today
+    if not all_df.empty:
         api_date = source_price_date or all_df["date"].iloc[0]
         if isinstance(api_date, str):
             api_date = date.fromisoformat(api_date)
         if hasattr(api_date, "date"):
             api_date = api_date.date()
-        if api_date < today:
+        if api_date < target:
             logger.info(
-                f"TWSE/TPEx API 仍回傳 {api_date}（今日 {today}），啟用 yfinance 備援…"
+                f"TWSE/TPEx API 仍回傳 {api_date}（目標 {target}），啟用 yfinance 備援…"
             )
-            yf_df = fetch_yfinance_daily(all_df, today)
+            yf_df = fetch_yfinance_daily(all_df, target)
             if not yf_df.empty:
                 yf_date = yf_df["date"].iloc[0]
                 if hasattr(yf_date, "date"):
                     yf_date = yf_date.date()
-                if yf_date == today:
-                    logger.info(f"yfinance 備援成功：{len(yf_df)} 筆 ({today})")
-                    return yf_df, today
-            logger.warning("yfinance 備援無今日資料，仍使用 TWSE/TPEx 舊資料。")
+                if yf_date == target:
+                    logger.info(f"yfinance 備援成功：{len(yf_df)} 筆 ({target})")
+                    return yf_df, target
+            logger.warning(f"yfinance 備援無 {target} 資料，仍使用 TWSE/TPEx 舊資料。")
 
     logger.info(f"Total stocks fetched: {len(all_df)}")
     return all_df, source_price_date
