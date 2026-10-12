@@ -369,3 +369,82 @@ def evidence_narrative(re_ev: dict, fe_ev: dict) -> str:
             )
 
     return " ".join(parts) if parts else "資料不足以生成解讀。"
+
+
+def monte_carlo_dist(
+    stock_id: str,
+    current_price: float,
+    n_days: int = 20,
+    n_sims: int = 1000,
+    lookback: int = 252,
+    engine=None,
+) -> dict:
+    """
+    Stock historical-volatility Monte Carlo price distribution.
+
+    Answers: "Given this stock's own historical daily volatility, where might
+    the price distribute at n_days?"
+
+    This is NOT setup-conditioned evidence. Use Historical Analog (research_evidence /
+    forward_evidence) for setup × regime conditional stats.
+
+    Method: fit Student-t to daily log returns (heavier tails than normal),
+    simulate n_sims paths with ZERO drift (volatility only — no directional forecast).
+    Returns price percentiles at day n_days.
+    """
+    empty = {
+        "p10": None, "p25": None, "p50": None, "p75": None, "p90": None,
+        "n_hist": 0, "sigma_daily": None,
+    }
+    if not current_price or current_price <= 0:
+        return empty
+    try:
+        from scipy import stats as sp_stats
+        from src.database import DailyPrice, get_session
+
+        s = get_session(engine)
+        rows = (
+            s.query(DailyPrice.close)
+            .filter(
+                DailyPrice.stock_id == stock_id,
+                DailyPrice.close.isnot(None),
+                DailyPrice.close > 0,
+            )
+            .order_by(DailyPrice.date.desc())
+            .limit(lookback + 1)
+            .all()
+        )
+        s.close()
+
+        if len(rows) < 21:
+            return empty
+
+        closes = np.array([r.close for r in reversed(rows)], dtype=float)
+        log_returns = np.diff(np.log(closes))
+
+        if len(log_returns) < 20:
+            return empty
+
+        # Fit Student-t distribution; override loc=0 (zero-drift — pure volatility)
+        df_t, _loc, scale_t = sp_stats.t.fit(log_returns)
+
+        rng = np.random.default_rng(42)
+        sim_returns = sp_stats.t.rvs(
+            df_t, loc=0.0, scale=scale_t,
+            size=(n_sims, n_days), random_state=rng,
+        )
+        cum_log_ret = sim_returns.sum(axis=1)
+        final_prices = current_price * np.exp(cum_log_ret)
+
+        return {
+            "p10":       round(float(np.percentile(final_prices, 10)), 2),
+            "p25":       round(float(np.percentile(final_prices, 25)), 2),
+            "p50":       round(float(np.percentile(final_prices, 50)), 2),
+            "p75":       round(float(np.percentile(final_prices, 75)), 2),
+            "p90":       round(float(np.percentile(final_prices, 90)), 2),
+            "n_hist":    len(log_returns),
+            "sigma_daily": round(float(scale_t) * 100, 2),
+        }
+    except Exception as e:
+        logger.warning(f"monte_carlo_dist({stock_id}): {e}")
+        return empty

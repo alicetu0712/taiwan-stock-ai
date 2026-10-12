@@ -233,6 +233,37 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
   </div>
 </div>"""
 
+    def _mc_dist_html(mc: dict):
+        """🎲 價格波動模擬：本股歷史波動特性，與 Setup 情境無關。"""
+        p50 = mc.get("p50")
+        if p50 is None:
+            return ""
+        p10     = mc.get("p10")
+        p25     = mc.get("p25")
+        p75     = mc.get("p75")
+        p90     = mc.get("p90")
+        sigma   = mc.get("sigma_daily")
+        n_hist  = mc.get("n_hist", 0)
+        sig_str = f"　日波動（σ）{sigma:.1f}%" if sigma else ""
+        def _p(v): return f"${v:.1f}" if v is not None else "—"
+        return f"""
+<div style="background:#f3f4f8;border:1px solid #dce0ec;border-radius:8px;padding:9px 12px;margin:4px 0 10px">
+  <div style="font-size:0.62rem;font-weight:700;color:#5c6bc0;letter-spacing:.05em;margin-bottom:5px">
+    🎲 價格波動模擬（本股歷史波動特性）
+  </div>
+  <div style="font-size:0.73rem;color:#333;line-height:1.9">
+    20D 分布&nbsp;&nbsp;
+    <span style="color:#888;margin-right:3px">10%</span><b>{_p(p10)}</b>&nbsp;&nbsp;
+    <span style="color:#888;margin-right:3px">25%</span><b>{_p(p25)}</b>&nbsp;&nbsp;
+    <span style="color:#888;margin-right:3px">中位</span><b>{_p(p50)}</b>&nbsp;&nbsp;
+    <span style="color:#888;margin-right:3px">75%</span><b>{_p(p75)}</b>&nbsp;&nbsp;
+    <span style="color:#888;margin-right:3px">90%</span><b>{_p(p90)}</b>
+  </div>
+  <div style="font-size:0.62rem;color:#9e9e9e;margin-top:4px">
+    依近 {n_hist} 個交易日日報酬（Student-t，零漂移）推算{sig_str}。不反映 Setup 情境、不預測方向。
+  </div>
+</div>"""
+
     def _checklist_conclusion():
         """checklist 下方的「所以現在」結論，setup-specific。"""
         if setup == "near_breakout":
@@ -343,6 +374,15 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             _ev = load_evidence_stats(setup, current_regime)
         except Exception:
             _ev = {}
+
+    # ── Monte Carlo: stock's own historical volatility (NOT setup-conditioned) ──
+    _mc: dict = {}
+    if price and price > 0:
+        try:
+            from src.services.evidence_service import monte_carlo_dist
+            _mc = monte_carlo_dist(sid, price)
+        except Exception:
+            _mc = {}
 
     # ── Build HTML blocks ────────────────────────────────────────
     price_str = f"NT$ {price:,.1f}" if price else "—"
@@ -568,9 +608,10 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     </div>
   </div>
 
-  <!-- 3. 情境路徑 + 歷史類比 -->
+  <!-- 3. 情境路徑 + 歷史類比 + 波動模擬 -->
   {_scenario_paths()}
   {_historical_analog_html(_ev)}
+  {_mc_dist_html(_mc)}
 
   <!-- 4a. 技術面 -->
   <div style="margin-bottom:10px">
