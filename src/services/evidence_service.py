@@ -8,6 +8,7 @@ Architecture:
 - NEVER used to change BUY/WAIT label — display/context only
 """
 
+import bisect
 import logging
 from datetime import timedelta
 
