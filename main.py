@@ -1024,9 +1024,9 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
 
         for rec in top_recs:
             ai = ai_reports.get(rec.stock_id, {})
-            # 避免同一天重複新增
+            # 避免同一天重複新增；必須限定 tier="recommend"，避免跨 tier 污染
             existing = session.query(Recommendation).filter_by(
-                stock_id=rec.stock_id, date=trade_date
+                stock_id=rec.stock_id, date=trade_date, tier="recommend"
             ).first()
             if not existing:
                 r = Recommendation(
@@ -1090,6 +1090,7 @@ def _save_recommendations(session, trade_date, top_recs, all_candidates, ai_repo
                 existing.setup_type        = rec.setup_type
                 existing.ma20_gap          = rec.ma20_gap
                 existing.trade_signal      = rec.trade_signal
+                existing.is_valid          = True   # 重跑時確保 in-top-recs 的記錄不被留在 False
                 existing.entry_low         = rec.entry_low
                 existing.entry_high        = rec.entry_high
                 existing.stop_price        = rec.stop_price
