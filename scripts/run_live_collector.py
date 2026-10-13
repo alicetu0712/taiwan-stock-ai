@@ -1,8 +1,13 @@
 """
 scripts/run_live_collector.py — 盤中 Live Execution 背景收集器
 
-每 N 分鐘取得今日 BUY 推薦的即時報價，評估進場狀態，
+每 N 分鐘取得「今日 Active BUY Signals」的即時報價，評估進場狀態，
 將狀態轉換寫入 DB（live_execution_events）。
+
+Active BUY Signal 定義：
+  - signal_date 在最近 SIGNAL_ACTIVE_DAYS 個交易日內
+  - execution_date（= next_trading_day(signal_date)）≤ today
+  - 例：10/13 收盤 BUY → 10/14 起 Active，非「10/14 有哪些推薦」
 
 執行方式：
   單次：    python3 scripts/run_live_collector.py
