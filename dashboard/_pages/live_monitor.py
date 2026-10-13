@@ -216,10 +216,10 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
             if quote and quote.update_time:
                 price_display += f'<span style="font-size:0.62rem;color:#aaa"> ({quote.update_time})</span>'
 
-        # 距訊號價漲跌
+        # 距訊號價漲跌（訊號參考價 = 昨日模型發出 BUY 時的收盤價）
         delta_html = ""
         if cur_price and sig_price:
-            delta_html = _render_price_delta(cur_price, sig_price, "vs 訊號")
+            delta_html = _render_price_delta(cur_price, sig_price, "vs 昨日訊號價")
 
         # 交易計劃摘要
         plan_parts = []
