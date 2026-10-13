@@ -19,10 +19,30 @@ import streamlit as st
 logger = logging.getLogger(__name__)
 
 
-def _load_today_buy_recs(sel_date: date) -> list:
-    """讀取今日 BUY/BUY★ 推薦（已含 entry/stop/target）。"""
+def _effective_signal_date(sel_date: date) -> date:
+    """
+    Live Monitor 的 signal_date 解析：
+      - 盤中（sel_date == today, 且今天是交易日）→ 監控前一交易日的訊號
+        （signal_date = prev_trading_day(today)，execution_date = today）
+      - 其他（歷史查詢 / 非交易日）→ 直接用 sel_date
+
+    設計緣由：模型在收盤後產生訊號（signal_date = 10/13），
+    實際可執行是下一交易日（execution_date = 10/14）。
+    如果 UI 直接用 today(10/14) 查推薦，會找不到任何資料。
+    """
+    from src.core.trading_calendar import is_trading_day, prev_trading_day
+
+    today = date.today()
+    if sel_date == today and is_trading_day(today):
+        prev = prev_trading_day(today)
+        return prev if prev is not None else sel_date
+    return sel_date
+
+
+def _load_today_buy_recs(signal_date: date) -> list:
+    """讀取指定 signal_date 的 BUY/BUY★ 推薦（已含 entry/stop/target）。"""
     from dashboard.loaders import load_db_recommendations
-    recs = load_db_recommendations(sel_date)
+    recs = load_db_recommendations(signal_date)
     return [r for r in recs if r.get("trade_signal") in ("strong_buy", "buy")]
 
 
@@ -348,10 +368,17 @@ def page_live_monitor(sel_date: date) -> None:
     st.markdown("### 📡 Live Decision Monitor")
     st.caption("AI 訊號每日收盤後固定。盤中只更新「現在能不能執行」的即時判斷。")
 
-    buy_recs = _load_today_buy_recs(sel_date)
+    # sel_date = today 時，盤中實際應監控前一交易日的訊號（execution_date = today）
+    signal_date = _effective_signal_date(sel_date)
+    buy_recs    = _load_today_buy_recs(signal_date)
+
+    if signal_date != sel_date:
+        st.caption(
+            f"🗓 監控 {signal_date} 訊號（execution_date = {sel_date}）"
+        )
 
     if not buy_recs:
-        st.info(f"📭 {sel_date} 無 BUY / BUY★ 推薦，無需監控。")
+        st.info(f"📭 {signal_date} 無 BUY / BUY★ 推薦，無需監控。")
         st.caption("收盤後 pipeline 執行完成後會出現推薦。")
         return
 
@@ -393,6 +420,6 @@ def page_live_monitor(sel_date: date) -> None:
     # 動態 fragment：每次 page_live_monitor 重新執行時（selectbox 改變），以新 interval 重建
     @st.fragment(run_every=f"{refresh_interval}s")
     def _auto_refresh():
-        _live_cards(buy_recs, market_map, signal_date=sel_date, interval=refresh_interval)
+        _live_cards(buy_recs, market_map, signal_date=signal_date, interval=refresh_interval)
 
     _auto_refresh()
