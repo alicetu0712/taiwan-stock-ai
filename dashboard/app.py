@@ -21,6 +21,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# ARM64 macOS Python 3.13 workaround: force pandas Timedelta type initialization
+# in the main thread before Streamlit spawns any background threads.
+# Without this, numpy.timedelta64 type object can be accessed concurrently during
+# first initialization, causing a null-pointer SIGSEGV in Timedelta.__new__.
+try:
+    import pandas as _pd
+    _pd.Timedelta(0)
+    del _pd
+except Exception:
+    pass
+
 # 載入 .env（本機開發）；Streamlit Cloud 用 st.secrets
 try:
     from dotenv import load_dotenv

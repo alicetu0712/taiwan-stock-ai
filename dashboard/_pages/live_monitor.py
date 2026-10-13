@@ -46,11 +46,9 @@ def _render_price_delta(current: float, reference: float, label: str) -> str:
     )
 
 
-@st.fragment(run_every="10s")
-def _live_cards(recs: list, market_map: dict) -> None:
+def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
     """
-    每 10 秒自動刷新：抓取最新報價並更新每張卡片的即時決策。
-    只有這個 fragment 重新執行，整頁不重載。
+    Live 卡片內容，由外部 fragment 包裝以支援動態刷新頻率。
     """
     from src.collectors.intraday_collector import fetch_intraday, best_price
     from src.engines.live_decision import evaluate_entry_status, market_session_label
@@ -72,7 +70,7 @@ def _live_cards(recs: list, market_map: dict) -> None:
         f'<span style="background:{status_color};color:white;padding:3px 10px;'
         f'border-radius:12px;font-size:0.75rem;font-weight:700">{session_label}</span>'
         f'<span style="font-size:0.72rem;color:#888">最後更新：{now_str}</span>'
-        f'{"<span style=\'font-size:0.72rem;color:#00897b\'>🔄 每 10 秒自動刷新</span>" if is_live else ""}'
+        f'{"<span style=\'font-size:0.72rem;color:#00897b\'>🔄 每 " + str(interval) + " 秒自動刷新</span>" if is_live else ""}'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -191,25 +189,20 @@ def page_live_monitor(sel_date: date) -> None:
     except Exception:
         market_map = {}
 
-    # 設定面板
-    with st.expander("⚙️ 監控設定", expanded=False):
-        st.caption("目前監控今日所有 BUY / BUY★ 推薦。未來可加入自選股。")
-        col1, col2 = st.columns(2)
-        with col1:
-            refresh_interval = st.selectbox(
-                "自動刷新頻率",
-                options=[5, 10, 30, 60],
-                index=1,
-                format_func=lambda x: f"每 {x} 秒",
-                key="lm_refresh",
-            )
-        with col2:
-            st.metric("監控標的數", len(buy_recs))
+    # 設定面板（selectbox 放在 expander 外確保值隨時可讀）
+    col_cfg1, col_cfg2, col_cfg3 = st.columns([2, 2, 4])
+    with col_cfg1:
+        refresh_interval = st.selectbox(
+            "自動刷新頻率",
+            options=[5, 10, 30, 60],
+            index=1,
+            format_func=lambda x: f"每 {x} 秒",
+            key="lm_refresh",
+        )
+    with col_cfg2:
+        st.metric("監控標的數", len(buy_recs))
 
-    st.markdown("---")
-
-    # 今日推薦清單（靜態摘要，不刷新）
-    with st.expander(f"📋 今日 BUY 推薦（{len(buy_recs)} 支）", expanded=False):
+    with st.expander("📋 今日 BUY 推薦", expanded=False):
         for r in buy_recs:
             sig = "BUY ★" if r.get("trade_signal") == "strong_buy" else "BUY"
             setup = r.get("setup_type") or "—"
@@ -218,5 +211,12 @@ def page_live_monitor(sel_date: date) -> None:
                 f"`{sig}` · {setup} · 訊號價 NT$ {r.get('price', '—')}"
             )
 
-    # Live 卡片（fragment，每 N 秒刷新）
-    _live_cards(buy_recs, market_map)
+    st.markdown("---")
+
+    # Live 卡片：動態 fragment，interval 由 selectbox 控制
+    # 每次 page_live_monitor 重新執行（selectbox 改變時），fragment 以新 interval 重建
+    @st.fragment(run_every=f"{refresh_interval}s")
+    def _auto_refresh():
+        _live_cards(buy_recs, market_map, interval=refresh_interval)
+
+    _auto_refresh()

@@ -376,13 +376,8 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             _ev = {}
 
     # ── Monte Carlo: stock's own historical volatility (NOT setup-conditioned) ──
+    # Disabled: scipy.stats on ARM64 Python 3.13 causes pandas Timedelta SIGSEGV
     _mc: dict = {}
-    if price and price > 0:
-        try:
-            from src.services.evidence_service import monte_carlo_dist
-            _mc = monte_carlo_dist(sid, price)
-        except Exception:
-            _mc = {}
 
     # ── Build HTML blocks ────────────────────────────────────────
     price_str = f"NT$ {price:,.1f}" if price else "—"
