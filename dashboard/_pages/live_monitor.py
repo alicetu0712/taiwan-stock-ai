@@ -7,7 +7,8 @@ pages/live_monitor.py — 📡 Live Decision Monitor
   - AI 原始訊號（BUY ★）固定不變，來自每日收盤後分析
   - BUY ≠ Good Entry：模型看好 Setup，不等於現在進場 R/R 合理
   - 盤中只判斷「現在能不能執行這個 BUY 計畫」
-  - 不寫入任何 DB，純展示層
+  - State Transition 寫入 DB：狀態改變時透過 live_execution_service 落地，
+    供日後 Forward 研究（門檻最佳化、RAPID_DROP 效果驗證等）
 """
 
 import logging
@@ -147,18 +148,27 @@ def _rr_html(ld) -> str:
     return f'<span style="color:{color};font-weight:700"> R/R {rr:.1f}x</span>{price_note}'
 
 
-def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
+def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int = 10) -> None:
     """
     Live 卡片內容，由外部 fragment 包裝以支援動態刷新頻率。
+    狀態轉換（State Transition）透過 live_execution_service 寫入 DB。
     """
     from src.collectors.intraday_collector import fetch_intraday, best_price, quote_date_status
     from src.engines.live_decision import LiveStatus, evaluate_entry_status, market_session_label
+    from src.services.live_execution_service import record_if_transition
 
     session_label = market_session_label()
     is_live = session_label == "盤中"
 
     stock_ids = [r["sid"] for r in recs]
     quotes    = fetch_intraday(stock_ids, market_map=market_map)
+
+    # 每個 (stock_id, signal_date) 的最後記錄狀態，跨 fragment 刷新保留
+    if "lm_status_map" not in st.session_state:
+        st.session_state["lm_status_map"] = {}
+    status_map: dict = st.session_state["lm_status_map"]
+
+    signal_date_str = str(signal_date)
 
     from datetime import datetime
     import zoneinfo
@@ -191,6 +201,21 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
         date_known   = (date_status == "valid")
 
         ld = evaluate_entry_status(cur_price, rec, intraday_low=intraday_low, date_known=date_known)
+
+        # State Transition → DB（只在狀態變化時寫入，同狀態持續不重複記錄）
+        map_key   = (sid, signal_date_str)
+        prev_st   = status_map.get(map_key)          # None = 首次觀察此股
+        new_st    = ld.status.value
+        record_if_transition(
+            stock_id=sid,
+            signal_date=signal_date,
+            prev_status=prev_st,
+            ld=ld,
+            rec=rec,
+            quote_trade_date=quote.trade_date if quote else None,
+            quote_quality=date_status,
+        )
+        status_map[map_key] = new_st
 
         signal_label = "BUY ★" if rec.get("trade_signal") == "strong_buy" else "BUY"
         signal_color = "#1a7f4b" if rec.get("trade_signal") == "strong_buy" else "#2ecc71"
@@ -366,6 +391,6 @@ def page_live_monitor(sel_date: date) -> None:
     # 動態 fragment：每次 page_live_monitor 重新執行時（selectbox 改變），以新 interval 重建
     @st.fragment(run_every=f"{refresh_interval}s")
     def _auto_refresh():
-        _live_cards(buy_recs, market_map, interval=refresh_interval)
+        _live_cards(buy_recs, market_map, signal_date=sel_date, interval=refresh_interval)
 
     _auto_refresh()

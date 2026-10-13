@@ -354,6 +354,57 @@ class ExecutionLog(Base):
     strategy_version = Column(String(20), default="v6.0")
 
 
+class LiveExecutionEvent(Base):
+    """
+    盤中 Live Decision 狀態轉換記錄（Forward 研究資料集）
+
+    寫入時機：State Transition（prev_status → live_status 發生改變時）。
+    不記錄持續不變的狀態，避免每 10 秒產生一筆無研究價值的重複資料。
+
+    用途：
+      - 回答「RAPID_DROP 攔截的 BUY，20D 後表現如何？」
+      - 不同門檻（-2.5%/-4% × +1%/+3%/+5%）× 20D Alpha 矩陣
+      - live_rule_version 用於比較不同版本門檻的效果
+    """
+
+    __tablename__ = "live_execution_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Signal context
+    stock_id     = Column(String(10), nullable=False, index=True)
+    signal_date  = Column(Date, nullable=False, index=True)   # BUY 訊號日期
+    signal_price = Column(Float)                              # 訊號日收盤價
+
+    # Observation context
+    observed_at   = Column(DateTime, nullable=False, default=datetime.utcnow)
+    current_price = Column(Float)   # 觀察當下即時成交
+    intraday_low  = Column(Float)   # 今日截至觀察時最低點
+
+    # State transition
+    prev_status = Column(String(30))    # 前一狀態（None = 首次觀察）
+    live_status = Column(String(30), nullable=False)
+
+    # Metrics at observation time
+    drop_pct          = Column(Float)   # 低點 vs 訊號價跌幅（%）
+    bounce_pct        = Column(Float)   # 現價 vs 低點反彈幅度（%）
+    rr_at_observation = Column(Float)   # 以現價計算的 R/R
+
+    # Signal plan frozen at signal_date (from Recommendation)
+    entry_low   = Column(Float)
+    entry_high  = Column(Float)
+    stop_price  = Column(Float)
+    target1     = Column(Float)
+
+    # Data quality at observation time
+    quote_trade_date = Column(String(8))    # YYYYMMDD（報價來源日期）
+    quote_quality    = Column(String(10))   # valid / stale / unknown
+
+    # Version tracking — enables comparing rule versions in future research
+    strategy_version  = Column(String(20))
+    live_rule_version = Column(String(20))
+
+
 class DailyReport(Base):
     """每日報告（Markdown 內文，供雲端環境使用）"""
 

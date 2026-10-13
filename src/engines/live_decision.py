@@ -5,7 +5,7 @@ live_decision.py — 盤中即時進場狀態判斷
   - AI 原始訊號（trade_signal / decision_code）永遠固定，不被盤中價格覆蓋
   - 盤中只判斷「現在這個價格能不能執行昨日的 BUY 計畫」
   - BUY ≠ Good Entry：前者是模型對 Setup 的評分，後者是現價的 R/R
-  - 輸出為 LiveStatus，僅供 UI 顯示，不寫入 DB
+  - 狀態轉換由 live_execution_service 落地 DB（State Transition 架構）
 
 狀態優先序（高 → 低）：
   CANCEL > STOP_WARNING > RAPID_DROP/WATCHING_LOW > IN_RANGE > ABOVE_RANGE > CHASING > BELOW_RANGE > NO_RANGE
@@ -45,6 +45,10 @@ _STATUS_META = {
     LiveStatus.DATE_UNKNOWN:      {"icon": "⚪", "label": "日期未確認",   "color": "#78909c", "bg": "#eceff1"},
     LiveStatus.NON_BUY:           {"icon": "—",  "label": "不適用",       "color": "#bdbdbd", "bg": "#fafafa"},
 }
+
+# Live 規則版本：記錄於 LiveExecutionEvent，用於日後門檻最佳化研究
+# 格式：v<major>.<minor>；門檻調整時遞增 minor，邏輯結構改變時遞增 major
+LIVE_RULE_VERSION = "v1.0"  # drop=-2.5%, bounce=+0.8%, reconfirm=+3.0%
 
 # 以今日盤中低點（quote.low）偵測急跌：低點較訊號價跌幅超過此值
 # 用低點而非現價判斷，避免正常震盪誤觸（e.g. 現價在進場區但低點確實急跌過）
