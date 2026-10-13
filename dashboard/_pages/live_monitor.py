@@ -151,7 +151,7 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
     """
     Live 卡片內容，由外部 fragment 包裝以支援動態刷新頻率。
     """
-    from src.collectors.intraday_collector import fetch_intraday, best_price, is_quote_stale
+    from src.collectors.intraday_collector import fetch_intraday, best_price, quote_date_status
     from src.engines.live_decision import LiveStatus, evaluate_entry_status, market_session_label
 
     session_label = market_session_label()
@@ -186,9 +186,11 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
 
         cur_price    = best_price(quote) if quote else None   # 只取真實成交（z 欄位）
         intraday_low = quote.low if quote else None
-        stale        = is_quote_stale(quote) if quote else False
+        date_status  = quote_date_status(quote) if quote else "unknown"
+        # fail-closed：只有 date_status=="valid" 才允許輸出正向進場訊號
+        date_known   = (date_status == "valid")
 
-        ld = evaluate_entry_status(cur_price, rec, intraday_low=intraday_low)
+        ld = evaluate_entry_status(cur_price, rec, intraday_low=intraday_low, date_known=date_known)
 
         signal_label = "BUY ★" if rec.get("trade_signal") == "strong_buy" else "BUY"
         signal_color = "#1a7f4b" if rec.get("trade_signal") == "strong_buy" else "#2ecc71"
@@ -199,10 +201,12 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
         t1           = rec.get("target1")
 
         # 即時價格顯示（只用真實成交）
-        if stale:
-            price_display = f'<span style="color:#e53935">⚠ 舊資料</span>'
+        if date_status == "stale":
+            price_display = f'<span style="color:#e53935">⚠ 舊交易日資料</span>'
             if quote and quote.trade_date:
                 price_display += f'<span style="font-size:0.62rem;color:#e53935"> ({quote.trade_date[:4]}/{quote.trade_date[4:6]}/{quote.trade_date[6:]})</span>'
+        elif date_status == "unknown" and not cur_price:
+            price_display = '<span style="color:#78909c">⚪ 日期未確認</span>'
         elif cur_price:
             price_display = f"NT$ {cur_price:,.1f}"
             if quote and quote.update_time:

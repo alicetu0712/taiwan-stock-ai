@@ -237,3 +237,43 @@ def test_plain_text_exists_for_drop_states():
 def test_plain_text_empty_for_normal():
     ld = evaluate_entry_status(200.0, _REC, intraday_low=201.0)
     assert ld.plain_text == ""
+
+
+# ─────────────────────────────────────────────────────────────────
+# Data Quality：date_known=False（fail-closed）
+# ─────────────────────────────────────────────────────────────────
+
+def test_date_unknown_suppresses_in_range():
+    """date_known=False 時，IN_RANGE → DATE_UNKNOWN（不允許正向進場訊號）。"""
+    ld = evaluate_entry_status(200.0, _REC, intraday_low=201.0, date_known=False)
+    assert ld.status == LiveStatus.DATE_UNKNOWN
+
+
+def test_date_unknown_suppresses_entry_reconfirmed():
+    """date_known=False 時，ENTRY_RECONFIRMED → DATE_UNKNOWN。"""
+    ld = evaluate_entry_status(204.0, _REC, intraday_low=195.0, date_known=False)
+    assert ld.status == LiveStatus.DATE_UNKNOWN
+
+
+def test_date_unknown_preserves_rapid_drop():
+    """date_known=False 時，急跌警示（RAPID_DROP）仍然保留——保守方向不壓制。"""
+    ld = evaluate_entry_status(197.5, _REC, intraday_low=None, date_known=False)
+    assert ld.status == LiveStatus.RAPID_DROP
+
+
+def test_date_unknown_preserves_watching_low():
+    """date_known=False 時，WATCHING_LOW 保留。"""
+    ld = evaluate_entry_status(197.5, _REC, intraday_low=195.0, date_known=False)
+    assert ld.status == LiveStatus.WATCHING_LOW
+
+
+def test_date_unknown_preserves_cancel():
+    """date_known=False 時，CANCEL 保留（停損警示不可壓制）。"""
+    ld = evaluate_entry_status(164.0, _REC, intraday_low=163.0, date_known=False)
+    assert ld.status == LiveStatus.CANCEL
+
+
+def test_date_known_true_normal_flow():
+    """date_known=True（預設）時，正常邏輯不受影響。"""
+    ld = evaluate_entry_status(200.0, _REC, intraday_low=201.0, date_known=True)
+    assert ld.status == LiveStatus.IN_RANGE

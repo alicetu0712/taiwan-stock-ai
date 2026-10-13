@@ -27,6 +27,7 @@ class LiveStatus(str, Enum):
     STOP_WARNING       = "stop_warning"       # 🔴 接近停損（距停損 < 2%）
     CANCEL             = "cancel"             # ❌ 跌破停損，訊號失效
     NO_RANGE           = "no_range"           # ⬜ 缺進場區間資料
+    DATE_UNKNOWN       = "date_unknown"       # ⚪ 報價日期未確認，不提供進場判斷
     NON_BUY            = "non_buy"            # — 非 BUY 訊號，不適用
 
 
@@ -41,6 +42,7 @@ _STATUS_META = {
     LiveStatus.STOP_WARNING:      {"icon": "🔴", "label": "接近停損",     "color": "#c62828", "bg": "#ffebee"},
     LiveStatus.CANCEL:            {"icon": "❌", "label": "訊號失效",     "color": "#b71c1c", "bg": "#ffcdd2"},
     LiveStatus.NO_RANGE:          {"icon": "⬜", "label": "無區間",       "color": "#9e9e9e", "bg": "#f5f5f5"},
+    LiveStatus.DATE_UNKNOWN:      {"icon": "⚪", "label": "日期未確認",   "color": "#78909c", "bg": "#eceff1"},
     LiveStatus.NON_BUY:           {"icon": "—",  "label": "不適用",       "color": "#bdbdbd", "bg": "#fafafa"},
 }
 
@@ -83,10 +85,18 @@ class LiveDecision:
     plain_text:       str             = field(default="")     # 白話情境解釋
 
 
+# 報價日期未確認時，不允許顯示這些正向進場訊號（fail-closed）
+_POSITIVE_ENTRY_STATUSES = frozenset({
+    LiveStatus.IN_RANGE,
+    LiveStatus.ENTRY_RECONFIRMED,
+})
+
+
 def evaluate_entry_status(
     current_price: Optional[float],
     rec: dict,
     intraday_low: Optional[float] = None,
+    date_known: bool = True,
 ) -> "LiveDecision":
     """
     依據當前股價與今日盤中低點，判斷是否符合 AI 訊號的進場條件。
@@ -95,6 +105,7 @@ def evaluate_entry_status(
         current_price: 盤中最新價（None = 無報價）
         rec:           recommendation dict（來自 loaders，已經過 _sanitize_trading_plan）
         intraday_low:  今日盤中最低（quote.low），None 表示無資料
+        date_known:    False = 報價日期 unknown，不允許輸出正向進場訊號（fail-closed）
 
     Returns:
         LiveDecision
@@ -131,6 +142,13 @@ def evaluate_entry_status(
     )
 
     def _make(status: LiveStatus, reason: str, plain_text: str = "") -> LiveDecision:
+        # Data quality filter（fail-closed）：
+        # 報價日期無法確認時，不允許輸出正向進場訊號。
+        # 急跌警示（RAPID_DROP/WATCHING_LOW）保留，因保守方向不會誤導。
+        if not date_known and status in _POSITIVE_ENTRY_STATUSES:
+            status     = LiveStatus.DATE_UNKNOWN
+            reason     = "報價日期無法確認，暫不提供進場判斷（資料品質 fail-closed）"
+            plain_text = ""
         meta      = _STATUS_META[status]
         entry_mid = ((entry_low or 0) + (entry_high or 0)) / 2 if entry_low and entry_high else None
         pct_entry = (
@@ -191,6 +209,7 @@ def evaluate_entry_status(
                 "股價已回到進場區間。"
                 "此為轉強觀察訊號——進場條件改善，但今日仍發生過急跌，"
                 "建議留意量能是否支撐、低點是否確立，不宜倉促追入。"
+                "（注意：反彈 3% 此門檻為系統暫定風控規則，非經 Forward 資料驗證的最佳化參數。）"
             )
             return _make(
                 LiveStatus.ENTRY_RECONFIRMED,

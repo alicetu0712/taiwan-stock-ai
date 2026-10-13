@@ -152,16 +152,20 @@ def best_price(quote: IntradayQuote) -> Optional[float]:
     return quote.price
 
 
-def is_quote_stale(quote: IntradayQuote) -> bool:
+def quote_date_status(quote: IntradayQuote) -> str:
     """
-    判斷報價是否為舊交易日資料。
-    若 trade_date 不是今天（台灣時間）則視為 stale。
-    trade_date 為 None 時假設為當日（無法判斷）。
+    回傳報價日期的可信度（三態，fail-closed 設計）：
+      "valid"   — trade_date 確認為今天，可用於進場判斷
+      "stale"   — trade_date 確認為其他日期（昨日或更早）
+      "unknown" — trade_date 為 None，無法確認是否為今日資料
+
+    Live Execution Decision 使用規則：
+      valid   → 正常判斷
+      stale   → 不產生任何進場建議
+      unknown → 不產生「可進場」正向訊號；仍可顯示急跌等保守警示
     """
     if quote.trade_date is None:
-        return False
+        return "unknown"
     from datetime import date
-    import zoneinfo
-    today = date.today()  # 系統已設定台灣時區，或使用下方 aware 版
-    today_str = today.strftime("%Y%m%d")
-    return quote.trade_date != today_str
+    today_str = date.today().strftime("%Y%m%d")
+    return "valid" if quote.trade_date == today_str else "stale"
