@@ -47,7 +47,8 @@ def _render_price_delta(current: float, reference: float, label: str) -> str:
 def _drop_scenario_html(ld, sig_price: float) -> str:
     """急跌情境：價格走勢敘述 + 三階段指示 + 盤中觀察低點說明。"""
     from src.engines.live_decision import LiveStatus
-    if ld.status not in (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW):
+    drop_statuses = (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW, LiveStatus.ENTRY_RECONFIRMED)
+    if ld.status not in drop_statuses:
         return ""
 
     cur  = ld.current_price
@@ -55,10 +56,11 @@ def _drop_scenario_html(ld, sig_price: float) -> str:
 
     # 價格走勢敘述
     if ilow and cur and ilow < sig_price:
+        cur_color = "#558b2f" if ld.status == LiveStatus.ENTRY_RECONFIRMED else "#1565c0"
         narrative = (
             f'<span style="color:#333">{sig_price:.1f}</span>'
             f' <span style="color:#e53935">↘ {ilow:.1f} 最低</span>'
-            f' <span style="color:#1565c0">↗ {cur:.1f} 現價</span>'
+            f' <span style="color:{cur_color}">↗ {cur:.1f} 現價</span>'
         )
     elif cur:
         narrative = (
@@ -68,21 +70,27 @@ def _drop_scenario_html(ld, sig_price: float) -> str:
     else:
         narrative = f'<span style="color:#333">{sig_price:.1f}</span>'
 
-    # 三階段指示
-    # Stage 1: 急跌暫緩  Stage 2: 觀察低點  Stage 3: 重新確認
-    stage = 2 if ld.status == LiveStatus.WATCHING_LOW else 1
+    # 三階段指示：stage 1=RAPID_DROP, 2=WATCHING_LOW, 3=ENTRY_RECONFIRMED
+    stage = {
+        LiveStatus.RAPID_DROP:        1,
+        LiveStatus.WATCHING_LOW:      2,
+        LiveStatus.ENTRY_RECONFIRMED: 3,
+    }[ld.status]
 
-    def _dot(i: int) -> str:
-        if i == stage:
-            clr = "#f57f17" if i == 1 else "#1565c0"
-            return f'<span style="color:{clr};font-weight:700">●</span>'
-        return '<span style="color:#ccc">○</span>'
+    stage_colors = {1: "#f57f17", 2: "#1565c0", 3: "#558b2f"}
+    stage_labels = ["急跌暫緩", "觀察低點", "轉強確認"]
 
-    stage_labels = ["急跌暫緩", "觀察低點", "重新確認"]
-    stages_html = " <span style='color:#bbb'>→</span> ".join(
-        f'{_dot(i+1)} <span style="color:{"#f57f17" if i+1==stage else "#888" if i+1 < stage else "#ccc"}">{lbl}</span>'
-        for i, lbl in enumerate(stage_labels)
-    )
+    def _stage_span(i: int) -> str:
+        is_done    = i < stage
+        is_current = i == stage
+        if is_current:
+            clr = stage_colors[i]
+            return f'<span style="color:{clr};font-weight:700">● {stage_labels[i-1]}</span>'
+        if is_done:
+            return f'<span style="color:#aaa">✓ {stage_labels[i-1]}</span>'
+        return f'<span style="color:#ddd">○ {stage_labels[i-1]}</span>'
+
+    stages_html = " <span style='color:#bbb'>→</span> ".join(_stage_span(i) for i in [1, 2, 3])
 
     # 盤中觀察低點 vs 模型停損
     ilow_row = ""
@@ -98,8 +106,9 @@ def _drop_scenario_html(ld, sig_price: float) -> str:
             f'{stop_note}</div>'
         )
 
+    border_color = stage_colors.get(stage, "#f57f17")
     return f"""
-<div style="margin:8px 0;padding:8px 10px;background:#f8f9fa;border-left:3px solid #f57f17;border-radius:0 6px 6px 0">
+<div style="margin:8px 0;padding:8px 10px;background:#f8f9fa;border-left:3px solid {border_color};border-radius:0 6px 6px 0">
   <div style="font-size:0.67rem;color:#999;margin-bottom:3px">今日價格走勢</div>
   <div style="font-size:0.82rem;font-weight:600">{narrative}</div>
   <div style="font-size:0.68rem;margin-top:5px">{stages_html}</div>
@@ -231,9 +240,15 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
         rr_display = _rr_html(ld)
 
         # BUY ≠ Good Entry 提醒（急跌情境下 R/R 不佳時）
+        drop_statuses = (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW, LiveStatus.ENTRY_RECONFIRMED)
         buy_note_html = ""
-        if ld.status in (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW):
-            if ld.rr_current is not None and ld.rr_current < 1.5:
+        if ld.status in drop_statuses:
+            if ld.status == LiveStatus.ENTRY_RECONFIRMED:
+                buy_note_html = (
+                    '<div style="font-size:0.67rem;color:#558b2f;margin-top:3px">'
+                    '轉強觀察訊號 — 進場條件改善，但非正式 BUY 確認；仍需自行評估量價結構</div>'
+                )
+            elif ld.rr_current is not None and ld.rr_current < 1.5:
                 buy_note_html = (
                     f'<div style="font-size:0.67rem;color:#e65100;margin-top:3px">'
                     f'BUY = 模型看好此 Setup ≠ 現價 R/R {ld.rr_current:.1f}x 就是好時機</div>'

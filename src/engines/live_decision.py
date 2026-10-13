@@ -17,29 +17,31 @@ from typing import Optional
 
 
 class LiveStatus(str, Enum):
-    IN_RANGE      = "in_range"       # 🟢 位於理想進場區
-    ABOVE_RANGE   = "above_range"    # 🟡 超出進場區，不追價
-    CHASING       = "chasing"        # 🟠 明顯追高，等回測
-    BELOW_RANGE   = "below_range"    # ⚪ 低於進場區，等止穩
-    RAPID_DROP    = "rapid_drop"     # 🟡 急跌暫緩，等待止跌確認
-    WATCHING_LOW  = "watching_low"   # 🔵 急跌後反彈，觀察低點守穩
-    STOP_WARNING  = "stop_warning"   # 🔴 接近停損（距停損 < 2%）
-    CANCEL        = "cancel"         # ❌ 跌破停損，訊號失效
-    NO_RANGE      = "no_range"       # ⬜ 缺進場區間資料
-    NON_BUY       = "non_buy"        # — 非 BUY 訊號，不適用
+    IN_RANGE           = "in_range"           # 🟢 位於理想進場區（無急跌）
+    ABOVE_RANGE        = "above_range"        # 🟡 超出進場區，不追價
+    CHASING            = "chasing"            # 🟠 明顯追高，等回測
+    BELOW_RANGE        = "below_range"        # ⚪ 低於進場區，等止穩
+    RAPID_DROP         = "rapid_drop"         # 🟡 急跌暫緩，等待止跌確認
+    WATCHING_LOW       = "watching_low"       # 🔵 急跌後反彈，觀察低點守穩
+    ENTRY_RECONFIRMED  = "entry_reconfirmed"  # 🔄 急跌後回復進場區，轉強觀察訊號
+    STOP_WARNING       = "stop_warning"       # 🔴 接近停損（距停損 < 2%）
+    CANCEL             = "cancel"             # ❌ 跌破停損，訊號失效
+    NO_RANGE           = "no_range"           # ⬜ 缺進場區間資料
+    NON_BUY            = "non_buy"            # — 非 BUY 訊號，不適用
 
 
 _STATUS_META = {
-    LiveStatus.IN_RANGE:     {"icon": "🟢", "label": "可進場",       "color": "#00897b", "bg": "#e0f2f1"},
-    LiveStatus.ABOVE_RANGE:  {"icon": "🟡", "label": "不追價",       "color": "#f57f17", "bg": "#fff8e1"},
-    LiveStatus.CHASING:      {"icon": "🟠", "label": "明顯追高",     "color": "#e65100", "bg": "#fff3e0"},
-    LiveStatus.BELOW_RANGE:  {"icon": "⚪", "label": "等止穩",       "color": "#78909c", "bg": "#eceff1"},
-    LiveStatus.RAPID_DROP:   {"icon": "🟡", "label": "等待止跌確認", "color": "#f57f17", "bg": "#fff8e1"},
-    LiveStatus.WATCHING_LOW: {"icon": "🔵", "label": "觀察低點守穩", "color": "#1565c0", "bg": "#e3f2fd"},
-    LiveStatus.STOP_WARNING: {"icon": "🔴", "label": "接近停損",     "color": "#c62828", "bg": "#ffebee"},
-    LiveStatus.CANCEL:       {"icon": "❌", "label": "訊號失效",     "color": "#b71c1c", "bg": "#ffcdd2"},
-    LiveStatus.NO_RANGE:     {"icon": "⬜", "label": "無區間",       "color": "#9e9e9e", "bg": "#f5f5f5"},
-    LiveStatus.NON_BUY:      {"icon": "—",  "label": "不適用",       "color": "#bdbdbd", "bg": "#fafafa"},
+    LiveStatus.IN_RANGE:          {"icon": "🟢", "label": "可進場",       "color": "#00897b", "bg": "#e0f2f1"},
+    LiveStatus.ABOVE_RANGE:       {"icon": "🟡", "label": "不追價",       "color": "#f57f17", "bg": "#fff8e1"},
+    LiveStatus.CHASING:           {"icon": "🟠", "label": "明顯追高",     "color": "#e65100", "bg": "#fff3e0"},
+    LiveStatus.BELOW_RANGE:       {"icon": "⚪", "label": "等止穩",       "color": "#78909c", "bg": "#eceff1"},
+    LiveStatus.RAPID_DROP:        {"icon": "🟡", "label": "等待止跌確認", "color": "#f57f17", "bg": "#fff8e1"},
+    LiveStatus.WATCHING_LOW:      {"icon": "🔵", "label": "觀察低點守穩", "color": "#1565c0", "bg": "#e3f2fd"},
+    LiveStatus.ENTRY_RECONFIRMED: {"icon": "🔄", "label": "轉強觀察訊號", "color": "#558b2f", "bg": "#f1f8e9"},
+    LiveStatus.STOP_WARNING:      {"icon": "🔴", "label": "接近停損",     "color": "#c62828", "bg": "#ffebee"},
+    LiveStatus.CANCEL:            {"icon": "❌", "label": "訊號失效",     "color": "#b71c1c", "bg": "#ffcdd2"},
+    LiveStatus.NO_RANGE:          {"icon": "⬜", "label": "無區間",       "color": "#9e9e9e", "bg": "#f5f5f5"},
+    LiveStatus.NON_BUY:           {"icon": "—",  "label": "不適用",       "color": "#bdbdbd", "bg": "#fafafa"},
 }
 
 # 以今日盤中低點（quote.low）偵測急跌：低點較訊號價跌幅超過此值
@@ -47,8 +49,10 @@ _STATUS_META = {
 _INTRADAY_DROP_PCT  = -2.5
 # 無低點資料時的 fallback：使用相同標準，缺資料不能放寬保護
 _FALLBACK_DROP_PCT  = -2.5
-# 急跌後反彈：較今日低點回升超過此值，視為止跌觀察
-_BOUNCE_CONFIRM_PCT = 0.8
+# 急跌後反彈：較今日低點回升超過此值，視為止跌觀察（Stage 2）
+_BOUNCE_CONFIRM_PCT  = 0.8
+# 急跌後轉強：反彈超過此值 + 回到進場區，升為轉強觀察訊號（Stage 3）
+_RECONFIRM_BOUNCE_PCT = 3.0
 # 距停損多少 % 內觸發警示
 _STOP_WARN_PCT      = 2.0
 # 超出進場上限多少 % 視為明顯追高
@@ -179,7 +183,21 @@ def evaluate_entry_status(
         # 顯示的跌幅：優先用低點跌幅，次用現價跌幅
         show_drop   = abs(intraday_drop_pct) if intraday_drop_pct is not None else (abs(drop_pct) if drop_pct is not None else 0)
 
-        if bounce_pct is not None and bounce_pct >= _BOUNCE_CONFIRM_PCT:
+        if bounce_pct is not None and bounce_pct >= _RECONFIRM_BOUNCE_PCT and entry_low and current_price >= entry_low:
+            # Stage 3：反彈幅度足夠 + 回到進場區 → 轉強觀察訊號
+            # 這是「觀察訊號」，不是直接進場確認；歷史驗證完成前不作為正式 BUY 依據
+            plain = (
+                f"急跌後大幅反彈（從低點 {ilow_str} 回升 {bounce_pct:.1f}%），"
+                "股價已回到進場區間。"
+                "此為轉強觀察訊號——進場條件改善，但今日仍發生過急跌，"
+                "建議留意量能是否支撐、低點是否確立，不宜倉促追入。"
+            )
+            return _make(
+                LiveStatus.ENTRY_RECONFIRMED,
+                f"急跌後回到進場區（低點 +{bounce_pct:.1f}%），轉強觀察，非直接進場確認",
+                plain_text=plain,
+            )
+        elif bounce_pct is not None and bounce_pct >= _BOUNCE_CONFIRM_PCT:
             plain = (
                 f"急跌後出現反彈（從低點 {ilow_str} 回升 {bounce_pct:.1f}%）。"
                 "今日低點能否守穩，是進場前的關鍵觀察點。"
