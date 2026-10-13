@@ -45,8 +45,8 @@ _STATUS_META = {
 # 以今日盤中低點（quote.low）偵測急跌：低點較訊號價跌幅超過此值
 # 用低點而非現價判斷，避免正常震盪誤觸（e.g. 現價在進場區但低點確實急跌過）
 _INTRADAY_DROP_PCT  = -2.5
-# 無低點資料時的 fallback：現價較訊號價跌幅超過此值才觸發
-_FALLBACK_DROP_PCT  = -4.0
+# 無低點資料時的 fallback：使用相同標準，缺資料不能放寬保護
+_FALLBACK_DROP_PCT  = -2.5
 # 急跌後反彈：較今日低點回升超過此值，視為止跌觀察
 _BOUNCE_CONFIRM_PCT = 0.8
 # 距停損多少 % 內觸發警示
@@ -152,7 +152,13 @@ def evaluate_entry_status(
         return _make(LiveStatus.NON_BUY, "AI 訊號為非買進，盤中監控不適用")
 
     if current_price is None:
-        return _make(LiveStatus.NO_RANGE, "目前無報價")
+        # 即使沒有現價，只要低點顯示急跌就要警示
+        if _rapid_drop_triggered:
+            ilow_str  = f"{intraday_low:.1f}" if intraday_low else "未知"
+            show_drop = abs(intraday_drop_pct) if intraday_drop_pct is not None else 0
+            return _make(LiveStatus.RAPID_DROP,
+                         f"無即時成交，但盤中低點 {ilow_str} 顯示急跌約 {show_drop:.1f}%，暫緩進場")
+        return _make(LiveStatus.NO_RANGE, "目前無即時成交報價，無法判斷")
 
     # ── 停損觸發（最高優先） ──────────────────────────────────────
     if stop_price and current_price <= stop_price:

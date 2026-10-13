@@ -275,14 +275,23 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         "tier_emoji": "🔴", "tier_label": "尚無 OOS 資料",
     }
     try:
-        from src.database import ForwardSignal, get_session
+        from src.database import DailyPrice, ForwardSignal, get_session
         s = get_session(engine)
         fs_rows = (
             s.query(ForwardSignal)
             .filter(ForwardSignal.setup_type == setup_type)
             .all()
         )
+        # 載入 0050 交易日曆供 dedup 用
+        cal_rows = (
+            s.query(DailyPrice.date)
+            .filter(DailyPrice.stock_id == "0050")
+            .order_by(DailyPrice.date)
+            .all()
+        )
         s.close()
+        market_calendar = sorted([r.date for r in cal_rows])
+
         if not fs_rows:
             return empty
 
@@ -302,20 +311,37 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         # Use stored alpha from compute_signal_outcomes() — already correctly computed
         # with NEXT_OPEN logic (execution_date open vs 0050 open same day).
         # Stored as %, convert to decimal for _alpha_stats().
-        matured_20 = [r for r in next_open
-                      if r.outcomes_computed_at is not None and r.alpha_20d is not None]
-        matured_60 = [r for r in next_open
-                      if r.outcomes_computed_at is not None and r.alpha_60d is not None]
+        matured_20_raw = [r for r in next_open
+                          if r.outcomes_computed_at is not None and r.alpha_20d is not None]
+        matured_60_raw = [r for r in next_open
+                          if r.outcomes_computed_at is not None and r.alpha_60d is not None]
 
-        alphas_20 = [r.alpha_20d / 100.0 for r in matured_20]
-        alphas_60 = [r.alpha_60d / 100.0 for r in matured_60]
+        # ── DEDUP：同股票 20D/60D 冷卻，避免重疊成效視窗 ──────────────
+        # 連續五天 BUY 同一支股票 = 五個樣本，但後續 20 天高度重疊，
+        # 不能視為五次獨立驗證。
+        def _dedup_forward(records, n_days):
+            """按 trade_date 排序後套用 n_days 冷卻去重，回傳 kept 的記錄集合 key。"""
+            pairs = sorted([(r.stock_id, r.trade_date) for r in records],
+                           key=lambda x: x[1])
+            kept = dedup_by_trading_days(pairs, n_days, market_calendar=market_calendar)
+            return set(kept)
+
+        kept_20 = _dedup_forward(matured_20_raw, 20)
+        kept_60 = _dedup_forward(matured_60_raw, 60)
+
+        alphas_20 = [r.alpha_20d / 100.0 for r in matured_20_raw
+                     if (r.stock_id, r.trade_date) in kept_20]
+        alphas_60 = [r.alpha_60d / 100.0 for r in matured_60_raw
+                     if (r.stock_id, r.trade_date) in kept_60]
 
         n_m20 = len(alphas_20)
         tier_emoji, tier_label = _evidence_tier(n_m20)
         return {
             "total_recorded": len(next_open),
             "n_legacy":       n_legacy,
-            "matured_20d":    n_m20,
+            "n_raw_20d":      len(matured_20_raw),   # 去重前
+            "n_raw_60d":      len(matured_60_raw),
+            "matured_20d":    n_m20,                  # 去重後
             "matured_60d":    len(alphas_60),
             "alpha_20d":      _alpha_stats(alphas_20),
             "alpha_60d":      _alpha_stats(alphas_60),

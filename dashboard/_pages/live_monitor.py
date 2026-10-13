@@ -142,7 +142,7 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
     """
     Live 卡片內容，由外部 fragment 包裝以支援動態刷新頻率。
     """
-    from src.collectors.intraday_collector import fetch_intraday, best_price
+    from src.collectors.intraday_collector import fetch_intraday, best_price, is_quote_stale
     from src.engines.live_decision import LiveStatus, evaluate_entry_status, market_session_label
 
     session_label = market_session_label()
@@ -175,8 +175,9 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
         name   = rec.get("name") or sid
         quote  = quotes.get(sid)
 
-        cur_price   = best_price(quote) if quote else None
+        cur_price    = best_price(quote) if quote else None   # 只取真實成交（z 欄位）
         intraday_low = quote.low if quote else None
+        stale        = is_quote_stale(quote) if quote else False
 
         ld = evaluate_entry_status(cur_price, rec, intraday_low=intraday_low)
 
@@ -188,10 +189,19 @@ def _live_cards(recs: list, market_map: dict, interval: int = 10) -> None:
         stop_p       = rec.get("stop_price")
         t1           = rec.get("target1")
 
-        # 即時價格顯示
-        price_display = f"NT$ {cur_price:,.1f}" if cur_price else "—"
-        if quote and quote.update_time:
-            price_display += f'<span style="font-size:0.62rem;color:#aaa"> ({quote.update_time})</span>'
+        # 即時價格顯示（只用真實成交）
+        if stale:
+            price_display = f'<span style="color:#e53935">⚠ 舊資料</span>'
+            if quote and quote.trade_date:
+                price_display += f'<span style="font-size:0.62rem;color:#e53935"> ({quote.trade_date[:4]}/{quote.trade_date[4:6]}/{quote.trade_date[6:]})</span>'
+        elif cur_price:
+            price_display = f"NT$ {cur_price:,.1f}"
+            if quote and quote.update_time:
+                price_display += f'<span style="font-size:0.62rem;color:#aaa"> ({quote.update_time})</span>'
+        else:
+            price_display = '<span style="color:#f57f17">無即時成交</span>'
+            if quote and quote.update_time:
+                price_display += f'<span style="font-size:0.62rem;color:#aaa"> ({quote.update_time})</span>'
 
         # 距訊號價漲跌
         delta_html = ""

@@ -40,12 +40,13 @@ _cache_ts: float = 0.0
 class IntradayQuote:
     stock_id:   str
     name:       str
-    price:      Optional[float]   # 最新成交價（盤中可能為 None）
+    price:      Optional[float]   # 最新成交價（z 欄位；盤中無新成交時為 None）
     open:       Optional[float]
     high:       Optional[float]
     low:        Optional[float]
     volume:     Optional[float]   # 千股
     update_time: Optional[str]    # "HH:MM:SS" 台灣時間
+    trade_date:  Optional[str]    # "YYYYMMDD" 報價日期（用於 stale 判斷）
     is_trading:  bool = False     # True = 有新成交（z 欄位有值）
     source:      str  = "twse_mis"
     fetched_at:  str  = field(default_factory=lambda: datetime.now().strftime("%H:%M:%S"))
@@ -120,6 +121,9 @@ def fetch_intraday(
                 continue
             z_raw = item.get("z", "-")
             price = _parse_float(z_raw) if z_raw != "-" else None
+            # 清理 trade_date：API 回傳 "YYYYMMDD" 或空字串
+            raw_date = item.get("d", "").strip()
+            trade_date = raw_date if len(raw_date) == 8 and raw_date.isdigit() else None
             quote = IntradayQuote(
                 stock_id    = sid,
                 name        = item.get("n", ""),
@@ -129,6 +133,7 @@ def fetch_intraday(
                 low         = _parse_float(item.get("l")),
                 volume      = _parse_float(item.get("v")),
                 update_time = item.get("t"),
+                trade_date  = trade_date,
                 is_trading  = price is not None,
             )
             result[sid] = quote
@@ -140,11 +145,23 @@ def fetch_intraday(
 
 def best_price(quote: IntradayQuote) -> Optional[float]:
     """
-    回傳最佳代表價格：
-    有新成交用 z（最新成交），無成交用 (high+low)/2，都沒有用 open。
+    只回傳 z 欄位的真實最新成交價。
+    無新成交（z == "-"）時回傳 None — 不使用 (high+low)/2 或 open 代替。
+    理由：(high+low)/2 可能與真實成交差距 > 5 元，用於停損/R/R 判斷會失真。
     """
-    if quote.price is not None:
-        return quote.price
-    if quote.high is not None and quote.low is not None:
-        return round((quote.high + quote.low) / 2, 2)
-    return quote.open
+    return quote.price
+
+
+def is_quote_stale(quote: IntradayQuote) -> bool:
+    """
+    判斷報價是否為舊交易日資料。
+    若 trade_date 不是今天（台灣時間）則視為 stale。
+    trade_date 為 None 時假設為當日（無法判斷）。
+    """
+    if quote.trade_date is None:
+        return False
+    from datetime import date
+    import zoneinfo
+    today = date.today()  # 系統已設定台灣時區，或使用下方 aware 版
+    today_str = today.strftime("%Y%m%d")
+    return quote.trade_date != today_str
