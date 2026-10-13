@@ -202,20 +202,22 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
 
         ld = evaluate_entry_status(cur_price, rec, intraday_low=intraday_low, date_known=date_known)
 
-        # State Transition → DB（只在狀態變化時寫入，同狀態持續不重複記錄）
-        map_key   = (sid, signal_date_str)
-        prev_st   = status_map.get(map_key)          # None = 首次觀察此股
-        new_st    = ld.status.value
-        record_if_transition(
-            stock_id=sid,
-            signal_date=signal_date,
-            prev_status=prev_st,
-            ld=ld,
-            rec=rec,
-            quote_trade_date=quote.trade_date if quote else None,
-            quote_quality=date_status,
-        )
-        status_map[map_key] = new_st
+        # State Transition → DB
+        # session_state 只作 cache 以避免每輪都打 DB query。
+        # 只有 cache 顯示「可能有變化（或此 session 首次見到此股）」才呼叫
+        # record_if_transition()，由它自己查 DB 做最終確認。
+        map_key = (sid, signal_date_str)
+        new_st  = ld.status.value
+        if status_map.get(map_key) != new_st:
+            record_if_transition(
+                stock_id=sid,
+                signal_date=signal_date,
+                ld=ld,
+                rec=rec,
+                quote_trade_date=quote.trade_date if quote else None,
+                quote_quality=date_status,
+            )
+            status_map[map_key] = new_st
 
         signal_label = "BUY ★" if rec.get("trade_signal") == "strong_buy" else "BUY"
         signal_color = "#1a7f4b" if rec.get("trade_signal") == "strong_buy" else "#2ecc71"
