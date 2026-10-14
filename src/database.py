@@ -237,6 +237,8 @@ class Recommendation(Base):
     source_price_date = Column(Date)                     # 實際股價資料日期（vs date 欄位）
     # Scoring data completeness — tracks which factor dimensions had real data
     missing_data_factors = Column(String(40))            # comma-separated: e.g. "quality,behavior"; NULL = complete
+    # Signal Lifecycle — managed by live_background_service
+    lifecycle_status = Column(String(20), default='active')  # active / invalidated / superseded
 
 
 class DecisionJournal(Base):
@@ -643,6 +645,8 @@ def _migrate_recommendations(engine) -> None:
         ("source_price_date", "DATE"),
         # Scoring data completeness
         ("missing_data_factors", "VARCHAR(40)"),
+        # Signal Lifecycle
+        ("lifecycle_status", "VARCHAR(20) DEFAULT 'active'"),
     ]
     try:
         existing = {c["name"] for c in inspect(engine).get_columns("recommendations")}

@@ -47,6 +47,11 @@ _MARKET_CLOSE = time(13, 45)   # 13:30 收盤 + 15 分鐘緩衝
 # 設 3 = 本週三開盤時，同時監控週二、週一、上週五的 BUY Signal（若未失效）
 SIGNAL_ACTIVE_DAYS = 3
 
+# Signal Lifecycle 狀態常數
+LIFECYCLE_ACTIVE      = "active"
+LIFECYCLE_INVALIDATED = "invalidated"   # 停損觸發（CANCEL）→ 訊號失效
+LIFECYCLE_SUPERSEDED  = "superseded"    # 同股票出現更新的 BUY Signal
+
 
 def _is_market_window() -> bool:
     """回傳現在是否在盤中收集時間窗口內（台灣時間 09:00–13:45）。"""
@@ -91,6 +96,7 @@ def _get_active_buy_signals(today: date) -> list[dict]:
     if not signal_dates:
         return []
 
+    from sqlalchemy import or_
     from src.database import get_session, Recommendation, DailyPrice
 
     session = get_session()
@@ -102,6 +108,10 @@ def _get_active_buy_signals(today: date) -> list[dict]:
                 Recommendation.trade_signal.in_(["buy", "strong_buy"]),
                 Recommendation.is_valid.isnot(False),
                 Recommendation.tier == "recommend",
+                or_(
+                    Recommendation.lifecycle_status == LIFECYCLE_ACTIVE,
+                    Recommendation.lifecycle_status.is_(None),
+                ),
             )
             .all()
         )
@@ -156,6 +166,59 @@ def _get_market_map(stock_ids: list[str]) -> dict[str, str]:
         session.close()
 
 
+def _mark_lifecycle_status(stock_id: str, signal_date, new_status: str) -> None:
+    """將 Recommendation.lifecycle_status 更新為 new_status（idempotent）。"""
+    from src.database import get_session, Recommendation
+
+    session = get_session()
+    try:
+        rec = (
+            session.query(Recommendation)
+            .filter(
+                Recommendation.stock_id == stock_id,
+                Recommendation.date == signal_date,
+            )
+            .first()
+        )
+        if rec and rec.lifecycle_status != new_status:
+            rec.lifecycle_status = new_status
+            session.commit()
+            logger.info(f"lifecycle {stock_id} {signal_date} → {new_status}")
+    except Exception as exc:
+        logger.warning(f"_mark_lifecycle_status {stock_id} {signal_date}: {exc}")
+        session.rollback()
+    finally:
+        session.close()
+
+
+def _deduplicate_by_supersede(recs: list[dict]) -> list[dict]:
+    """
+    同一股票有多個 Active Signal 時，保留最新的（signal_date 最大），
+    舊的標記 SUPERSEDED 並從回傳列表中移除。
+
+    原始資料保留在 DB，只是 lifecycle_status 改變。
+    """
+    from collections import defaultdict
+
+    by_stock: dict[str, list[dict]] = defaultdict(list)
+    for r in recs:
+        by_stock[r["sid"]].append(r)
+
+    result = []
+    for sid, signals in by_stock.items():
+        if len(signals) == 1:
+            result.append(signals[0])
+            continue
+        # 最新的 signal_date 保留；其餘標記 SUPERSEDED
+        signals.sort(key=lambda x: x["signal_date"], reverse=True)
+        result.append(signals[0])
+        for old in signals[1:]:
+            _mark_lifecycle_status(sid, old["signal_date"], LIFECYCLE_SUPERSEDED)
+            logger.debug(f"supersede {sid} signal_date={old['signal_date']}")
+
+    return result
+
+
 def run_once(force: bool = False) -> dict:
     """
     單次收集執行：取 Active Signals → 取報價 → 評估狀態 → 寫入 DB。
@@ -193,6 +256,9 @@ def run_once(force: bool = False) -> dict:
             "events_written": 0, "errors": 0, "signal_dates": [],
         }
 
+    # 同股票多 Signal → 保留最新，舊的標記 SUPERSEDED
+    recs = _deduplicate_by_supersede(recs)
+
     stock_ids  = [r["sid"] for r in recs]
     market_map = _get_market_map(stock_ids)
 
@@ -201,7 +267,7 @@ def run_once(force: bool = False) -> dict:
     quotes = fetch_intraday(stock_ids, market_map=market_map)
 
     # 評估 + 記錄
-    from src.engines.live_decision import evaluate_entry_status
+    from src.engines.live_decision import evaluate_entry_status, LiveStatus
     from src.services.live_execution_service import record_if_transition
 
     events_written = 0
@@ -233,6 +299,10 @@ def run_once(force: bool = False) -> dict:
             )
             if written:
                 events_written += 1
+
+            # CANCEL = 停損觸發 → 訊號永久失效（RAPID_DROP 不是 INVALIDATED）
+            if ld.status == LiveStatus.CANCEL:
+                _mark_lifecycle_status(sid, signal_date, LIFECYCLE_INVALIDATED)
 
         except Exception as exc:
             logger.warning(f"live_background_service: error processing {sid}: {exc}")
