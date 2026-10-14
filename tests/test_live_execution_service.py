@@ -121,7 +121,7 @@ def _count(factory, **filters) -> int:
 
 
 def _last(factory, stock_id=STOCK, signal_date=SDATE) -> LiveExecutionEvent | None:
-    from src.services.live_execution_service import LIVE_RULE_VERSION
+    from src.engines.live_decision import LIVE_RULE_VERSION  # canonical
     s = factory()
     row = (
         s.query(LiveExecutionEvent)
@@ -354,7 +354,8 @@ class TestFieldIntegrity:
 
     def test_all_key_fields_persisted(self, patched_get_session):
         """關鍵欄位都必須正確寫入 DB（訊號計劃快照 + 報價品質 + 版本）。"""
-        from src.services.live_execution_service import record_if_transition, LIVE_RULE_VERSION
+        from src.services.live_execution_service import record_if_transition
+        from src.engines.live_decision import LIVE_RULE_VERSION  # canonical
         from src.database import MODEL_VERSION
 
         ld = _make_ld(LiveStatus.WATCHING_LOW, current_price=197.5, intraday_low=195.0,

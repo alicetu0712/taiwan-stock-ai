@@ -22,11 +22,9 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from src.engines.live_decision import LIVE_RULE_VERSION  # canonical source of truth
 
-# 門檻版本：寫入 LiveExecutionEvent，供日後不同版本間比較
-# 與 live_decision.py 的 LIVE_RULE_VERSION 保持同步，故意獨立定義避免 lazy import 在 Streamlit 快取中失效
-LIVE_RULE_VERSION = "v1.0"  # drop=-2.5%, bounce=+0.8%, reconfirm=+3.0%
+logger = logging.getLogger(__name__)
 
 
 def _query_db_last_status(
