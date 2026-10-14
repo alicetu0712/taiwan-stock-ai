@@ -287,35 +287,42 @@ def main() -> None:
         ]
     )
 
+    def _render(fn, *args, **kwargs):
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:
+            st.error(f"頁面載入失敗：{e}")
+            logger.exception(f"tab render error in {fn.__name__}: {e}")
+
     with tabs[0]:
-        page_today(sel_date)
+        _render(page_today, sel_date)
     with tabs[1]:
         from dashboard._pages.live_monitor import page_live_monitor
-        page_live_monitor(sel_date)
+        _render(page_live_monitor, sel_date)
     with tabs[2]:
         from dashboard._pages.market_watch import page_market_watch
-        page_market_watch(sel_date)
+        _render(page_market_watch, sel_date)
     with tabs[3]:
-        page_search()
+        _render(page_search)
     with tabs[4]:
-        page_history()
+        _render(page_history)
     with tabs[5]:
-        page_positions()
+        _render(page_positions)
     with tabs[6]:
-        page_backtest()
+        _render(page_backtest)
     with tabs[7]:
-        page_research_backtest()
+        _render(page_research_backtest)
     with tabs[8]:
-        page_my_trades()
+        _render(page_my_trades)
     with tabs[9]:
         from dashboard._pages.scorecard import page_scorecard
-        page_scorecard()
+        _render(page_scorecard)
     with tabs[10]:
-        page_data_health()
+        _render(page_data_health)
     with tabs[11]:
-        page_guide()
+        _render(page_guide)
     with tabs[12]:
-        page_settings(sel_date)
+        _render(page_settings, sel_date)
 
     st.markdown(
         '<div class="disclaimer">本工具為 AI 研究輔助，所有內容不構成投資建議，投資人應自行評估風險</div>',
