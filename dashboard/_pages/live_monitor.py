@@ -39,11 +39,160 @@ def _effective_signal_date(sel_date: date) -> date:
     return sel_date
 
 
-def _load_today_buy_recs(signal_date: date) -> list:
-    """讀取指定 signal_date 的 BUY/BUY★ 推薦（已含 entry/stop/target）。"""
-    from dashboard.loaders import load_db_recommendations
-    recs = load_db_recommendations(signal_date)
-    return [r for r in recs if r.get("trade_signal") in ("strong_buy", "buy")]
+def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
+    """
+    Single pipeline：回傳 (eligible_recs, diagnostics)。
+
+    直接查 Recommendation + DailyPrice（不經過 @st.cache_data 的 load_db_recommendations），
+    確保 count pass 與 eligible list 使用完全相同的 filter 邏輯與 source of truth。
+
+    diagnostics keys：
+      signal_date, exec_date, total_recs, buy_count,
+      excl_invalid, excl_non_core, excl_lifecycle, not_yet_executable,
+      eligible_count, eligible_stocks [(sid, name)]
+    """
+    from src.core.trading_calendar import next_trading_day
+    from src.database import Recommendation, get_session
+
+    today = date.today()
+    exec_date = next_trading_day(signal_date)
+
+    # ── single DB pass：count + select（不經過 load_db_recommendations 的 cache）────
+    s = get_session()
+    all_rows = (
+        s.query(
+            Recommendation.stock_id,
+            Recommendation.stock_name,
+            Recommendation.trade_signal,
+            Recommendation.tier,
+            Recommendation.is_valid,
+            Recommendation.lifecycle_status,
+            Recommendation.entry_low,
+            Recommendation.entry_high,
+            Recommendation.stop_price,
+            Recommendation.target1,
+            Recommendation.setup_type,
+        )
+        .filter(Recommendation.date == signal_date)
+        .all()
+    )
+
+    # 訊號價：signal_date 的收盤價（DailyPrice）
+    buy_sids = [r.stock_id for r in all_rows if r.trade_signal in ("buy", "strong_buy")]
+    price_map: dict = {}
+    if buy_sids:
+        from src.database import DailyPrice
+        price_rows = (
+            s.query(DailyPrice.stock_id, DailyPrice.close)
+            .filter(DailyPrice.date == signal_date, DailyPrice.stock_id.in_(buy_sids))
+            .all()
+        )
+        price_map = {r.stock_id: r.close for r in price_rows}
+    s.close()
+
+    total_recs = len(all_rows)
+    buy_rows = [r for r in all_rows if r.trade_signal in ("buy", "strong_buy")]
+
+    excl_invalid = excl_non_core = excl_lifecycle = not_yet_executable = 0
+    if exec_date is not None and exec_date > today:
+        not_yet_executable = len(buy_rows)
+    else:
+        for r in buy_rows:
+            if r.is_valid is False:
+                excl_invalid += 1
+            elif r.tier != "recommend":
+                excl_non_core += 1
+            elif r.lifecycle_status in ("invalidated", "superseded"):
+                excl_lifecycle += 1
+
+    # ── eligible list（相同 filter 邏輯，直接從 all_rows 建構）────────────
+    eligible = [
+        {
+            "sid":          r.stock_id,
+            "name":         r.stock_name or r.stock_id,
+            "trade_signal": r.trade_signal,
+            "price":        price_map.get(r.stock_id),
+            "entry_low":    r.entry_low,
+            "entry_high":   r.entry_high,
+            "stop_price":   r.stop_price,
+            "target1":      r.target1,
+            "setup_type":   r.setup_type,
+        }
+        for r in buy_rows
+        if r.tier == "recommend"
+        and r.is_valid is not False
+        and r.lifecycle_status not in ("invalidated", "superseded")
+        and (exec_date is None or exec_date <= today)
+    ]
+
+    diag: dict = {
+        "signal_date": signal_date,
+        "exec_date": exec_date,
+        "total_recs": total_recs,
+        "buy_count": len(buy_rows),
+        "excl_invalid": excl_invalid,
+        "excl_non_core": excl_non_core,
+        "excl_lifecycle": excl_lifecycle,
+        "not_yet_executable": not_yet_executable,
+        "eligible_count": len(eligible),
+        "eligible_stocks": [(r.get("sid"), r.get("name")) for r in eligible],
+    }
+
+    return eligible, diag
+
+
+def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) -> None:
+    """預設收合的診斷 expander；BUY > 0 但 eligible = 0 時自動展開並顯示 warning。"""
+    buy_count = diag["buy_count"]
+    eligible  = diag["eligible_count"]
+    warn      = buy_count > 0 and eligible == 0
+    header    = "⚠️ 診斷資訊（BUY 存在但 Eligible = 0）" if warn else "🔍 診斷資訊"
+
+    with st.expander(header, expanded=warn):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"**Execution Date**：{sel_date}")
+            st.markdown(f"**Signal Date**：{signal_date}")
+            st.markdown(f"**Recommendations**：{diag['total_recs']}")
+            st.markdown(f"**BUY / BUY★**：{buy_count}")
+            st.markdown(f"**Eligible Live Signals**：{eligible}")
+        with c2:
+            if diag["eligible_stocks"]:
+                names = "、".join(
+                    f"{name}（{sid}）" if name else sid
+                    for sid, name in diag["eligible_stocks"]
+                )
+                st.markdown(f"**監控**：{names}")
+            else:
+                st.markdown("**監控**：無")
+            excl_parts = [
+                f"Invalid {diag['excl_invalid']}",
+                f"Non-Core {diag['excl_non_core']}",
+                f"Expired {diag['excl_lifecycle']}",
+                f"Not Yet Executable {diag['not_yet_executable']}",
+            ]
+            st.markdown(f"**排除**：{'｜'.join(excl_parts)}")
+
+        if diag["total_recs"] == 0:
+            st.error(f"⛔ {signal_date} 無任何 Recommendation（pipeline 可能未執行）。")
+        elif warn:
+            reasons = []
+            if diag["excl_non_core"]:
+                reasons.append(f"{diag['excl_non_core']} 個 Non-Core（tier ≠ recommend）")
+            if diag["excl_invalid"]:
+                reasons.append(f"{diag['excl_invalid']} 個 Invalid（is_valid=False）")
+            if diag["excl_lifecycle"]:
+                reasons.append(f"{diag['excl_lifecycle']} 個 Expired（停損或 Superseded）")
+            if diag["not_yet_executable"]:
+                st.warning(
+                    f"⚠️ {signal_date} 有 {buy_count} 個 BUY，但 execution_date "
+                    f"= {diag['exec_date']} > today（尚未可執行）。"
+                )
+            elif reasons:
+                st.warning(
+                    f"⚠️ {signal_date} 有 {buy_count} 個 BUY，Eligible = 0。\n\n"
+                    f"排除原因：{'、'.join(reasons)}"
+                )
 
 
 def _render_status_badge(ld) -> str:
@@ -369,17 +518,21 @@ def page_live_monitor(sel_date: date) -> None:
     st.caption("AI 訊號每日收盤後固定。盤中只更新「現在能不能執行」的即時判斷。")
 
     # sel_date = today 時，盤中實際應監控前一交易日的訊號（execution_date = today）
-    signal_date = _effective_signal_date(sel_date)
-    buy_recs    = _load_today_buy_recs(signal_date)
+    signal_date      = _effective_signal_date(sel_date)
+    buy_recs, diag   = _select_live_signals(signal_date)
 
     if signal_date != sel_date:
         st.caption(
             f"🗓 監控 {signal_date} 訊號（execution_date = {sel_date}）"
         )
 
+    _render_signal_diagnostics(sel_date, signal_date, diag)
+
     if not buy_recs:
-        st.info(f"📭 {signal_date} 無 BUY / BUY★ 推薦，無需監控。")
-        st.caption("收盤後 pipeline 執行完成後會出現推薦。")
+        if diag["total_recs"] == 0:
+            st.info(f"📭 {signal_date} 無 Recommendation 資料（pipeline 可能未執行）。")
+        else:
+            st.info(f"📭 {signal_date} 無可監控的 BUY 訊號。")
         return
 
     try:
