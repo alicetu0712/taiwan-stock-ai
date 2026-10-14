@@ -121,7 +121,7 @@ def _count(factory, **filters) -> int:
 
 
 def _last(factory, stock_id=STOCK, signal_date=SDATE) -> LiveExecutionEvent | None:
-    from src.engines.live_decision import LIVE_RULE_VERSION
+    from src.services.live_execution_service import LIVE_RULE_VERSION
     s = factory()
     row = (
         s.query(LiveExecutionEvent)
@@ -325,28 +325,25 @@ class TestRuleVersionIsolation:
         """
         from src.services import live_execution_service
         from src.engines import live_decision
-        import src.database as db_mod
 
         ld = _make_ld(LiveStatus.RAPID_DROP)
+        original_lrv = live_execution_service.LIVE_RULE_VERSION
 
-        original_lrv = live_decision.LIVE_RULE_VERSION
+        try:
+            # v1.0：寫一筆
+            live_execution_service.LIVE_RULE_VERSION = "v1.0"
+            from src.services.live_execution_service import record_if_transition
+            r1 = record_if_transition(STOCK, SDATE, ld, _REC, "20261008", "valid")
 
-        # v1.0：寫一筆
-        live_decision.LIVE_RULE_VERSION = "v1.0"
-        live_execution_service.LIVE_RULE_VERSION = "v1.0"  # 若有 module-level cache
-        from src.services.live_execution_service import record_if_transition
-        r1 = record_if_transition(STOCK, SDATE, ld, _REC, "20261008", "valid")
+            # v1.1：不同版本，應視為獨立（首次觀察 v1.1）
+            live_execution_service.LIVE_RULE_VERSION = "v1.1"
+            r2 = record_if_transition(STOCK, SDATE, ld, _REC, "20261008", "valid")
 
-        # v1.1：不同版本，應視為獨立（首次觀察 v1.1）
-        live_decision.LIVE_RULE_VERSION = "v1.1"
-        r2 = record_if_transition(STOCK, SDATE, ld, _REC, "20261008", "valid")
-
-        assert r1 is True
-        assert r2 is True
-        assert _count(patched_get_session) == 2
-
-        # 還原
-        live_decision.LIVE_RULE_VERSION = original_lrv
+            assert r1 is True
+            assert r2 is True
+            assert _count(patched_get_session) == 2
+        finally:
+            live_execution_service.LIVE_RULE_VERSION = original_lrv
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -357,8 +354,7 @@ class TestFieldIntegrity:
 
     def test_all_key_fields_persisted(self, patched_get_session):
         """關鍵欄位都必須正確寫入 DB（訊號計劃快照 + 報價品質 + 版本）。"""
-        from src.services.live_execution_service import record_if_transition
-        from src.engines.live_decision import LIVE_RULE_VERSION
+        from src.services.live_execution_service import record_if_transition, LIVE_RULE_VERSION
         from src.database import MODEL_VERSION
 
         ld = _make_ld(LiveStatus.WATCHING_LOW, current_price=197.5, intraday_low=195.0,
