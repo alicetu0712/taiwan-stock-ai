@@ -50,13 +50,14 @@ _FETCH_WINDOW_DAYS = 14
 @dataclass
 class IndexSessionResult:
     """Single ticker result for one session date."""
-    ticker:    str
-    us_date:   Optional[date]    # actual session date found in Yahoo response
-    close:     Optional[float]
-    prev_close: Optional[float]  # prior session close (for return calculation)
-    return_pct: Optional[float]  # (close - prev_close) / prev_close * 100
-    ok:        bool              # True = exact session match and data valid
-    reason:    str               # "ok" | "missing" | "stale" | "fetch_error"
+    ticker:           str
+    us_date:          Optional[date]      # actual session date found in Yahoo response
+    close:            Optional[float]
+    prev_close:       Optional[float]     # prior session close (for return calculation)
+    return_pct:       Optional[float]     # (close - prev_close) / prev_close * 100
+    ok:               bool                # True = exact session match and data valid
+    reason:           str                 # "ok" | "missing" | "stale" | "fetch_error"
+    source_timestamp: Optional[datetime] = None  # UTC datetime of the matched Yahoo row (ok=True only)
 
 
 @dataclass
@@ -167,6 +168,9 @@ def _extract_session(
     if close is not None and prev_close is not None and prev_close != 0:
         return_pct = (close - prev_close) / prev_close * 100
 
+    # Preserve the raw Yahoo Unix timestamp as UTC datetime for provenance
+    source_ts = datetime.fromtimestamp(target_row["timestamp"], tz=UTC)
+
     return IndexSessionResult(
         ticker=ticker,
         us_date=target_date,
@@ -175,6 +179,7 @@ def _extract_session(
         return_pct=return_pct,
         ok=True,
         reason="ok",
+        source_timestamp=source_ts,
     )
 
 

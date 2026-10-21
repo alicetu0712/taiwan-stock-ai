@@ -558,6 +558,9 @@ class OvernightMarketContext(Base):
     # Version — bump only when threshold semantics or classification logic changes
     overnight_rule_version = Column(String(20), nullable=False)
 
+    # Retry tracking for transient UNKNOWN contexts (fetch_error before freeze time)
+    retry_count = Column(Integer, nullable=False, default=0)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -732,6 +735,29 @@ def _migrate_recommendations(engine) -> None:
                     logger.warning(f"recommendations migration {col_name}: {exc}")
 
 
+def _migrate_overnight_market_contexts(engine) -> None:
+    """overnight_market_contexts に新カラムを追加（自動マイグレーション）。"""
+    from sqlalchemy import inspect, text
+
+    new_cols = [
+        ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns("overnight_market_contexts")}
+    except Exception:
+        return   # table doesn't exist yet; create_all will handle it
+    with engine.begin() as conn:
+        for col_name, col_type in new_cols:
+            if col_name not in existing:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE overnight_market_contexts ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info(f"overnight_market_contexts: added column {col_name}")
+                except Exception as exc:
+                    logger.warning(f"overnight_market_contexts migration {col_name}: {exc}")
+
+
 def _migrate_decision_label_to_codes(engine) -> None:
     """One-time data migration: forward_signals.decision_label display strings → stable codes."""
     from sqlalchemy import text
@@ -758,6 +784,7 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     _migrate_forward_signals(engine)
     _migrate_recommendations(engine)
     _migrate_decision_label_to_codes(engine)
+    _migrate_overnight_market_contexts(engine)
     from config import DATABASE_URL
 
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")

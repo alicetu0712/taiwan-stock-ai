@@ -1,13 +1,3 @@
-from src.collectors.base import BaseCollector
-from src.collectors.chip_collector import ChipCollector
-from src.collectors.financial_collector import FinancialCollector
-from src.collectors.news_collector import NewsCollector
-from src.collectors.price_collector import PriceCollector
-
-__all__ = [
-    "BaseCollector",
-    "PriceCollector",
-    "ChipCollector",
-    "FinancialCollector",
-    "NewsCollector",
-]
+# Collectors are imported directly — no eager imports here.
+# Importing from src.collectors (e.g. NewsCollector) requires feedparser and other
+# optional heavy deps; downstream code must import each collector explicitly.

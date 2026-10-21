@@ -4,6 +4,7 @@ overnight_service.py — Fetch, validate, and persist OvernightMarketContext
 Public API:
   ensure_overnight_context(execution_date) -> OvernightMarketContext | None
     - If context already exists in DB for (execution_date, OVERNIGHT_RULE_VERSION): return it.
+    - Exception: UNKNOWN (fetch_error) before freeze time → retry up to MAX_RETRY_COUNT times.
     - Otherwise: fetch → evaluate → persist → return.
     - Any external fetch failure → graceful degradation to UNKNOWN context (still persisted).
     - Never raises; never crashes the caller (Live Monitor / background service).
@@ -11,9 +12,13 @@ Public API:
   get_overnight_context(execution_date) -> OvernightMarketContext | None
     - Read-only DB lookup. Returns None if not yet built.
 
-Caching guarantee:
-  Once persisted, the same (execution_date, rule_version) is never fetched again.
-  Live Monitor reads DB, never calls external APIs.
+Freeze / retry policy:
+  COMPLETE / PARTIAL / STALE  → permanently frozen once persisted (valid data quality)
+  UNKNOWN (fetch_error)        → retried up to MAX_RETRY_COUNT times before FREEZE_HOUR_TW:FREEZE_MINUTE_TW
+  After freeze time            → UNKNOWN is permanent for that execution_date
+
+  This prevents a transient 07:00 Yahoo timeout from making the entire trading day UNKNOWN.
+  retry_count in DB provides auditability of how many attempts were made.
 """
 
 import json
@@ -25,6 +30,12 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 UTC = ZoneInfo("UTC")
+TW  = ZoneInfo("Asia/Taipei")
+
+# UNKNOWN retry policy
+_FREEZE_HOUR_TW   = 8    # 08:30 TW: after this, UNKNOWN is permanent for the day
+_FREEZE_MINUTE_TW = 30
+MAX_RETRY_COUNT   = 3    # max retry attempts for transient UNKNOWN (fetch_error)
 
 
 def get_overnight_context(execution_date: date):
@@ -53,23 +64,77 @@ def ensure_overnight_context(execution_date: date):
     """
     Idempotent: return existing context or fetch → validate → persist → return.
 
+    UNKNOWN contexts from transient fetch failures are retried before the freeze
+    time (08:30 TW). COMPLETE/PARTIAL/STALE are permanently frozen.
+
     Returns OvernightMarketContext (with risk_level=UNKNOWN if data unavailable).
     Never raises.
     """
     existing = get_overnight_context(execution_date)
+
     if existing is not None:
-        return existing
+        if not _should_retry_unknown(existing):
+            return existing
+        # Retry: remove the stale UNKNOWN record and re-fetch
+        prior_retry_count = existing.retry_count
+        logger.info(
+            f"overnight_service: retrying UNKNOWN context for {execution_date} "
+            f"(attempt #{prior_retry_count + 1})"
+        )
+        _delete_context(existing)
+        retry_count = prior_retry_count + 1
+    else:
+        retry_count = 0
 
     try:
-        return _build_and_persist(execution_date)
+        return _build_and_persist(execution_date, retry_count=retry_count)
     except Exception as exc:
         logger.error(f"overnight_service.ensure: unexpected error: {exc}")
-        return _persist_unknown(execution_date, reason=str(exc))
+        return _persist_unknown(execution_date, reason=str(exc), retry_count=retry_count)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _build_and_persist(execution_date: date):
+def _should_retry_unknown(ctx) -> bool:
+    """
+    Return True if an UNKNOWN context should be retried.
+
+    Conditions:
+    - data_quality == UNKNOWN (not COMPLETE/PARTIAL/STALE — those are valid and frozen)
+    - retry_count < MAX_RETRY_COUNT
+    - current TW time < freeze time (08:30)
+    """
+    from src.engines.overnight_risk import DQ_UNKNOWN
+    if ctx.data_quality != DQ_UNKNOWN:
+        return False
+    if ctx.retry_count >= MAX_RETRY_COUNT:
+        return False
+    now_tw = datetime.now(TW)
+    freeze = now_tw.replace(
+        hour=_FREEZE_HOUR_TW, minute=_FREEZE_MINUTE_TW,
+        second=0, microsecond=0,
+    )
+    return now_tw < freeze
+
+
+def _delete_context(ctx) -> None:
+    """Delete an OvernightMarketContext row from DB (used before retry)."""
+    from src.database import OvernightMarketContext, get_session
+    s = get_session()
+    try:
+        row = s.query(OvernightMarketContext).filter(OvernightMarketContext.id == ctx.id).first()
+        if row:
+            s.delete(row)
+            s.commit()
+            logger.debug(f"overnight_service: deleted UNKNOWN ctx id={ctx.id} for retry")
+    except Exception as exc:
+        logger.warning(f"overnight_service: delete context failed: {exc}")
+        s.rollback()
+    finally:
+        s.close()
+
+
+def _build_and_persist(execution_date: date, retry_count: int = 0):
     """Fetch data, evaluate risk, persist and return OvernightMarketContext."""
     from src.core.us_trading_calendar import tw_exec_to_us_market_date, us_session_close_utc
     from src.collectors.overnight_collector import fetch_overnight_context
@@ -78,7 +143,6 @@ def _build_and_persist(execution_date: date):
         evaluate_overnight_risk,
         risk_reasons_to_json,
         _derive_data_quality,
-        DQ_STALE, DQ_UNKNOWN,
     )
     from src.database import OvernightMarketContext, get_session
 
@@ -87,7 +151,9 @@ def _build_and_persist(execution_date: date):
         logger.warning(
             f"overnight_service: cannot determine us_market_date for {execution_date}"
         )
-        return _persist_unknown(execution_date, reason="us_calendar_mapping_failed")
+        return _persist_unknown(
+            execution_date, reason="us_calendar_mapping_failed", retry_count=retry_count
+        )
 
     # Fetch from Yahoo
     fetch_result = fetch_overnight_context(us_market_date)
@@ -105,7 +171,7 @@ def _build_and_persist(execution_date: date):
     )
 
     # VIX change_pct = None when prev_close unavailable
-    vix_change_pct = vix.return_pct  # VIX % change uses same formula
+    vix_change_pct = vix.return_pct
 
     # Evaluate risk
     risk_result = evaluate_overnight_risk(
@@ -117,16 +183,18 @@ def _build_and_persist(execution_date: date):
         data_quality=data_quality,
     )
 
-    # source_timestamp: earliest non-None Yahoo timestamp across all tickers
-    source_ts = None
+    # Canonical source_timestamp: earliest ok result's Yahoo row timestamp.
+    # Each ticker independently validates exact-session match; the first ok
+    # timestamp is representative of when the US session data became available.
+    source_ts_naive = None
     for r in [sp, ndq, sox, vix]:
-        if r.ok and r.us_date is not None:
-            # Approximate: us_market_date 16:00 ET as proxy for session close
+        if r.ok and r.source_timestamp is not None:
+            source_ts_naive = r.source_timestamp.replace(tzinfo=None)  # UTC-naive for SQLite
             break
 
-    # available_at: exact US session close time (DST-correct)
+    # available_at: exact US session close time (DST-correct, stored as UTC-naive)
     available_at_utc = us_session_close_utc(us_market_date)
-    available_at_naive = available_at_utc.replace(tzinfo=None)  # SQLite stores naive
+    available_at_naive = available_at_utc.replace(tzinfo=None)
 
     ctx = OvernightMarketContext(
         execution_date=execution_date,
@@ -142,10 +210,11 @@ def _build_and_persist(execution_date: date):
         risk_reasons_json=risk_reasons_to_json(risk_result.reasons),
         data_quality=data_quality,
         source_name="yahoo_finance_v8",
-        source_timestamp=None,
+        source_timestamp=source_ts_naive,
         available_at=available_at_naive,
         fetched_at=datetime.now(UTC).replace(tzinfo=None),
         overnight_rule_version=OVERNIGHT_RULE_VERSION,
+        retry_count=retry_count,
     )
 
     s = get_session()
@@ -155,7 +224,8 @@ def _build_and_persist(execution_date: date):
         s.refresh(ctx)
         logger.info(
             f"overnight_context persisted: exec={execution_date} "
-            f"us={us_market_date} risk={ctx.risk_level} dq={ctx.data_quality}"
+            f"us={us_market_date} risk={ctx.risk_level} dq={ctx.data_quality} "
+            f"source_ts={source_ts_naive} retry={retry_count}"
         )
         return ctx
     except Exception as exc:
@@ -166,7 +236,7 @@ def _build_and_persist(execution_date: date):
         s.close()
 
 
-def _persist_unknown(execution_date: date, reason: str = ""):
+def _persist_unknown(execution_date: date, reason: str = "", retry_count: int = 0):
     """Persist an UNKNOWN context when data is completely unavailable."""
     from src.engines.overnight_risk import OVERNIGHT_RULE_VERSION, RISK_UNKNOWN, DQ_UNKNOWN
     from src.database import OvernightMarketContext, get_session
@@ -178,8 +248,10 @@ def _persist_unknown(execution_date: date, reason: str = ""):
         data_quality=DQ_UNKNOWN,
         risk_reasons_json=json.dumps([]),
         source_name="yahoo_finance_v8",
+        source_timestamp=None,
         fetched_at=datetime.now(UTC).replace(tzinfo=None),
         overnight_rule_version=OVERNIGHT_RULE_VERSION,
+        retry_count=retry_count,
     )
 
     s = get_session()
@@ -188,7 +260,8 @@ def _persist_unknown(execution_date: date, reason: str = ""):
         s.commit()
         s.refresh(ctx)
         logger.info(
-            f"overnight_context persisted UNKNOWN: exec={execution_date} reason={reason}"
+            f"overnight_context persisted UNKNOWN: exec={execution_date} "
+            f"reason={reason} retry={retry_count}"
         )
         return ctx
     except Exception as exc:
