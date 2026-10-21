@@ -755,6 +755,15 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
             except Exception as e:
                 logger.warning(f"[Step 9c] Forward signal 凍結失敗（不影響主流程）：{e}")
 
+        # ── Step 9d: foe_v1 前向執行結果評估 ─────────────────
+        try:
+            from src.services.outcome_service import compute_foe_outcomes
+            foe_updated = compute_foe_outcomes(session, trade_date)
+            if foe_updated:
+                logger.info(f"[Step 9d] foe_v1 outcomes: {foe_updated} rows updated")
+        except Exception as e:
+            logger.warning(f"[Step 9d] foe_v1 outcomes failed (非致命): {e}")
+
         # ── Step 10: 產生報告 ────────────────────────────────
         logger.info("[Step 10] Generating daily report...")
         watch_list_data = [

@@ -278,6 +278,7 @@ def main() -> None:
             "📋歷史",
             "💼持倉",
             "🔬驗證",
+            "🔒證據",
             "🧪回測",
             "🗂交易",
             "📋成績單",
@@ -311,17 +312,20 @@ def main() -> None:
     with tabs[6]:
         _render(page_backtest)
     with tabs[7]:
-        _render(page_research_backtest)
+        from dashboard._pages.evidence import page_evidence
+        _render(page_evidence)
     with tabs[8]:
-        _render(page_my_trades)
+        _render(page_research_backtest)
     with tabs[9]:
+        _render(page_my_trades)
+    with tabs[10]:
         from dashboard._pages.scorecard import page_scorecard
         _render(page_scorecard)
-    with tabs[10]:
-        _render(page_data_health)
     with tabs[11]:
-        _render(page_guide)
+        _render(page_data_health)
     with tabs[12]:
+        _render(page_guide)
+    with tabs[13]:
         _render(page_settings, sel_date)
 
     st.markdown(

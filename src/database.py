@@ -564,6 +564,99 @@ class OvernightMarketContext(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ForwardOutcomeEvaluation(Base):
+    """
+    foe_v1 pre-registered outcome evaluation — one row per (signal × path × protocol).
+
+    Unique key: (forward_signal_id, path_type, outcome_protocol_version).
+    Two rows per eligible signal: BASELINE_NEXT_OPEN + OVERNIGHT_AWARE_RECONFIRMED.
+
+    Mutability rules:
+      - Row is mutable while horizons are accumulating.
+      - Once horizon_20d_matured_at is set, the entire 20D bundle is IMMUTABLE.
+      - Once horizon_60d_matured_at is set, the entire 60D bundle is IMMUTABLE.
+      - Evaluation semantics changes require foe_v2, never retroactive overwrite.
+
+    Invariants (when both horizons complete for the same row):
+      mae_60d <= mae_20d  (60D window ⊇ 20D window)
+      mfe_60d >= mfe_20d
+    """
+
+    __tablename__ = "forward_outcome_evaluations"
+    __table_args__ = (
+        UniqueConstraint(
+            "forward_signal_id", "path_type", "outcome_protocol_version",
+            name="uq_foe_signal_path_version",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Identity
+    forward_signal_id    = Column(Integer, nullable=False, index=True)   # FK → forward_signals.id
+    signal_evaluation_id = Column(String(60))   # "{stock_id}_{signal_date}" — human-readable
+    stock_id             = Column(String(10), nullable=False, index=True)
+    signal_date          = Column(Date, nullable=False, index=True)
+
+    # Path and protocol versions
+    path_type                  = Column(String(40), nullable=False)   # BASELINE_NEXT_OPEN / OVERNIGHT_AWARE_RECONFIRMED
+    outcome_protocol_version   = Column(String(20), nullable=False)   # foe_v1
+    overnight_rule_version     = Column(String(20))   # overnight_v1 or NULL (legacy)
+    overnight_risk_level       = Column(String(10))   # GREEN/YELLOW/RED/UNKNOWN or NULL
+    overnight_context_id       = Column(Integer)       # FK → overnight_market_contexts.id
+    live_rule_version          = Column(String(20))
+
+    # Execution status and entry
+    entry_status               = Column(String(30))   # EXECUTED / EXPIRED_BEFORE_ENTRY / INVALIDATED_BEFORE_ENTRY / PENDING / DATA_INSUFFICIENT / NOT_APPLICABLE
+    entry_date                 = Column(Date)
+    entry_timestamp            = Column(DateTime)     # Aware path: ENTRY_RECONFIRMED observed_at
+    entry_price                = Column(Float)
+    entry_price_type           = Column(String(40))   # BASELINE_NEXT_OPEN / LIVE_ENTRY_RECONFIRMED_QUOTE
+    entry_quote_quality        = Column(String(10))   # Aware path only
+
+    # MAE/MFE scan window metadata
+    mae_mfe_start_date         = Column(Date)         # entry_date (Baseline) or next_td (Aware)
+    entry_day_excursion_excluded = Column(Boolean)    # False (Baseline) / True (Aware)
+
+    # Benchmark
+    benchmark_entry_date         = Column(Date)
+    benchmark_entry_price        = Column(Float)
+    benchmark_entry_price_type   = Column(String(20))   # "0050_DAILY_OPEN"
+    benchmark_timing_approximation = Column(Boolean)   # False (Baseline) / True (Aware)
+
+    # Transaction cost assumption (snapshot at computation time)
+    transaction_cost_assumption  = Column(Float)       # e.g. 0.585
+
+    # ── 20D FINALIZATION BUNDLE (immutable after horizon_20d_matured_at is set) ──
+    return_20d               = Column(Float)
+    alpha_20d                = Column(Float)
+    mae_20d                  = Column(Float)
+    mfe_20d                  = Column(Float)
+    target_stop_outcome_20d  = Column(String(25))   # T1_FIRST / STOP_FIRST / SAME_DAY_AMBIGUOUS / NEITHER
+    target_hit_date_20d      = Column(Date)
+    stop_hit_date_20d        = Column(Date)
+    outcome_data_quality_20d = Column(String(25))
+    horizon_20d_matured_at   = Column(DateTime)     # set once; guards 20D bundle immutability
+
+    # ── 60D FINALIZATION BUNDLE (immutable after horizon_60d_matured_at is set) ──
+    return_60d               = Column(Float)
+    alpha_60d                = Column(Float)
+    mae_60d                  = Column(Float)
+    mfe_60d                  = Column(Float)
+    target_stop_outcome_60d  = Column(String(25))
+    target_hit_date_60d      = Column(Date)
+    stop_hit_date_60d        = Column(Date)
+    outcome_data_quality_60d = Column(String(25))
+    horizon_60d_matured_at   = Column(DateTime)
+
+    # Exclusion (formal overnight cohort eligibility)
+    exclusion_reason         = Column(String(50))   # NO_OVERNIGHT_DATA / MISSING_VALID_NEXT_OPEN_ENTRY / …
+
+    # Audit
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow)
+
+
 class PipelineFunnel(Base):
     """每日 pipeline 漏斗統計——追蹤各階段股票留存數"""
 
@@ -735,6 +828,72 @@ def _migrate_recommendations(engine) -> None:
                     logger.warning(f"recommendations migration {col_name}: {exc}")
 
 
+def _migrate_forward_outcome_evaluations(engine) -> None:
+    """forward_outcome_evaluations に新カラムを追加（自動マイグレーション）。"""
+    from sqlalchemy import inspect, text
+
+    new_cols = [
+        ("forward_signal_id",           "INTEGER NOT NULL DEFAULT 0"),
+        ("signal_evaluation_id",         "VARCHAR(60)"),
+        ("stock_id",                     "VARCHAR(10) NOT NULL DEFAULT ''"),
+        ("signal_date",                  "DATE NOT NULL DEFAULT '1970-01-01'"),
+        ("path_type",                    "VARCHAR(40) NOT NULL DEFAULT ''"),
+        ("outcome_protocol_version",     "VARCHAR(20) NOT NULL DEFAULT 'foe_v1'"),
+        ("overnight_rule_version",       "VARCHAR(20)"),
+        ("overnight_risk_level",         "VARCHAR(10)"),
+        ("overnight_context_id",         "INTEGER"),
+        ("live_rule_version",            "VARCHAR(20)"),
+        ("entry_status",                 "VARCHAR(30)"),
+        ("entry_date",                   "DATE"),
+        ("entry_timestamp",              "DATETIME"),
+        ("entry_price",                  "FLOAT"),
+        ("entry_price_type",             "VARCHAR(40)"),
+        ("entry_quote_quality",          "VARCHAR(10)"),
+        ("mae_mfe_start_date",           "DATE"),
+        ("entry_day_excursion_excluded", "BOOLEAN"),
+        ("benchmark_entry_date",         "DATE"),
+        ("benchmark_entry_price",        "FLOAT"),
+        ("benchmark_entry_price_type",   "VARCHAR(20)"),
+        ("benchmark_timing_approximation", "BOOLEAN"),
+        ("transaction_cost_assumption",  "FLOAT"),
+        ("return_20d",                   "FLOAT"),
+        ("alpha_20d",                    "FLOAT"),
+        ("mae_20d",                      "FLOAT"),
+        ("mfe_20d",                      "FLOAT"),
+        ("target_stop_outcome_20d",      "VARCHAR(25)"),
+        ("target_hit_date_20d",          "DATE"),
+        ("stop_hit_date_20d",            "DATE"),
+        ("outcome_data_quality_20d",     "VARCHAR(25)"),
+        ("horizon_20d_matured_at",       "DATETIME"),
+        ("return_60d",                   "FLOAT"),
+        ("alpha_60d",                    "FLOAT"),
+        ("mae_60d",                      "FLOAT"),
+        ("mfe_60d",                      "FLOAT"),
+        ("target_stop_outcome_60d",      "VARCHAR(25)"),
+        ("target_hit_date_60d",          "DATE"),
+        ("stop_hit_date_60d",            "DATE"),
+        ("outcome_data_quality_60d",     "VARCHAR(25)"),
+        ("horizon_60d_matured_at",       "DATETIME"),
+        ("exclusion_reason",             "VARCHAR(50)"),
+        ("created_at",                   "DATETIME"),
+        ("updated_at",                   "DATETIME"),
+    ]
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns("forward_outcome_evaluations")}
+    except Exception:
+        return  # table doesn't exist yet; create_all will handle it
+    with engine.begin() as conn:
+        for col_name, col_type in new_cols:
+            if col_name not in existing:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE forward_outcome_evaluations ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info(f"forward_outcome_evaluations: added column {col_name}")
+                except Exception as exc:
+                    logger.warning(f"forward_outcome_evaluations migration {col_name}: {exc}")
+
+
 def _migrate_overnight_market_contexts(engine) -> None:
     """overnight_market_contexts に新カラムを追加（自動マイグレーション）。"""
     from sqlalchemy import inspect, text
@@ -785,6 +944,7 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     _migrate_recommendations(engine)
     _migrate_decision_label_to_codes(engine)
     _migrate_overnight_market_contexts(engine)
+    _migrate_forward_outcome_evaluations(engine)
     from config import DATABASE_URL
 
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")
