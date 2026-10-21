@@ -125,6 +125,15 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
         and (exec_date is None or exec_date <= today)
     ]
 
+    # overnight context for exec_date（read-only from DB，不呼叫外部 API）
+    overnight_ctx = None
+    if exec_date is not None:
+        try:
+            from src.services.overnight_service import get_overnight_context
+            overnight_ctx = get_overnight_context(exec_date)
+        except Exception:
+            pass
+
     diag: dict = {
         "signal_date": signal_date,
         "exec_date": exec_date,
@@ -136,9 +145,134 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
         "not_yet_executable": not_yet_executable,
         "eligible_count": len(eligible),
         "eligible_stocks": [(r.get("sid"), r.get("name")) for r in eligible],
+        "overnight_ctx": overnight_ctx,
     }
 
     return eligible, diag
+
+
+def _overnight_risk_badge(risk_level: str) -> str:
+    """Return colored HTML badge for overnight risk level."""
+    _META = {
+        "GREEN":   ("🟢", "#00897b", "#e0f2f1"),
+        "YELLOW":  ("🟡", "#f57f17", "#fff8e1"),
+        "RED":     ("🔴", "#c62828", "#ffebee"),
+        "UNKNOWN": ("⚪", "#78909c", "#eceff1"),
+    }
+    icon, color, bg = _META.get(risk_level, _META["UNKNOWN"])
+    label_map = {"GREEN": "穩定", "YELLOW": "偏弱", "RED": "高風險", "UNKNOWN": "資料不足"}
+    label = label_map.get(risk_level, risk_level)
+    return (
+        f'<span style="background:{bg};color:{color};'
+        f'font-weight:700;padding:2px 9px;border-radius:10px;font-size:0.78rem">'
+        f'{icon} {label}</span>'
+    )
+
+
+def _fmt_pct(v) -> str:
+    if v is None:
+        return "—"
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v:.1f}%"
+
+
+def _render_overnight_diagnostics(ctx) -> None:
+    """Render overnight context fields inside the diagnostics expander."""
+    from src.engines.overnight_risk import risk_reasons_from_json
+    st.markdown(
+        f"**🌙 隔夜市場**：{_overnight_risk_badge(ctx.risk_level)}　"
+        f"<span style='font-size:0.75rem;color:#888'>"
+        f"US {ctx.us_market_date or '—'} · {ctx.data_quality} · {ctx.overnight_rule_version}"
+        f"</span>",
+        unsafe_allow_html=True,
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(
+            f"S&P 500 `{_fmt_pct(ctx.sp500_return_pct)}`　"
+            f"Nasdaq `{_fmt_pct(ctx.nasdaq_return_pct)}`　"
+            f"SOX `{_fmt_pct(ctx.sox_return_pct)}`"
+        )
+    with c2:
+        vix_str = f"{ctx.vix_close:.1f}" if ctx.vix_close else "—"
+        vix_chg = f" ({_fmt_pct(ctx.vix_change_pct)})" if ctx.vix_change_pct else ""
+        st.markdown(f"VIX `{vix_str}{vix_chg}`　Fetched `{ctx.fetched_at.strftime('%H:%M') if ctx.fetched_at else '—'}`")
+
+    reasons = risk_reasons_from_json(ctx.risk_reasons_json or "[]")
+    if reasons:
+        st.markdown("　".join(f"`{r.code}` {r.message}（{_fmt_pct(r.value)}）" for r in reasons))
+
+
+def _render_overnight_card(ctx, trade_signal: str, live_status) -> str:
+    """
+    Return HTML for the overnight market section inside a Live card.
+    Calls ExecutionGuidanceEngine to get the final guidance.
+
+    Returns empty string if ctx is None (no overnight data yet).
+    """
+    if ctx is None:
+        return (
+            '<div style="margin:6px 0;padding:6px 10px;background:#f5f5f5;'
+            'border-radius:6px;font-size:0.72rem;color:#9e9e9e">'
+            '🌙 隔夜市場資料尚未取得（盤前自動建立）</div>'
+        )
+
+    from src.engines.overnight_risk import risk_reasons_from_json, RISK_UNKNOWN
+    from src.engines.execution_guidance import evaluate_execution_guidance, guidance_meta
+
+    risk_level = ctx.risk_level or RISK_UNKNOWN
+    _RISK_META = {
+        "GREEN":   ("🟢", "#00897b", "#e0f2f1", "穩定"),
+        "YELLOW":  ("🟡", "#f57f17", "#fff8e1", "偏弱"),
+        "RED":     ("🔴", "#c62828", "#ffebee", "高風險"),
+        "UNKNOWN": ("⚪", "#78909c", "#eceff1", "資料不足"),
+    }
+    icon, color, bg, label = _RISK_META.get(risk_level, _RISK_META["UNKNOWN"])
+
+    # Index returns row
+    rows_parts = []
+    if ctx.nasdaq_return_pct is not None:
+        rows_parts.append(f"Nasdaq {_fmt_pct(ctx.nasdaq_return_pct)}")
+    if ctx.sox_return_pct is not None:
+        rows_parts.append(f"SOX {_fmt_pct(ctx.sox_return_pct)}")
+    if ctx.sp500_return_pct is not None:
+        rows_parts.append(f"S&P {_fmt_pct(ctx.sp500_return_pct)}")
+    if ctx.vix_close is not None:
+        rows_parts.append(f"VIX {ctx.vix_close:.1f}")
+    index_row = "　".join(rows_parts) if rows_parts else "—"
+
+    # Execution guidance
+    guidance_result = evaluate_execution_guidance(
+        trade_signal=trade_signal,
+        live_status=live_status,
+        overnight_risk=risk_level,
+    )
+    gmeta = guidance_meta(guidance_result.guidance)
+
+    guidance_html = (
+        f'<div style="margin-top:5px;font-size:0.72rem">'
+        f'<span style="background:{gmeta["bg"]};color:{gmeta["color"]};'
+        f'font-weight:700;padding:2px 8px;border-radius:8px">'
+        f'{gmeta["icon"]} {gmeta["label"]}</span>'
+        f'<span style="color:#666;margin-left:8px">{guidance_result.plain_text}</span>'
+        f'</div>'
+    )
+    if guidance_result.caution and guidance_result.caution_text:
+        guidance_html += (
+            f'<div style="font-size:0.68rem;color:#e65100;margin-top:3px">'
+            f'{guidance_result.caution_text}</div>'
+        )
+
+    return (
+        f'<div style="margin:8px 0;padding:8px 10px;background:{bg};'
+        f'border-left:3px solid {color};border-radius:0 6px 6px 0">'
+        f'<div style="font-size:0.67rem;color:#999;margin-bottom:2px">🌙 隔夜市場風險</div>'
+        f'<div style="font-size:0.85rem;font-weight:700;color:{color}">'
+        f'{icon} {label}</div>'
+        f'<div style="font-size:0.72rem;color:#555;margin-top:3px">{index_row}</div>'
+        f'{guidance_html}'
+        f'</div>'
+    )
 
 
 def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) -> None:
@@ -172,6 +306,15 @@ def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) ->
                 f"Not Yet Executable {diag['not_yet_executable']}",
             ]
             st.markdown(f"**排除**：{'｜'.join(excl_parts)}")
+
+        # Overnight context section
+        ctx = diag.get("overnight_ctx")
+        if ctx is not None:
+            st.markdown("---")
+            _render_overnight_diagnostics(ctx)
+        else:
+            st.markdown("---")
+            st.markdown("**🌙 隔夜市場**：⚪ 尚未建立（盤前由 Collector 自動取得）")
 
         if diag["total_recs"] == 0:
             st.error(f"⛔ {signal_date} 無任何 Recommendation（pipeline 可能未執行）。")
@@ -317,7 +460,8 @@ def _rr_html(ld) -> str:
     return f'<span style="color:{color};font-weight:700"> R/R {rr:.1f}x</span>{price_note}'
 
 
-def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int = 10) -> None:
+def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int = 10,
+                overnight_ctx=None) -> None:
     """
     Live 卡片內容，由外部 fragment 包裝以支援動態刷新頻率。
     狀態轉換（State Transition）透過 live_execution_service 寫入 DB。
@@ -439,6 +583,9 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
         # R/R（以現價計算）
         rr_display = _rr_html(ld)
 
+        # 隔夜市場風險 + 執行建議
+        overnight_html = _render_overnight_card(overnight_ctx, rec.get("trade_signal", ""), ld.status)
+
         # BUY ≠ Good Entry 提醒（急跌情境下 R/R 不佳時）
         drop_statuses = (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW, LiveStatus.ENTRY_RECONFIRMED)
         buy_note_html = ""
@@ -495,6 +642,9 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
     <div style="font-size:0.72rem;color:#666;margin-top:4px">{ld.reason}</div>
     {buy_note_html}
   </div>
+
+  <!-- 隔夜市場風險 + 執行建議 -->
+  {overnight_html}
 
   <!-- 急跌情境：走勢敘述 + 階段指示 -->
   {drop_html}
@@ -571,8 +721,11 @@ def page_live_monitor(sel_date: date) -> None:
     st.markdown("---")
 
     # 動態 fragment：每次 page_live_monitor 重新執行時（selectbox 改變），以新 interval 重建
+    overnight_ctx = diag.get("overnight_ctx")
+
     @st.fragment(run_every=f"{refresh_interval}s")
     def _auto_refresh():
-        _live_cards(buy_recs, market_map, signal_date=signal_date, interval=refresh_interval)
+        _live_cards(buy_recs, market_map, signal_date=signal_date,
+                    interval=refresh_interval, overnight_ctx=overnight_ctx)
 
     _auto_refresh()

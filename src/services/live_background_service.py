@@ -248,6 +248,13 @@ def run_once(force: bool = False) -> dict:
     if not force and not _is_market_window():
         return {"skipped": True, "reason": "outside_market_hours"}
 
+    # 確保今日 OvernightMarketContext 已建立（idempotent；失敗 graceful degradation）
+    try:
+        from src.services.overnight_service import ensure_overnight_context
+        ensure_overnight_context(execution_date=today)
+    except Exception as exc:
+        logger.warning(f"overnight_context build failed (non-fatal): {exc}")
+
     # 取 Active BUY Signals（execution_date ≤ today，往回 SIGNAL_ACTIVE_DAYS 天）
     recs = _get_active_buy_signals(today)
     if not recs:

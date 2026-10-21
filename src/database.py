@@ -493,6 +493,74 @@ class ForwardSignal(Base):
     source_price_date = Column(Date)                     # 實際股價資料日期（vs trade_date 欄位）
 
 
+class OvernightMarketContext(Base):
+    """
+    隔夜市場風險快照 — 每個 execution_date × overnight_rule_version 唯一一筆。
+
+    建立時機：TW 盤前（live_background_service.run_once 開頭）。
+    Live Monitor 只讀 DB，不直接呼叫外部 API。
+
+    時間層說明：
+      us_market_date   = 最近完成的美股 regular session 日期
+      available_at     = us_market_date 16:00 ET（UTC-aware），代表資料的最早可取得時間
+      source_timestamp = Yahoo API 回傳的原始 timestamp（不得修改語意）
+      fetched_at       = 系統實際 fetch 時間（UTC）
+
+    data_quality:
+      COMPLETE = 全部指標齊全且 exact-session match
+      PARTIAL  = 部分指標缺失
+      STALE    = 取得的 session date ≠ 預期 us_market_date
+      UNKNOWN  = 完全無法取得
+
+    重要：UNKNOWN / STALE 不得產生 GREEN risk_level。
+    """
+
+    __tablename__ = "overnight_market_contexts"
+    __table_args__ = (
+        UniqueConstraint(
+            "execution_date", "overnight_rule_version",
+            name="uq_omc_exec_date_version",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Date mapping
+    execution_date = Column(Date, nullable=False, index=True)
+    us_market_date = Column(Date)                           # prev US trading day
+
+    # US market returns (1-day return vs prior session close, %)
+    sp500_return_pct    = Column(Float)    # ^GSPC
+    nasdaq_return_pct   = Column(Float)    # ^IXIC
+    sox_return_pct      = Column(Float)    # ^SOX
+
+    # VIX
+    vix_close           = Column(Float)    # absolute level
+    vix_change_pct      = Column(Float)    # % change from prior session
+
+    # Taiwan futures overnight (NULL in v1 — no reliable free source)
+    taiex_futures_overnight_return_pct = Column(Float)
+
+    # Risk assessment
+    risk_level          = Column(String(10), nullable=False)  # GREEN/YELLOW/RED/UNKNOWN
+    risk_score          = Column(Float)                       # nullable in v1
+    risk_reasons_json   = Column(Text)                        # JSON list of reason dicts
+
+    # Data quality
+    data_quality        = Column(String(10), nullable=False)  # COMPLETE/PARTIAL/STALE/UNKNOWN
+
+    # Source provenance — Yahoo timestamp and our availability calculation are separate
+    source_name         = Column(String(50))
+    source_timestamp    = Column(DateTime)    # raw timestamp from Yahoo (UTC-naive stored as UTC)
+    available_at        = Column(DateTime)    # us_market_date 16:00 ET as UTC (DST-correct)
+    fetched_at          = Column(DateTime, default=datetime.utcnow)
+
+    # Version — bump only when threshold semantics or classification logic changes
+    overnight_rule_version = Column(String(20), nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class PipelineFunnel(Base):
     """每日 pipeline 漏斗統計——追蹤各階段股票留存數"""
 
