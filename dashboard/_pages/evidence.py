@@ -173,34 +173,14 @@ def _section_sample_health(df: pd.DataFrame):
     # Split by path
     baseline_df = df[df["path_type"] == PATH_BASELINE]
     aware_df = df[df["path_type"] == PATH_AWARE]
+    matured_n = int(df["horizon_20d_matured_at"].notna().sum())
 
+    # ── Level 1：數量指標 ─────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
     col1.metric("Baseline 路徑 (總)", len(baseline_df))
     col2.metric("Overnight-Aware 路徑 (總)", len(aware_df))
-    col3.metric("已成熟 20D 記錄", int(df["horizon_20d_matured_at"].notna().sum()))
+    col3.metric("已成熟 20D 記錄", matured_n)
 
-    # Baseline breakdown
-    st.markdown("**Baseline 路徑 — 按 overnight_risk_level**")
-    b_counts = (
-        baseline_df.groupby("overnight_risk_level", dropna=False)
-        .size()
-        .reset_index(name="筆數")
-        .sort_values("overnight_risk_level")
-    )
-    b_counts["overnight_risk_level"] = b_counts["overnight_risk_level"].fillna(
-        "(無 Overnight 資料)"
-    )
-    b_counts["樣本評估"] = b_counts["筆數"].apply(_n_label)
-    st.dataframe(b_counts, use_container_width=True, hide_index=True)
-
-    # Exclusions
-    excl = df[df["exclusion_reason"].notna()]
-    if not excl.empty:
-        st.markdown("**排除記錄 (exclusion_reason)**")
-        excl_counts = excl.groupby("exclusion_reason").size().reset_index(name="筆數")
-        st.dataframe(excl_counts, use_container_width=True, hide_index=True)
-
-    # Pending / incomplete
     pending_b = int((baseline_df["entry_status"] == EXEC_PENDING).sum())
     pending_a = int((aware_df["entry_status"] == EXEC_PENDING).sum())
     if pending_b or pending_a:
@@ -212,6 +192,27 @@ def _section_sample_health(df: pd.DataFrame):
             f"overnight_v1 上線前的 Legacy 訊號：{no_overnight} 筆，"
             "已標記 NO_OVERNIGHT_DATA，不納入 overnight 分析。"
         )
+
+    # ── Level 2：詳細分組明細 ─────────────────────────────────────────────
+    with st.expander("📊 樣本分組明細", expanded=False):
+        st.markdown("**Baseline 路徑 — 按 overnight_risk_level**")
+        b_counts = (
+            baseline_df.groupby("overnight_risk_level", dropna=False)
+            .size()
+            .reset_index(name="筆數")
+            .sort_values("overnight_risk_level")
+        )
+        b_counts["overnight_risk_level"] = b_counts["overnight_risk_level"].fillna(
+            "(無 Overnight 資料)"
+        )
+        b_counts["樣本評估"] = b_counts["筆數"].apply(_n_label)
+        st.dataframe(b_counts, use_container_width=True, hide_index=True)
+
+        excl = df[df["exclusion_reason"].notna()]
+        if not excl.empty:
+            st.markdown("**排除記錄 (exclusion_reason)**")
+            excl_counts = excl.groupby("exclusion_reason").size().reset_index(name="筆數")
+            st.dataframe(excl_counts, use_container_width=True, hide_index=True)
 
 
 # ── Section B: Overnight Risk Evidence ────────────────────────────────────────
@@ -243,7 +244,6 @@ def _section_overnight_evidence(df: pd.DataFrame):
     groups = []
     for level in ["GREEN", "YELLOW", "RED", "UNKNOWN"]:
         sub = valid[valid["overnight_risk_level"] == level]
-        label = level
 
         n = len(sub)
         if n == 0:
@@ -261,7 +261,7 @@ def _section_overnight_evidence(df: pd.DataFrame):
 
         groups.append(
             {
-                "overnight_risk": label,
+                "overnight_risk": level,
                 "N": n,
                 "樣本評估": _n_label(n),
                 "20D Return (avg %)": (
@@ -283,17 +283,44 @@ def _section_overnight_evidence(df: pd.DataFrame):
         st.info("分組後無可顯示資料。")
         return
 
+    # ── Level 1：摘要標題 ─────────────────────────────────────────────────
+    green_g = next((g for g in groups if g["overnight_risk"] == "GREEN"), None)
+    red_g   = next((g for g in groups if g["overnight_risk"] == "RED"), None)
+    if (
+        green_g and isinstance(green_g["20D Alpha (avg %)"], float)
+        and red_g and isinstance(red_g["20D Alpha (avg %)"], float)
+    ):
+        diff = green_g["20D Alpha (avg %)"] - red_g["20D Alpha (avg %)"]
+        diff_color = "#00897b" if diff >= 0 else "#e53935"
+        st.html(
+            f'<div style="padding:8px 12px;background:#f8f9fa;border-radius:6px;'
+            f'font-size:0.82rem;color:#555;margin-bottom:8px">'
+            f'GREEN 組平均 Alpha '
+            f'<strong style="color:#00897b">{green_g["20D Alpha (avg %)"]:+.2f}%</strong>'
+            f'（{_fmt_n(green_g["N"])}）　RED 組 '
+            f'<strong style="color:#e53935">{red_g["20D Alpha (avg %)"]:+.2f}%</strong>'
+            f'（{_fmt_n(red_g["N"])}）　差距 '
+            f'<strong style="color:{diff_color}">{diff:+.2f}%</strong>'
+            f'</div>'
+        )
+    else:
+        st.caption("各組樣本尚不足 5 筆，暫無 Alpha 摘要。")
+
     result_df = pd.DataFrame(groups)
     st.dataframe(result_df, use_container_width=True, hide_index=True)
 
-    for g in groups:
-        if isinstance(g["N"], int):
-            _warn_if_small(g["N"], g["overnight_risk"])
-
-    if any(g["SAME_DAY_AMBIGUOUS"] > 0 for g in groups):
-        st.caption(
-            "T1達成率 = T1_FIRST / (T1_FIRST + STOP_FIRST)，分母不含 SAME_DAY_AMBIGUOUS（§24 預先登記）。"
-        )
+    # ── Level 3：統計說明 ─────────────────────────────────────────────────
+    has_ambig = any(g["SAME_DAY_AMBIGUOUS"] > 0 for g in groups)
+    small_groups = [g for g in groups if isinstance(g["N"], int) and g["N"] < 30]
+    if has_ambig or small_groups:
+        with st.expander("ℹ️ 統計說明", expanded=False):
+            for g in small_groups:
+                _warn_if_small(g["N"], g["overnight_risk"])
+            if has_ambig:
+                st.caption(
+                    "T1達成率 = T1_FIRST / (T1_FIRST + STOP_FIRST)，"
+                    "分母不含 SAME_DAY_AMBIGUOUS（§24 預先登記）。"
+                )
 
 
 # ── Section C: Baseline vs Overnight-Aware ────────────────────────────────────
@@ -304,11 +331,6 @@ def _section_path_comparison(df: pd.DataFrame):
     st.caption(
         "僅限 overnight_risk_level = RED 的訊號，同一 forward_signal_id "
         "同時有 Baseline 與 Aware 兩條路徑記錄時才納入比較。"
-    )
-    st.info(
-        "**⚠️ 方法限制（§51）**：Aware 路徑使用 ENTRY_RECONFIRMED 當日盤中 current_price，"
-        "進場日開盤至觸發前的 High/Low 不計入 MAE/MFE，"
-        "與 Baseline 的起算點不完全對稱。"
     )
 
     formal = _formal_eligible(df)
@@ -341,13 +363,13 @@ def _section_path_comparison(df: pd.DataFrame):
     ]
 
     n = len(paired)
-    _warn_if_small(n, "RED Paired")
     st.markdown(f"**配對樣本：{_fmt_n(n)}**")
 
     if n < 3:
         st.info("配對樣本太少，無法顯示有意義的比較。")
         return
 
+    # ── Level 1：核心比較指標 ─────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
     col1.metric(
         "Baseline 20D Alpha (avg)",
@@ -362,25 +384,33 @@ def _section_path_comparison(df: pd.DataFrame):
         "Δ MAE (Aware - Baseline, avg)",
         f"{(paired['mae_20d_aware'] - paired['mae_20d_base']).mean():.2f}%",
     )
-
     st.caption(
         "Δalpha > 0 表示等待 Overnight-Aware 確認後才進場，alpha 優於直接 Next-Open 進場。"
         "PENDING / EXPIRED 不計入（需已進場且 20D 成熟）。"
     )
 
-    # Execution outcome breakdown for aware
+    # ── Level 2：RED Aware 執行分布 ───────────────────────────────────────
     if "entry_status" in aware_m.columns:
-        st.markdown("**RED 訊號 Aware 路徑執行結果分布**")
         aware_red = formal[
             (formal["path_type"] == PATH_AWARE)
             & (formal["overnight_risk_level"] == "RED")
             & formal["entry_status"].notna()
         ]
         if not aware_red.empty:
-            status_counts = (
-                aware_red.groupby("entry_status").size().reset_index(name="筆數")
-            )
-            st.dataframe(status_counts, use_container_width=True, hide_index=True)
+            with st.expander("📊 RED Aware 執行結果分布", expanded=False):
+                status_counts = (
+                    aware_red.groupby("entry_status").size().reset_index(name="筆數")
+                )
+                st.dataframe(status_counts, use_container_width=True, hide_index=True)
+
+    # ── Level 3：方法限制 ─────────────────────────────────────────────────
+    with st.expander("⚠️ 方法限制（§51）", expanded=False):
+        st.info(
+            "**⚠️ 方法限制（§51）**：Aware 路徑使用 ENTRY_RECONFIRMED 當日盤中 current_price，"
+            "進場日開盤至觸發前的 High/Low 不計入 MAE/MFE，"
+            "與 Baseline 的起算點不完全對稱。"
+        )
+        _warn_if_small(n, "RED Paired")
 
 
 # ── Section D: Execution Rate ─────────────────────────────────────────────────
@@ -414,16 +444,17 @@ def _section_execution_rate(df: pd.DataFrame):
         counts["entry_status"].map(status_label).fillna(counts["entry_status"])
     )
 
+    # ── Level 1：執行率主表 ───────────────────────────────────────────────
     st.dataframe(
         counts[["說明", "筆數", "比例"]], use_container_width=True, hide_index=True
     )
     st.caption(
-        f"進場窗口：{FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS} 個交易日（Day1=execution_date, Day2, Day3）。"
+        f"進場窗口：{FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS} 個交易日"
+        f"（Day1=execution_date, Day2, Day3）。"
         "EXPIRED_BEFORE_ENTRY 不代表策略失敗，代表 overnight 情況未轉 GREEN 而未進場。"
     )
 
-    # Breakdown by overnight_risk_level
-    st.markdown("**Aware 執行率 × overnight_risk_level**")
+    # ── Level 2：× overnight_risk_level 細分 ─────────────────────────────
     cross = (
         aware_df.groupby(["overnight_risk_level", "entry_status"], dropna=False)
         .size()
@@ -431,8 +462,9 @@ def _section_execution_rate(df: pd.DataFrame):
         .reset_index()
     )
     if not cross.empty:
-        cross["overnight_risk_level"] = cross["overnight_risk_level"].fillna("(無資料)")
-        st.dataframe(cross, use_container_width=True, hide_index=True)
+        with st.expander("📊 執行率 × overnight_risk_level", expanded=False):
+            cross["overnight_risk_level"] = cross["overnight_risk_level"].fillna("(無資料)")
+            st.dataframe(cross, use_container_width=True, hide_index=True)
 
 
 # ── Main page ─────────────────────────────────────────────────────────────────
