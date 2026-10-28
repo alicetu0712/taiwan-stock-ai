@@ -307,7 +307,7 @@ class DecisionPresenter:
         mapping: dict[str, str] = {
             "near_breakout": f"股價接近前 20 日高點，量比 {vol_r:.1f}x，但尚未完成有效突破。",
             "pullback_buy": (
-                "回踩至支撐區，量縮整理後出現轉強訊號，進場條件已成立。"
+                "回踩至支撐區，模型已出現進場訊號，確認支撐成立。"
                 if is_buy
                 else f"多頭趨勢仍在，股價回踩至 MA10 附近（量比 {vol_r:.1f}x），等待止穩確認。"
             ),
@@ -323,18 +323,12 @@ class DecisionPresenter:
         self, setup: str, is_buy: bool, vol_r: float, tech_risk: list
     ) -> list:
         if setup == "near_breakout":
-            vol_ok = vol_r >= 1.5
             return [
                 ("🟢", "趨勢", "符合"),
-                (
-                    "🟢" if vol_ok else "🟡",
-                    "量能",
-                    f"符合｜{vol_r:.1f}x" if vol_ok else f"待觀察｜{vol_r:.1f}x",
-                ),
+                ("🟡", "量能", f"目前 {vol_r:.1f}x"),
                 ("🟡", "突破", "尚未確認"),
             ]
         if setup == "pullback_buy":
-            vol_ok = vol_r <= 1.2
             return [
                 ("🟢", "趨勢", "符合"),
                 (
@@ -342,22 +336,13 @@ class DecisionPresenter:
                     "支撐",
                     "已確認止穩" if is_buy else "近MA10，待確認",
                 ),
-                (
-                    "🟢" if vol_ok else "🟡",
-                    "量縮",
-                    f"符合｜{vol_r:.1f}x" if vol_ok else f"{vol_r:.1f}x，待收斂",
-                ),
+                ("🟡", "量能", f"目前 {vol_r:.1f}x"),
             ]
         if setup == "breakout":
-            vol_ok = vol_r >= 1.5
             return [
                 ("🟢", "趨勢", "符合"),
                 ("🟢", "突破", "已確認"),
-                (
-                    "🟢" if vol_ok else "🟡",
-                    "量能",
-                    f"符合｜{vol_r:.1f}x" if vol_ok else f"量比 {vol_r:.1f}x，偏弱",
-                ),
+                ("🟡", "量能", f"目前 {vol_r:.1f}x"),
             ]
         if setup == "trending":
             has_pressure = any("壓力" in x for x in tech_risk)
@@ -483,16 +468,13 @@ class DecisionPresenter:
 
     def _plain_tech(self, setup: str, is_buy: bool, vol_r: float) -> str:
         if setup == "near_breakout":
-            return "趨勢與量能都偏強，目前唯一缺少的是價格正式突破前波壓力。"
+            return "趨勢結構偏強，目前唯一缺少的是價格正式突破前波壓力。"
         if setup == "pullback_buy":
             if is_buy:
-                return "回踩至支撐已確認止穩，趨勢與量能均符合進場條件。"
+                return "回踩至支撐已確認，模型發出進場訊號。"
             return "趨勢仍在，目前處於回踩整理階段，觀察能否在支撐位止穩轉強。"
         if setup == "breakout":
-            vol_desc = (
-                f"成交量放大（量比 {vol_r:.1f}x）" if vol_r >= 1.5 else "成交量尚可"
-            )
-            return f"股價突破前高，{vol_desc}，型態已正式確立。"
+            return f"股價突破前高，成交量 {vol_r:.1f}x，型態已正式確立。"
         if setup == "trending":
             return "多頭趨勢延伸，均線排列健康，動能持續。"
         if setup == "breakdown":
@@ -520,11 +502,13 @@ class DecisionPresenter:
                 return _FLAG_ICON.get(DQFlag(v), "?") if v else "❌"
 
             _dq_lvl = dq.get("confidence", "medium")
-            completeness = (
-                "100%" if _dq_lvl == "high" else "85%" if _dq_lvl == "medium" else "70%"
-            )
+            quality_label = {
+                "high": "資料品質：完整",
+                "medium": "資料品質：普通",
+                "low": "資料品質：不足",
+            }.get(_dq_lvl, "資料品質：普通")
             return (
-                f"資料完整度 {completeness}　"
+                f"{quality_label}　"
                 f"股價{_icon(dq.get('price'))}　MA60{_icon(dq.get('ma60'))}　"
                 f"量能{_icon(dq.get('volume'))}　PT{_icon(dq.get('pt_score'))}　"
                 f"法人{_icon(dq.get('institution'))}　財務{_icon(dq.get('financial'))}"

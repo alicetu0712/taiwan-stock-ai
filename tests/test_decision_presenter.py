@@ -264,15 +264,21 @@ class TestChecklist:
         items = PRESENTER._checklist("near_breakout", False, 1.2, [])
         assert len(items) == 3
 
-    def test_near_breakout_high_vol_green(self):
-        items = PRESENTER._checklist("near_breakout", False, 2.0, [])
-        vol_item = next(i for i in items if i[1] == "量能")
-        assert vol_item[0] == "🟢"
+    def test_near_breakout_vol_shows_raw_value(self):
+        # Volume item is always 🟡 (neutral) and shows raw metric — no threshold judgment
+        for vol in [0.5, 1.0, 1.4, 1.5, 2.0, 3.0]:
+            items = PRESENTER._checklist("near_breakout", False, vol, [])
+            vol_item = next(i for i in items if i[1] == "量能")
+            assert vol_item[0] == "🟡", f"icon not neutral at vol={vol}"
+            assert f"{vol:.1f}x" in vol_item[2], f"raw val missing at vol={vol}"
 
-    def test_near_breakout_low_vol_yellow(self):
-        items = PRESENTER._checklist("near_breakout", False, 1.0, [])
-        vol_item = next(i for i in items if i[1] == "量能")
-        assert vol_item[0] == "🟡"
+    def test_near_breakout_vol_no_threshold_wording(self):
+        for vol in [0.5, 1.4, 1.5, 2.0]:
+            items = PRESENTER._checklist("near_breakout", False, vol, [])
+            vol_item = next(i for i in items if i[1] == "量能")
+            assert "符合" not in vol_item[2]
+            assert "待觀察" not in vol_item[2]
+            assert "偏弱" not in vol_item[2]
 
     def test_near_breakout_breakthrough_always_yellow(self):
         items = PRESENTER._checklist("near_breakout", False, 3.0, [])
@@ -372,13 +378,13 @@ class TestPlainTextHelpers:
         text = PRESENTER._plain_tech("near_breakout", False, 1.5)
         assert "壓力" in text
 
-    def test_plain_tech_breakout_high_vol(self):
-        text = PRESENTER._plain_tech("breakout", True, 2.0)
-        assert "放大" in text
-
-    def test_plain_tech_breakout_low_vol(self):
-        text = PRESENTER._plain_tech("breakout", True, 1.0)
-        assert "尚可" in text
+    def test_plain_tech_breakout_shows_raw_vol(self):
+        # Shows raw vol_r value regardless of magnitude — no threshold judgment
+        for vol in [0.5, 1.0, 1.4, 1.5, 2.0]:
+            text = PRESENTER._plain_tech("breakout", True, vol)
+            assert f"{vol:.1f}x" in text, f"raw vol missing at {vol}"
+            assert "放大" not in text, f"threshold wording '放大' at vol={vol}"
+            assert "尚可" not in text, f"threshold wording '尚可' at vol={vol}"
 
     def test_plain_tech_unknown_returns_empty(self):
         assert PRESENTER._plain_tech("none", True, 1.0) == ""
@@ -480,3 +486,109 @@ class TestPresentIntegration:
         r.pop("data_quality", None)
         card = PRESENTER.present(r)
         assert card.dq_str == ""
+
+
+# ── Presenter Purity Regression Tests ────────────────────────────────────────
+#
+# Verify that Presenter has no self-invented domain thresholds:
+# - Changing raw metrics must not change signal_label when engine signal/setup unchanged
+# - Volume items in checklist always show raw value, never threshold-based judgment
+# - DQ levels produce categorical wording, never fake percentages
+
+
+class TestPresenterPurity:
+    # ── Signal invariance ────────────────────────────────────────────────────
+
+    def test_signal_label_invariant_to_vol_ratio(self):
+        base = {"trade_signal": "buy", "setup_type": "breakout"}
+        for vol in [0.1, 0.5, 1.0, 1.4, 1.5, 2.0, 5.0]:
+            card = PRESENTER.present({**base, "vol_ratio": vol})
+            assert card.signal_label == "BUY", f"signal_label changed at vol_ratio={vol}"
+
+    def test_signal_label_invariant_to_ma20_gap(self):
+        base = {"trade_signal": "wait", "setup_type": "near_breakout"}
+        for gap in [-10.0, -2.0, 0.0, 2.0, 5.0, 10.0]:
+            card = PRESENTER.present({**base, "ma20_gap": gap})
+            assert card.signal_label == "WAIT", f"signal_label changed at ma20_gap={gap}"
+
+    def test_signal_label_invariant_to_pt_score(self):
+        base = {"trade_signal": "sell", "setup_type": "breakdown"}
+        for pt in [0, 10, 30, 50, 70, 90, 100]:
+            card = PRESENTER.present({**base, "price_trend_score": pt})
+            assert card.signal_label == "SELL", f"signal_label changed at pt_score={pt}"
+
+    # ── Checklist volume purity ──────────────────────────────────────────────
+
+    def test_checklist_vol_item_neutral_near_breakout(self):
+        # icon always 🟡, raw value always shown, no pass/fail wording
+        for vol in [0.5, 1.0, 1.4, 1.5, 2.0]:
+            items = PRESENTER._checklist("near_breakout", False, vol, [])
+            vol_item = next(i for i in items if i[1] == "量能")
+            assert vol_item[0] == "🟡"
+            assert f"{vol:.1f}x" in vol_item[2]
+            for banned in ("符合", "待觀察", "偏弱", "待收斂"):
+                assert banned not in vol_item[2], f"'{banned}' in near_breakout vol item"
+
+    def test_checklist_vol_item_neutral_breakout(self):
+        for vol in [0.5, 1.0, 1.4, 1.5, 2.0]:
+            items = PRESENTER._checklist("breakout", True, vol, [])
+            vol_item = next(i for i in items if i[1] == "量能")
+            assert vol_item[0] == "🟡"
+            assert f"{vol:.1f}x" in vol_item[2]
+            for banned in ("符合", "偏弱"):
+                assert banned not in vol_item[2], f"'{banned}' in breakout vol item"
+
+    def test_checklist_vol_item_neutral_pullback_buy(self):
+        for vol in [0.5, 1.0, 1.2, 1.5, 2.0]:
+            items = PRESENTER._checklist("pullback_buy", False, vol, [])
+            vol_item = next(i for i in items if i[1] == "量能")
+            assert vol_item[0] == "🟡"
+            assert f"{vol:.1f}x" in vol_item[2]
+            for banned in ("符合", "待收斂"):
+                assert banned not in vol_item[2], f"'{banned}' in pullback_buy vol item"
+
+    def test_checklist_support_icon_from_engine_state_only(self):
+        # Support icon IS derived from is_buy (engine state) — this is correct
+        items_buy = PRESENTER._checklist("pullback_buy", True, 1.0, [])
+        items_wait = PRESENTER._checklist("pullback_buy", False, 1.0, [])
+        sup_buy = next(i for i in items_buy if i[1] == "支撐")
+        sup_wait = next(i for i in items_wait if i[1] == "支撐")
+        assert sup_buy[0] == "🟢"   # engine said buy
+        assert sup_wait[0] == "🟡"  # engine said wait
+
+    # ── plain_tech purity ────────────────────────────────────────────────────
+
+    def test_plain_tech_breakout_no_threshold_wording(self):
+        for vol in [0.5, 1.0, 1.4, 1.5, 2.0]:
+            text = PRESENTER._plain_tech("breakout", True, vol)
+            assert f"{vol:.1f}x" in text
+            assert "放大" not in text
+            assert "尚可" not in text
+
+    def test_plain_tech_pullback_buy_buy_no_vol_claim(self):
+        # pullback_buy is_buy=True must not claim volume confirmed
+        text = PRESENTER._plain_tech("pullback_buy", True, 1.0)
+        assert "量能" not in text
+        assert "符合進場" not in text
+
+    # ── DQ purity: no fake percentages ──────────────────────────────────────
+
+    def test_dq_str_high_categorical_no_percentage(self):
+        result = PRESENTER._dq_str({"confidence": "high"})
+        assert "100%" not in result
+        assert "完整" in result
+
+    def test_dq_str_medium_categorical_no_percentage(self):
+        result = PRESENTER._dq_str({"confidence": "medium"})
+        assert "85%" not in result
+        assert "普通" in result
+
+    def test_dq_str_low_categorical_no_percentage(self):
+        result = PRESENTER._dq_str({"confidence": "low"})
+        assert "70%" not in result
+        assert "不足" in result
+
+    def test_dq_str_unknown_level_falls_back_to_medium(self):
+        result = PRESENTER._dq_str({"confidence": "unknown_future_level"})
+        # should not crash, should return categorical wording
+        assert isinstance(result, str)
