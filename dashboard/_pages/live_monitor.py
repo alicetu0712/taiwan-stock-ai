@@ -151,36 +151,13 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
     return eligible, diag
 
 
-def _overnight_risk_badge(risk_level: str) -> str:
-    """Return colored HTML badge for overnight risk level."""
-    _META = {
-        "GREEN":   ("🟢", "#00897b", "#e0f2f1"),
-        "YELLOW":  ("🟡", "#f57f17", "#fff8e1"),
-        "RED":     ("🔴", "#c62828", "#ffebee"),
-        "UNKNOWN": ("⚪", "#78909c", "#eceff1"),
-    }
-    icon, color, bg = _META.get(risk_level, _META["UNKNOWN"])
-    label_map = {"GREEN": "穩定", "YELLOW": "偏弱", "RED": "高風險", "UNKNOWN": "資料不足"}
-    label = label_map.get(risk_level, risk_level)
-    return (
-        f'<span style="background:{bg};color:{color};'
-        f'font-weight:700;padding:2px 9px;border-radius:10px;font-size:0.78rem">'
-        f'{icon} {label}</span>'
-    )
-
-
-def _fmt_pct(v) -> str:
-    if v is None:
-        return "—"
-    sign = "+" if v >= 0 else ""
-    return f"{sign}{v:.1f}%"
-
-
 def _render_overnight_diagnostics(ctx) -> None:
     """Render overnight context fields inside the diagnostics expander."""
     from src.engines.overnight_risk import risk_reasons_from_json
+    from src.presentation.live_presenter import LivePresenter
+
     st.markdown(
-        f"**🌙 隔夜市場**：{_overnight_risk_badge(ctx.risk_level)}　"
+        f"**🌙 隔夜市場**：{LivePresenter.overnight_risk_badge(ctx.risk_level)}　"
         f"<span style='font-size:0.75rem;color:#888'>"
         f"US {ctx.us_market_date or '—'} · {ctx.data_quality} · {ctx.overnight_rule_version}"
         f"</span>",
@@ -189,130 +166,30 @@ def _render_overnight_diagnostics(ctx) -> None:
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(
-            f"S&P 500 `{_fmt_pct(ctx.sp500_return_pct)}`　"
-            f"Nasdaq `{_fmt_pct(ctx.nasdaq_return_pct)}`　"
-            f"SOX `{_fmt_pct(ctx.sox_return_pct)}`"
+            f"S&P 500 `{LivePresenter.fmt_pct(ctx.sp500_return_pct)}`　"
+            f"Nasdaq `{LivePresenter.fmt_pct(ctx.nasdaq_return_pct)}`　"
+            f"SOX `{LivePresenter.fmt_pct(ctx.sox_return_pct)}`"
         )
     with c2:
         vix_str = f"{ctx.vix_close:.1f}" if ctx.vix_close else "—"
-        vix_chg = f" ({_fmt_pct(ctx.vix_change_pct)})" if ctx.vix_change_pct else ""
-        st.markdown(f"VIX `{vix_str}{vix_chg}`　Fetched `{ctx.fetched_at.strftime('%H:%M') if ctx.fetched_at else '—'}`")
+        vix_chg = (
+            f" ({LivePresenter.fmt_pct(ctx.vix_change_pct)})"
+            if ctx.vix_change_pct
+            else ""
+        )
+        st.markdown(
+            f"VIX `{vix_str}{vix_chg}`　"
+            f"Fetched `{ctx.fetched_at.strftime('%H:%M') if ctx.fetched_at else '—'}`"
+        )
 
     reasons = risk_reasons_from_json(ctx.risk_reasons_json or "[]")
     if reasons:
-        st.markdown("　".join(f"`{r.code}` {r.message}（{_fmt_pct(r.value)}）" for r in reasons))
-
-
-def _render_overnight_card(ctx, trade_signal: str, live_status) -> str:
-    """
-    Return HTML for the overnight market section inside a Live card.
-    Calls ExecutionGuidanceEngine to get the final guidance.
-
-    Returns empty string if ctx is None (no overnight data yet).
-    """
-    if ctx is None:
-        return (
-            '<div style="margin:6px 0;padding:6px 10px;background:#f5f5f5;'
-            'border-radius:6px;font-size:0.72rem;color:#9e9e9e">'
-            '🌙 隔夜市場資料尚未取得（盤前自動建立）</div>'
+        st.markdown(
+            "　".join(
+                f"`{r.code}` {r.message}（{LivePresenter.fmt_pct(r.value)}）"
+                for r in reasons
+            )
         )
-
-    from src.engines.overnight_risk import RISK_UNKNOWN
-    from src.engines.execution_guidance import evaluate_execution_guidance, guidance_meta
-
-    risk_level = ctx.risk_level or RISK_UNKNOWN
-    _RISK_META = {
-        "GREEN":   ("🟢", "#00897b", "#e0f2f1", "穩定"),
-        "YELLOW":  ("🟡", "#f57f17", "#fff8e1", "偏弱"),
-        "RED":     ("🔴", "#c62828", "#ffebee", "高風險"),
-        "UNKNOWN": ("⚪", "#78909c", "#eceff1", "資料不足"),
-    }
-    icon, color, bg, label = _RISK_META.get(risk_level, _RISK_META["UNKNOWN"])
-
-    # Index returns row
-    rows_parts = []
-    if ctx.nasdaq_return_pct is not None:
-        rows_parts.append(f"Nasdaq {_fmt_pct(ctx.nasdaq_return_pct)}")
-    if ctx.sox_return_pct is not None:
-        rows_parts.append(f"SOX {_fmt_pct(ctx.sox_return_pct)}")
-    if ctx.sp500_return_pct is not None:
-        rows_parts.append(f"S&P {_fmt_pct(ctx.sp500_return_pct)}")
-    if ctx.vix_close is not None:
-        rows_parts.append(f"VIX {ctx.vix_close:.1f}")
-    index_row = "　".join(rows_parts) if rows_parts else "—"
-
-    # Execution guidance
-    guidance_result = evaluate_execution_guidance(
-        trade_signal=trade_signal,
-        live_status=live_status,
-        overnight_risk=risk_level,
-    )
-    gmeta = guidance_meta(guidance_result.guidance)
-
-    guidance_html = (
-        f'<div style="margin-top:5px;font-size:0.72rem">'
-        f'<span style="background:{gmeta["bg"]};color:{gmeta["color"]};'
-        f'font-weight:700;padding:2px 8px;border-radius:8px">'
-        f'{gmeta["icon"]} {gmeta["label"]}</span>'
-        f'<span style="color:#666;margin-left:8px">{guidance_result.plain_text}</span>'
-        f'</div>'
-    )
-    if guidance_result.caution and guidance_result.caution_text:
-        guidance_html += (
-            f'<div style="font-size:0.68rem;color:#e65100;margin-top:3px">'
-            f'{guidance_result.caution_text}</div>'
-        )
-
-    return (
-        f'<div style="margin:8px 0;padding:8px 10px;background:{bg};'
-        f'border-left:3px solid {color};border-radius:0 6px 6px 0">'
-        f'<div style="font-size:0.67rem;color:#999;margin-bottom:2px">🌙 隔夜市場風險</div>'
-        f'<div style="font-size:0.85rem;font-weight:700;color:{color}">'
-        f'{icon} {label}</div>'
-        f'<div style="font-size:0.72rem;color:#555;margin-top:3px">{index_row}</div>'
-        f'{guidance_html}'
-        f'</div>'
-    )
-
-
-def _overnight_l1_html(ctx, trade_signal: str, live_status) -> str:
-    """One-line compact overnight row for Level 1: risk badge + guidance badge only."""
-    if ctx is None:
-        return (
-            '<div style="font-size:0.7rem;color:#aaa;margin:4px 0">'
-            '🌙 隔夜市場尚未取得</div>'
-        )
-    from src.engines.overnight_risk import RISK_UNKNOWN
-    from src.engines.execution_guidance import evaluate_execution_guidance, guidance_meta
-
-    risk_level = ctx.risk_level or RISK_UNKNOWN
-    _RISK_META_L1 = {
-        "GREEN":   ("🟢", "#00897b", "穩定"),
-        "YELLOW":  ("🟡", "#f57f17", "偏弱"),
-        "RED":     ("🔴", "#c62828", "高風險"),
-        "UNKNOWN": ("⚪", "#78909c", "資料不足"),
-    }
-    icon, color, label = _RISK_META_L1.get(risk_level, _RISK_META_L1["UNKNOWN"])
-    risk_span = (
-        f'<span style="color:{color};font-weight:700;font-size:0.72rem">'
-        f'{icon} {label}</span>'
-    )
-    guidance_result = evaluate_execution_guidance(
-        trade_signal=trade_signal,
-        live_status=live_status,
-        overnight_risk=risk_level,
-    )
-    gmeta = guidance_meta(guidance_result.guidance)
-    guidance_span = (
-        f'<span style="background:{gmeta["bg"]};color:{gmeta["color"]};'
-        f'font-weight:700;padding:2px 8px;border-radius:8px;font-size:0.68rem;'
-        f'margin-left:6px">{gmeta["icon"]} {gmeta["label"]}</span>'
-    )
-    return (
-        f'<div style="display:flex;align-items:center;margin:4px 0">'
-        f'<span style="font-size:0.67rem;color:#999;margin-right:6px">🌙</span>'
-        f'{risk_span}{guidance_span}</div>'
-    )
 
 
 def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) -> None:
@@ -378,128 +255,6 @@ def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) ->
                 )
 
 
-def _render_status_badge(ld) -> str:
-    return (
-        f'<span style="background:{ld.bg};color:{ld.color};'
-        f'font-weight:700;padding:3px 10px;border-radius:12px;font-size:0.8rem">'
-        f'{ld.icon} {ld.label}</span>'
-    )
-
-
-def _render_price_delta(current: float, reference: float, label: str) -> str:
-    diff  = current - reference
-    pct   = diff / reference * 100
-    color = "#00897b" if diff >= 0 else "#e53935"
-    sign  = "+" if diff >= 0 else ""
-    return (
-        f'<span style="font-size:0.68rem;color:{color}">'
-        f'{label} {sign}{pct:.1f}%</span>'
-    )
-
-
-def _drop_scenario_html(ld, sig_price: float) -> str:
-    """急跌情境：價格走勢敘述 + 三階段指示 + 盤中觀察低點說明。"""
-    from src.engines.live_decision import LiveStatus
-    drop_statuses = (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW, LiveStatus.ENTRY_RECONFIRMED)
-    if ld.status not in drop_statuses:
-        return ""
-
-    cur  = ld.current_price
-    ilow = ld.intraday_low
-
-    # 價格走勢敘述
-    if ilow and cur and ilow < sig_price:
-        cur_color = "#558b2f" if ld.status == LiveStatus.ENTRY_RECONFIRMED else "#1565c0"
-        narrative = (
-            f'<span style="color:#333">{sig_price:.1f}</span>'
-            f' <span style="color:#e53935">↘ {ilow:.1f} 最低</span>'
-            f' <span style="color:{cur_color}">↗ {cur:.1f} 現價</span>'
-        )
-    elif cur:
-        narrative = (
-            f'<span style="color:#333">{sig_price:.1f}</span>'
-            f' <span style="color:#e53935">↘ {cur:.1f}</span>'
-        )
-    else:
-        narrative = f'<span style="color:#333">{sig_price:.1f}</span>'
-
-    # 三階段指示：stage 1=RAPID_DROP, 2=WATCHING_LOW, 3=ENTRY_RECONFIRMED
-    stage = {
-        LiveStatus.RAPID_DROP:        1,
-        LiveStatus.WATCHING_LOW:      2,
-        LiveStatus.ENTRY_RECONFIRMED: 3,
-    }[ld.status]
-
-    stage_colors = {1: "#f57f17", 2: "#1565c0", 3: "#558b2f"}
-    stage_labels = ["急跌暫緩", "觀察低點", "轉強確認"]
-
-    def _stage_span(i: int) -> str:
-        is_done    = i < stage
-        is_current = i == stage
-        if is_current:
-            clr = stage_colors[i]
-            return f'<span style="color:{clr};font-weight:700">● {stage_labels[i-1]}</span>'
-        if is_done:
-            return f'<span style="color:#aaa">✓ {stage_labels[i-1]}</span>'
-        return f'<span style="color:#ddd">○ {stage_labels[i-1]}</span>'
-
-    stages_html = " <span style='color:#bbb'>→</span> ".join(_stage_span(i) for i in [1, 2, 3])
-
-    # 盤中觀察低點 vs 模型停損
-    ilow_row = ""
-    if ilow:
-        stop_note = (
-            f'<span style="color:#aaa;font-size:0.65rem"> '
-            f'（盤中觀察點，非模型停損 {ld.stop_price:.1f}）</span>'
-            if ld.stop_price else ""
-        )
-        ilow_row = (
-            f'<div style="font-size:0.72rem;color:#555;margin-top:5px">'
-            f'今日盤中觀察低點：<strong style="color:#1565c0">{ilow:.1f}</strong>'
-            f'{stop_note}</div>'
-        )
-
-    border_color = stage_colors.get(stage, "#f57f17")
-    return f"""
-<div style="margin:8px 0;padding:8px 10px;background:#f8f9fa;border-left:3px solid {border_color};border-radius:0 6px 6px 0">
-  <div style="font-size:0.67rem;color:#999;margin-bottom:3px">今日價格走勢</div>
-  <div style="font-size:0.82rem;font-weight:600">{narrative}</div>
-  <div style="font-size:0.68rem;margin-top:5px">{stages_html}</div>
-  {ilow_row}
-</div>"""
-
-
-def _plain_text_html(plain_text: str) -> str:
-    if not plain_text:
-        return ""
-    return (
-        f'<div style="background:#fffde7;border-radius:6px;padding:8px 10px;'
-        f'margin:6px 0;font-size:0.72rem;color:#555;line-height:1.55">'
-        f'💬 {plain_text}</div>'
-    )
-
-
-def _rr_html(ld) -> str:
-    """R/R 以現價計算，含顏色與標注。"""
-    rr = ld.rr_current
-    if rr is None or rr <= 0:
-        return ""
-    if rr >= 2.0:
-        color = "#00897b"
-    elif rr >= 1.0:
-        color = "#f57f17"
-    else:
-        color = "#e53935"
-
-    from src.engines.live_decision import LiveStatus
-    price_note = (
-        f'<span style="color:#aaa;font-size:0.65rem">（以 {ld.current_price:.1f} 計）</span>'
-        if ld.status in (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW) and ld.current_price
-        else ""
-    )
-    return f'<span style="color:{color};font-weight:700"> R/R {rr:.1f}x</span>{price_note}'
-
-
 def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int = 10,
                 overnight_ctx=None) -> None:
     """
@@ -507,8 +262,11 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
     狀態轉換（State Transition）透過 live_execution_service 寫入 DB。
     """
     from src.collectors.intraday_collector import fetch_intraday, best_price, quote_date_status
-    from src.engines.live_decision import LiveStatus, evaluate_entry_status, market_session_label
+    from src.engines.live_decision import evaluate_entry_status, market_session_label
+    from src.presentation.live_presenter import LivePresenter
     from src.services.live_execution_service import record_if_transition
+
+    _presenter = LivePresenter()
 
     session_label = market_session_label()
     is_live = session_label == "盤中"
@@ -572,87 +330,12 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
             )
             status_map[map_key] = new_st
 
-        signal_label = "BUY ★" if rec.get("trade_signal") == "strong_buy" else "BUY"
-        signal_color = "#1a7f4b" if rec.get("trade_signal") == "strong_buy" else "#2ecc71"
-        sig_price    = rec.get("price")
-        entry_low    = rec.get("entry_low")
-        entry_high   = rec.get("entry_high")
-        stop_p       = rec.get("stop_price")
-        t1           = rec.get("target1")
-
-        # 即時價格顯示（只用真實成交）
-        if date_status == "stale":
-            price_display = '<span style="color:#e53935">⚠ 舊交易日資料</span>'
-            if quote and quote.trade_date:
-                price_display += f'<span style="font-size:0.62rem;color:#e53935"> ({quote.trade_date[:4]}/{quote.trade_date[4:6]}/{quote.trade_date[6:]})</span>'
-        elif date_status == "unknown" and not cur_price:
-            price_display = '<span style="color:#78909c">⚪ 日期未確認</span>'
-        elif cur_price:
-            price_display = f"NT$ {cur_price:,.1f}"
-            if quote and quote.update_time:
-                price_display += f'<span style="font-size:0.62rem;color:#aaa"> ({quote.update_time})</span>'
-        else:
-            price_display = '<span style="color:#f57f17">無即時成交</span>'
-            if quote and quote.update_time:
-                price_display += f'<span style="font-size:0.62rem;color:#aaa"> ({quote.update_time})</span>'
-
-        # 距訊號價漲跌（訊號參考價 = 昨日模型發出 BUY 時的收盤價）
-        delta_html = ""
-        if cur_price and sig_price:
-            delta_html = _render_price_delta(cur_price, sig_price, "vs 昨日訊號價")
-
-        # 交易計劃摘要
-        plan_parts = []
-        if entry_low and entry_high:
-            plan_parts.append(f"進場 {entry_low:.1f}–{entry_high:.1f}")
-        if stop_p:
-            plan_parts.append(f"停損 {stop_p:.1f}")
-        if t1:
-            plan_parts.append(f"T1 {t1:.1f}")
-        plan_str = "　".join(plan_parts) if plan_parts else "交易計劃待補"
-
-        # 狀態 badge
-        status_badge = _render_status_badge(ld)
-
-        # 急跌情境區塊
-        drop_html = _drop_scenario_html(ld, sig_price) if sig_price else ""
-
-        # 白話解釋
-        plain_html = _plain_text_html(ld.plain_text)
-
-        # R/R（以現價計算）
-        rr_display = _rr_html(ld)
-
-        # 隔夜市場風險 + 執行建議：Level 1 精簡版 + Level 2 完整版
-        overnight_l1   = _overnight_l1_html(overnight_ctx, rec.get("trade_signal", ""), ld.status)
-        overnight_html = _render_overnight_card(overnight_ctx, rec.get("trade_signal", ""), ld.status)
-
-        # BUY ≠ Good Entry 提醒（急跌情境下 R/R 不佳時）→ Level 2
-        drop_statuses = (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW, LiveStatus.ENTRY_RECONFIRMED)
-        buy_note_html = ""
-        if ld.status in drop_statuses:
-            if ld.status == LiveStatus.ENTRY_RECONFIRMED:
-                buy_note_html = (
-                    '<div style="font-size:0.67rem;color:#558b2f;margin-top:3px">'
-                    '轉強觀察訊號 — 進場條件改善，但非正式 BUY 確認；仍需自行評估量價結構</div>'
-                )
-            elif ld.rr_current is not None and ld.rr_current < 1.5:
-                buy_note_html = (
-                    f'<div style="font-size:0.67rem;color:#e65100;margin-top:3px">'
-                    f'BUY = 模型看好此 Setup ≠ 現價 R/R {ld.rr_current:.1f}x 就是好時機</div>'
-                )
-            else:
-                buy_note_html = (
-                    '<div style="font-size:0.67rem;color:#888;margin-top:3px">'
-                    'BUY = 模型看好此 Setup，非現在即可進場的指令</div>'
-                )
-
-        # 卡片邊框顏色隨狀態改變
-        border_color = ld.color
+        sig_price = rec.get("price")
+        card = _presenter.present(rec, ld, quote, date_status, overnight_ctx)
 
         # ── Level 1：精簡卡片（即時狀態 + 計劃）──────────────────────────
         html = f"""
-<div style="border:1px solid {border_color}33;border-left:4px solid {border_color};
+<div style="border:1px solid {card.border_color}33;border-left:4px solid {card.border_color};
             border-radius:10px;padding:14px 16px;background:#fff;margin-bottom:4px">
 
   <!-- 標題列 -->
@@ -662,8 +345,8 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
       <div style="font-size:0.72rem;color:#888">{sid}</div>
     </div>
     <div style="text-align:right">
-      <div style="font-size:1.1rem;font-weight:900;color:{signal_color}">
-        {signal_label}
+      <div style="font-size:1.1rem;font-weight:900;color:{card.signal_color}">
+        {card.signal_label}
         <span style="font-size:0.65rem;color:#aaa;font-weight:400">模型訊號（昨日）</span>
       </div>
     </div>
@@ -671,40 +354,38 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
 
   <!-- 即時價格 -->
   <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
-    <div style="font-size:1.5rem;font-weight:800">{price_display}</div>
-    {delta_html}
+    <div style="font-size:1.5rem;font-weight:800">{card.price_display}</div>
+    {card.delta_html}
   </div>
 
   <!-- 即時決策狀態 -->
   <div style="margin-bottom:6px">
-    {status_badge}
-    <div style="font-size:0.72rem;color:#666;margin-top:4px">{ld.reason}</div>
+    {card.status_badge_html}
+    <div style="font-size:0.72rem;color:#666;margin-top:4px">{card.reason}</div>
   </div>
 
   <!-- 隔夜市場（精簡：風險燈號 + 建議標籤） -->
-  {overnight_l1}
+  {card.overnight_l1_html}
 
   <!-- 交易計劃摘要 -->
   <div style="font-size:0.68rem;color:#888;background:#f8f9fa;
               border-radius:6px;padding:5px 8px;margin-top:6px">
-    {plan_str}{rr_display}
+    {card.plan_str}{card.rr_display}
   </div>
 </div>"""
 
         # ── Level 2 & 3 expanders ────────────────────────────────────────
-        l2_expanded = ld.status in drop_statuses
-
         with cols[idx % 2]:
             st.html(html)
 
-            with st.expander("🔍 盤中細節", expanded=l2_expanded):
-                if buy_note_html:
-                    st.html(buy_note_html)
-                if plain_html:
-                    st.html(plain_html)
-                if drop_html:
-                    st.html(drop_html)
-                st.html(overnight_html)
+            with st.expander("🔍 盤中細節", expanded=card.l2_expanded):
+                if card.buy_note_html:
+                    st.html(card.buy_note_html)
+                if card.plain_html:
+                    st.html(card.plain_html)
+                if card.drop_html:
+                    st.html(card.drop_html)
+                st.html(card.overnight_full_html)
 
             with st.expander("🧪 原始數值", expanded=False):
                 col_a, col_b = st.columns(2)

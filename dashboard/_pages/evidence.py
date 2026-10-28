@@ -10,6 +10,7 @@ import logging
 import pandas as pd
 import streamlit as st
 
+from src.presentation.evidence_presenter import EvidencePresenter
 from src.engines.outcome_evaluation import (
     EXCL_NO_OVERNIGHT_DATA,
     EXEC_DATA_INSUFFICIENT,
@@ -29,28 +30,16 @@ from src.engines.outcome_evaluation import (
 
 logger = logging.getLogger(__name__)
 
-
-# ── Sample-size labels (pre-registered in PRD §46) ────────────────────────────
-def _n_label(n: int) -> str:
-    if n < 10:
-        return "不足"
-    if n < 30:
-        return "初步觀察"
-    if n < 100:
-        return "有一定參考"
-    return "可評估穩定性"
-
-
-def _fmt_n(n: int) -> str:
-    return f"N={n}（{_n_label(n)}）"
+_EVIDENCE_PRESENTER = EvidencePresenter()
 
 
 def _warn_if_small(n: int, label: str = ""):
-    if n < 10:
+    ss = _EVIDENCE_PRESENTER.sample_strength(n)
+    if ss.is_insufficient:
         st.warning(
             f"{'[' + label + '] ' if label else ''}樣本不足（N={n}），僅供觀察，不具統計意義。"
         )
-    elif n < 30:
+    elif ss.is_initial:
         st.info(
             f"{'[' + label + '] ' if label else ''}初步觀察階段（N={n}），結論需謹慎。"
         )
@@ -205,7 +194,9 @@ def _section_sample_health(df: pd.DataFrame):
         b_counts["overnight_risk_level"] = b_counts["overnight_risk_level"].fillna(
             "(無 Overnight 資料)"
         )
-        b_counts["樣本評估"] = b_counts["筆數"].apply(_n_label)
+        b_counts["樣本評估"] = b_counts["筆數"].apply(
+            lambda n: _EVIDENCE_PRESENTER.sample_strength(n).label
+        )
         st.dataframe(b_counts, use_container_width=True, hide_index=True)
 
         excl = df[df["exclusion_reason"].notna()]
@@ -263,7 +254,7 @@ def _section_overnight_evidence(df: pd.DataFrame):
             {
                 "overnight_risk": level,
                 "N": n,
-                "樣本評估": _n_label(n),
+                "樣本評估": _EVIDENCE_PRESENTER.sample_strength(n).label,
                 "20D Return (avg %)": (
                     round(sub["return_20d"].mean(), 2) if n >= 5 else "—"
                 ),
@@ -286,23 +277,9 @@ def _section_overnight_evidence(df: pd.DataFrame):
     # ── Level 1：摘要標題 ─────────────────────────────────────────────────
     green_g = next((g for g in groups if g["overnight_risk"] == "GREEN"), None)
     red_g   = next((g for g in groups if g["overnight_risk"] == "RED"), None)
-    if (
-        green_g and isinstance(green_g["20D Alpha (avg %)"], float)
-        and red_g and isinstance(red_g["20D Alpha (avg %)"], float)
-    ):
-        diff = green_g["20D Alpha (avg %)"] - red_g["20D Alpha (avg %)"]
-        diff_color = "#00897b" if diff >= 0 else "#e53935"
-        st.html(
-            f'<div style="padding:8px 12px;background:#f8f9fa;border-radius:6px;'
-            f'font-size:0.82rem;color:#555;margin-bottom:8px">'
-            f'GREEN 組平均 Alpha '
-            f'<strong style="color:#00897b">{green_g["20D Alpha (avg %)"]:+.2f}%</strong>'
-            f'（{_fmt_n(green_g["N"])}）　RED 組 '
-            f'<strong style="color:#e53935">{red_g["20D Alpha (avg %)"]:+.2f}%</strong>'
-            f'（{_fmt_n(red_g["N"])}）　差距 '
-            f'<strong style="color:{diff_color}">{diff:+.2f}%</strong>'
-            f'</div>'
-        )
+    headline = _EVIDENCE_PRESENTER.overnight_group_headline_html(green_g, red_g)
+    if headline:
+        st.html(headline)
     else:
         st.caption("各組樣本尚不足 5 筆，暫無 Alpha 摘要。")
 
@@ -363,7 +340,7 @@ def _section_path_comparison(df: pd.DataFrame):
     ]
 
     n = len(paired)
-    st.markdown(f"**配對樣本：{_fmt_n(n)}**")
+    st.markdown(f"**配對樣本：{_EVIDENCE_PRESENTER.sample_strength(n).formatted}**")
 
     if n < 3:
         st.info("配對樣本太少，無法顯示有意義的比較。")

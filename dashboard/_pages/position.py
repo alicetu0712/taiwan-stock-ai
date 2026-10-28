@@ -12,8 +12,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from dashboard.loaders import load_stock_prices
+from src.presentation.position_presenter import PositionPresenter
 
 logger = logging.getLogger(__name__)
+
+_POSITION_PRESENTER = PositionPresenter()
 
 
 def _get_neon_url() -> str:
@@ -173,83 +176,6 @@ def _monte_carlo_chart(pos: dict) -> None:
     col3.metric("期望報酬", f"{mc['expected_pnl_pct']:+.1f}%")
 
 
-def _position_progress_html(
-    entry: float | None,
-    stop: float | None,
-    target: float | None,
-    curr: float | None,
-) -> str:
-    """Horizontal price bar: stop marker — entry marker — current dot — target marker."""
-    if not entry:
-        return ""
-    lo = (stop or entry) * 0.97
-    hi = (target or entry) * 1.03
-    if hi <= lo:
-        return ""
-
-    def _p(v: float) -> float:
-        return max(1.0, min(99.0, (v - lo) / (hi - lo) * 100))
-
-    ep = _p(entry)
-    sp = _p(stop) if stop else None
-    tp = _p(target) if target else None
-    cp = _p(curr) if curr else ep
-
-    if curr is None:
-        fill = "#90a4ae"
-    elif curr >= entry:
-        fill = "#43a047"
-    elif stop and curr > stop:
-        fill = "#f57f17"
-    else:
-        fill = "#e53935"
-
-    fill_left  = min(ep, cp)
-    fill_width = abs(cp - ep)
-
-    stop_marker = (
-        f'<div style="position:absolute;left:{sp:.1f}%;top:-3px;'
-        f'width:2px;height:12px;background:#e53935;border-radius:1px"></div>'
-        if sp is not None else ""
-    )
-    target_marker = (
-        f'<div style="position:absolute;left:{tp:.1f}%;top:-3px;'
-        f'width:2px;height:12px;background:#43a047;border-radius:1px"></div>'
-        if tp is not None else ""
-    )
-    entry_marker = (
-        f'<div style="position:absolute;left:{ep:.1f}%;top:-3px;'
-        f'width:2px;height:12px;background:#1565c0;border-radius:1px"></div>'
-    )
-    curr_dot = (
-        f'<div style="position:absolute;left:{cp:.1f}%;top:-5px;width:16px;height:16px;'
-        f'background:{fill};border:2px solid white;border-radius:50%;'
-        f'transform:translateX(-50%);box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div>'
-    )
-
-    stop_lbl   = f"停損 {stop:.1f}" if stop else ""
-    entry_lbl  = f"進場 {entry:.1f}"
-    curr_lbl   = f"現價 {curr:.1f}" if curr else "尚無報價"
-    target_lbl = f"目標 {target:.1f}" if target else ""
-
-    return (
-        f'<div style="margin:8px 2px 4px 2px">'
-        f'<div style="position:relative;height:6px;background:#e8e8e8;border-radius:3px">'
-        f'<div style="position:absolute;left:{fill_left:.1f}%;width:{fill_width:.1f}%;'
-        f'height:100%;background:{fill}77;border-radius:3px"></div>'
-        f'{stop_marker}{entry_marker}{target_marker}{curr_dot}'
-        f'</div>'
-        f'<div style="display:flex;justify-content:space-between;'
-        f'font-size:0.63rem;margin-top:9px">'
-        f'<span style="color:#e53935">{stop_lbl}</span>'
-        f'<span style="color:#1565c0">{entry_lbl}</span>'
-        f'<span style="color:{fill};font-weight:700">{curr_lbl}</span>'
-        f'<span style="color:#43a047">{target_lbl}</span>'
-        f'</div>'
-        f'</div>'
-    )
-
-
 def page_positions() -> None:
     st.markdown(
         '<div class="section-title">📈 模型持倉追蹤（模擬）</div>',
@@ -365,45 +291,21 @@ def page_positions() -> None:
             prices_now = load_stock_prices()
 
             for pos in positions:
-                sid = pos["stock_id"]
-                name = pos["name"]
-                curr = prices_now.get(sid)
-                pnl = (
-                    ((curr - pos["entry_price"]) / pos["entry_price"] * 100)
-                    if curr
-                    else None
-                )
+                sid   = pos["stock_id"]
+                name  = pos["name"]
+                curr  = prices_now.get(sid)
                 level = pos["rec_level"] or "B"
+                card  = _POSITION_PRESENTER.present(pos, curr)
                 with st.expander(
-                    f"{'🟢' if (pnl or 0) >= 0 else '🔴'} {name}（{sid}）  "
-                    f"{f'{pnl:+.1f}%' if pnl is not None else '—'}  ｜  {level}級  ｜  建倉 {pos['date_entered']}",
+                    f"{card.pnl_icon} {name}（{sid}）  "
+                    f"{card.pnl_str}  ｜  {level}級  ｜  建倉 {pos['date_entered']}",
                     expanded=False,
                     key=f"pos_{pos['id']}",
                 ):
                     # ── Level 1：即時狀態 ─────────────────────────────────
-                    pnl_color   = "#00897b" if (pnl or 0) >= 0 else "#e53935"
-                    pnl_str     = f"{pnl:+.1f}%" if pnl is not None else "—"
-                    price_label = f"NT$ {curr:.2f}" if curr else "尚無即時報價"
-                    st.html(
-                        f'<div style="margin:2px 0 10px 0">'
-                        f'<span style="font-size:1.5rem;font-weight:800;color:#222">'
-                        f'{price_label}</span>'
-                        f'<span style="font-size:0.95rem;font-weight:700;'
-                        f'color:{pnl_color};margin-left:10px">{pnl_str}</span>'
-                        f'</div>'
-                    )
-
-                    st.html(_position_progress_html(
-                        pos.get("entry_price"),
-                        pos.get("stop_loss_price"),
-                        pos.get("target_price"),
-                        curr,
-                    ))
-
-                    summary_parts = [level + "級", f"建倉 {pos['date_entered']}"]
-                    if pos["position_pct"]:
-                        summary_parts.insert(0, f"倉位 {pos['position_pct']:.0f}%")
-                    st.caption("　·　".join(summary_parts))
+                    st.html(card.price_html)
+                    st.html(card.progress_html)
+                    st.caption(card.summary_caption)
 
                     if pos["rationale"]:
                         st.caption(f"📌 {pos['rationale']}")
@@ -421,11 +323,11 @@ def page_positions() -> None:
                                     p.exit_date = date.today()
                                     p.exit_price = curr
                                     p.exit_reason = "MANUAL"
-                                    p.pnl_pct = round(pnl, 2)
+                                    p.pnl_pct = round(card.pnl, 2) if card.pnl is not None else None
                                     s2.commit()
                                 s2.close()
                                 st.cache_data.clear()
-                                st.success(f"已關倉 {name}（{pnl:+.1f}%）")
+                                st.success(f"已關倉 {name}（{card.pnl_str}）")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"關倉失敗：{e}")
