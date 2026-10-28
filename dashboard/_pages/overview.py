@@ -28,42 +28,60 @@ from dashboard.loaders import (
 logger = logging.getLogger(__name__)
 
 
-def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure: dict = None) -> None:
-    from src.engines.decision import decision_label, tomorrow_triggers, trade_thesis, position_sizing as _ps
+def render_rec_card(
+    r: dict, current_regime: str = "neutral", portfolio_exposure: dict = None
+) -> None:
+    from src.engines.decision import decision_label
+    from src.engines.decision import position_sizing as _ps
+    from src.engines.decision import tomorrow_triggers, trade_thesis
 
     # ── Raw data ────────────────────────────────────────────────
-    dl         = decision_label(r)
-    triggers   = tomorrow_triggers(r)
-    thesis     = trade_thesis(r)
-    price      = r.get("price")
-    entry_low  = r.get("entry_low")
+    dl = decision_label(r)
+    triggers = tomorrow_triggers(r)
+    thesis = trade_thesis(r)
+    price = r.get("price")
+    entry_low = r.get("entry_low")
     entry_high = r.get("entry_high")
-    stop_p     = r.get("stop_price") or r.get("stop_loss_price")
-    t1         = r.get("target1")
-    t2         = r.get("target2") or r.get("target_price")
-    atr        = r.get("atr")
-    scores     = r.get("scores", {})
-    conf       = r.get("confidence", 0)
-    level      = r.get("level", "B")
-    name       = r.get("name", "")
-    sid        = r.get("sid", "")
-    setup      = r.get("setup_type") or "none"
-    signal     = r.get("trade_signal") or "wait"
-    ma20_gap   = r.get("ma20_gap") or 0.0
-    pt_val     = r.get("price_trend_score") or 0
-    vol_r      = r.get("vol_ratio") or 0.0
+    stop_p = r.get("stop_price") or r.get("stop_loss_price")
+    t1 = r.get("target1")
+    t2 = r.get("target2") or r.get("target_price")
+    atr = r.get("atr")
+    scores = r.get("scores", {})
+    conf = r.get("confidence", 0)
+    level = r.get("level", "B")
+    name = r.get("name", "")
+    sid = r.get("sid", "")
+    setup = r.get("setup_type") or "none"
+    signal = r.get("trade_signal") or "wait"
+    ma20_gap = r.get("ma20_gap") or 0.0
+    pt_val = r.get("price_trend_score") or 0
+    vol_r = r.get("vol_ratio") or 0.0
     advantages = r.get("advantages", [])
-    risks_raw  = r.get("risks", [])
+    risks_raw = r.get("risks", [])
     consecutive = r.get("consecutive_days", 1)
-    is_buy     = signal in ("strong_buy", "buy")
+    is_buy = signal in ("strong_buy", "buy")
 
     # ── Classify items: financial vs technical ──────────────────
-    _FIN_KW = ("EPS", "毛利率", "營益率", "獲利", "財務", "ROE", "負債", "股利", "現金流", "本益比")
-    def _is_fin(s): return any(kw in s for kw in _FIN_KW)
-    tech_adv  = [a for a in advantages if not _is_fin(a)]
-    fin_adv   = [a for a in advantages if _is_fin(a)]
+    _FIN_KW = (
+        "EPS",
+        "毛利率",
+        "營益率",
+        "獲利",
+        "財務",
+        "ROE",
+        "負債",
+        "股利",
+        "現金流",
+        "本益比",
+    )
+
+    def _is_fin(s):
+        return any(kw in s for kw in _FIN_KW)
+
+    tech_adv = [a for a in advantages if not _is_fin(a)]
+    fin_adv = [a for a in advantages if _is_fin(a)]
     tech_risk = [x for x in risks_raw if not _is_fin(x)]
-    fin_risk  = [x for x in risks_raw if _is_fin(x)]
+    fin_risk = [x for x in risks_raw if _is_fin(x)]
 
     # ── Setup-specific narratives ───────────────────────────────
     def _professional_judgment():
@@ -71,7 +89,11 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         if setup == "near_breakout":
             return f"股價接近前 20 日高點，量比 {vol_r:.1f}x，但尚未完成有效突破。"
         if setup == "pullback_buy":
-            return "回踩至支撐區，量縮整理後出現轉強訊號，進場條件已成立。" if is_buy else f"多頭趨勢仍在，股價回踩至 MA10 附近（量比 {vol_r:.1f}x），等待止穩確認。"
+            return (
+                "回踩至支撐區，量縮整理後出現轉強訊號，進場條件已成立。"
+                if is_buy
+                else f"多頭趨勢仍在，股價回踩至 MA10 附近（量比 {vol_r:.1f}x），等待止穩確認。"
+            )
         if setup == "breakout":
             return f"股價突破前 20 日高點，量比 {vol_r:.1f}x，突破型態確立。"
         if setup == "trending":
@@ -139,38 +161,98 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         t2_str = f"${t2:.1f}" if t2 else "目標二"
         if setup == "near_breakout":
             scenarios = [
-                ("🟢", "突破成功",   f"站上前 20 日高點且量能維持 → 往 {t1_str} / {t2_str} 發展，可依計畫進場。"),
-                ("🟡", "碰壓力回檔", f"衝高但無法收在壓力上方 → 拉回測試支撐，守住再等下次突破機會。"),
-                ("🔴", "型態失敗",   f"突破失敗後轉弱，跌破 {s_str} → Near Breakout 假設失效，不再等待。"),
+                (
+                    "🟢",
+                    "突破成功",
+                    f"站上前 20 日高點且量能維持 → 往 {t1_str} / {t2_str} 發展，可依計畫進場。",
+                ),
+                (
+                    "🟡",
+                    "碰壓力回檔",
+                    "衝高但無法收在壓力上方 → 拉回測試支撐，守住再等下次突破機會。",
+                ),
+                (
+                    "🔴",
+                    "型態失敗",
+                    f"突破失敗後轉弱，跌破 {s_str} → Near Breakout 假設失效，不再等待。",
+                ),
             ]
         elif setup == "pullback_buy":
             if is_buy:
                 scenarios = [
-                    ("🟢", "支撐守穩續升", f"守住 MA10，動能回升 → 往 {t1_str} / {t2_str} 推進。"),
-                    ("🟡", "震盪整理再上", "支撐反覆測試，短線震盪 → 整理完成後繼續觀察。"),
-                    ("🔴", "跌破支撐",     f"MA10 / MA20 均告失守，跌破 {s_str} → 訊號失效。"),
+                    (
+                        "🟢",
+                        "支撐守穩續升",
+                        f"守住 MA10，動能回升 → 往 {t1_str} / {t2_str} 推進。",
+                    ),
+                    (
+                        "🟡",
+                        "震盪整理再上",
+                        "支撐反覆測試，短線震盪 → 整理完成後繼續觀察。",
+                    ),
+                    (
+                        "🔴",
+                        "跌破支撐",
+                        f"MA10 / MA20 均告失守，跌破 {s_str} → 訊號失效。",
+                    ),
                 ]
             else:
                 scenarios = [
-                    ("🟢", "止穩轉多",   f"量縮守住 MA10 後反彈 → 進入 BUY 情境，往 {t1_str} 發展。"),
-                    ("🟡", "繼續盤整",   "在支撐附近反覆測試 → 繼續 WAIT，觀察後續動能。"),
-                    ("🔴", "跌破支撐",   f"無法守住 MA10 / MA20，跌破 {s_str} → 回踩假設失效。"),
+                    (
+                        "🟢",
+                        "止穩轉多",
+                        f"量縮守住 MA10 後反彈 → 進入 BUY 情境，往 {t1_str} 發展。",
+                    ),
+                    (
+                        "🟡",
+                        "繼續盤整",
+                        "在支撐附近反覆測試 → 繼續 WAIT，觀察後續動能。",
+                    ),
+                    (
+                        "🔴",
+                        "跌破支撐",
+                        f"無法守住 MA10 / MA20，跌破 {s_str} → 回踩假設失效。",
+                    ),
                 ]
         elif setup == "breakout":
             scenarios = [
-                ("🟢", "突破延伸",   f"站穩突破位置，量能持續 → 往 {t1_str} / {t2_str} 發展。"),
-                ("🟡", "突破後回測", "漲過快後拉回測試突破點 → 若守住可加碼；若跌破縮手觀望。"),
-                ("🔴", "假突破",     f"回跌至突破點以下，量縮 → 跌破 {s_str}，突破假設失效，出場。"),
+                (
+                    "🟢",
+                    "突破延伸",
+                    f"站穩突破位置，量能持續 → 往 {t1_str} / {t2_str} 發展。",
+                ),
+                (
+                    "🟡",
+                    "突破後回測",
+                    "漲過快後拉回測試突破點 → 若守住可加碼；若跌破縮手觀望。",
+                ),
+                (
+                    "🔴",
+                    "假突破",
+                    f"回跌至突破點以下，量縮 → 跌破 {s_str}，突破假設失效，出場。",
+                ),
             ]
         elif setup == "trending":
             scenarios = [
-                ("🟢", "趨勢延伸",   f"均線繼續多頭，動能持續 → 往 {t1_str} / {t2_str} 推進。"),
-                ("🟡", "短線回測均線", "漲多後小回測試 MA20 → 守住則趨勢完整，繼續持有。"),
-                ("🔴", "趨勢反轉",   f"均線死叉或跌破 {s_str} → 趨勢假設失效，出場。"),
+                (
+                    "🟢",
+                    "趨勢延伸",
+                    f"均線繼續多頭，動能持續 → 往 {t1_str} / {t2_str} 推進。",
+                ),
+                (
+                    "🟡",
+                    "短線回測均線",
+                    "漲多後小回測試 MA20 → 守住則趨勢完整，繼續持有。",
+                ),
+                ("🔴", "趨勢反轉", f"均線死叉或跌破 {s_str} → 趨勢假設失效，出場。"),
             ]
         elif setup == "breakdown":
             scenarios = [
-                ("🟢", "強力反彈", "底部有強力量能支撐，有機會快速反彈，但概率低，需謹慎。"),
+                (
+                    "🟢",
+                    "強力反彈",
+                    "底部有強力量能支撐，有機會快速反彈，但概率低，需謹慎。",
+                ),
                 ("🟡", "低位盤整", "在低位橫盤，等待訊號明朗化再判斷。"),
                 ("🔴", "持續下跌", f"跌破 {s_str} 繼續探底 → 不宜逢低接。"),
             ]
@@ -182,7 +264,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             f'<span style="font-size:0.95rem;flex-shrink:0;line-height:1.4">{icon}</span>'
             f'<div><div style="font-weight:700;font-size:0.74rem;color:#333">{lbl}</div>'
             f'<div style="font-size:0.72rem;color:#555;margin-top:1px;line-height:1.5">{desc}</div></div>'
-            f'</div>'
+            f"</div>"
             for icon, lbl, desc in scenarios
         )
         return f"""
@@ -194,29 +276,34 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     def _historical_analog_html(ev: dict):
         """歷史類似情境統計，接在情境路徑下方。"""
         re_ev = ev.get("research", {})
-        r_n   = re_ev.get("n", 0)
+        r_n = re_ev.get("n", 0)
         if r_n < 5:
             return ""
-        r20          = re_ev.get("alpha_20d", {})
-        r60          = re_ev.get("alpha_60d", {})
-        tier_emoji   = re_ev.get("tier_emoji", "🔴")
-        median_20    = r20.get("median")
-        wr_20        = r20.get("winrate")
-        p25_20       = r20.get("p25")
-        p75_20       = r20.get("p75")
-        median_60    = r60.get("median")
-        wr_60        = r60.get("winrate")
+        r20 = re_ev.get("alpha_20d", {})
+        r60 = re_ev.get("alpha_60d", {})
+        tier_emoji = re_ev.get("tier_emoji", "🔴")
+        median_20 = r20.get("median")
+        wr_20 = r20.get("winrate")
+        p25_20 = r20.get("p25")
+        p75_20 = r20.get("p75")
+        median_60 = r60.get("median")
+        wr_60 = r60.get("winrate")
         if median_20 is None:
             return (
                 f'<div style="font-size:0.7rem;color:#888;padding:4px 0">'
-                f'📊 歷史相似情境 {r_n} 次 {tier_emoji}，統計數據尚在累積。</div>'
+                f"📊 歷史相似情境 {r_n} 次 {tier_emoji}，統計數據尚在累積。</div>"
             )
         sign20 = "+" if median_20 >= 0 else ""
         range_str = (
             f"{p25_20:+.1f}% ～ {p75_20:+.1f}%"
-            if (p25_20 is not None and p75_20 is not None) else "—"
+            if (p25_20 is not None and p75_20 is not None)
+            else "—"
         )
-        m60_str = f"60D 中位數 {median_60:+.1f}%　60D 勝率 {wr_60:.0f}%" if median_60 is not None else ""
+        m60_str = (
+            f"60D 中位數 {median_60:+.1f}%　60D 勝率 {wr_60:.0f}%"
+            if median_60 is not None
+            else ""
+        )
         return f"""
 <div style="background:#f8f9fa;border:1px dashed #cfd8dc;border-radius:8px;padding:9px 12px;margin:4px 0 10px">
   <div style="font-size:0.62rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:5px">
@@ -230,37 +317,6 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
   </div>
   <div style="font-size:0.62rem;color:#aaa;margin-top:4px">
     以上為相同 Setup × 市場情境的歷史分布，非 AI 預測。實際路徑受多種因素影響。
-  </div>
-</div>"""
-
-    def _mc_dist_html(mc: dict):
-        """🎲 價格波動模擬：本股歷史波動特性，與 Setup 情境無關。"""
-        p50 = mc.get("p50")
-        if p50 is None:
-            return ""
-        p10     = mc.get("p10")
-        p25     = mc.get("p25")
-        p75     = mc.get("p75")
-        p90     = mc.get("p90")
-        sigma   = mc.get("sigma_daily")
-        n_hist  = mc.get("n_hist", 0)
-        sig_str = f"　日波動（σ）{sigma:.1f}%" if sigma else ""
-        def _p(v): return f"${v:.1f}" if v is not None else "—"
-        return f"""
-<div style="background:#f3f4f8;border:1px solid #dce0ec;border-radius:8px;padding:9px 12px;margin:4px 0 10px">
-  <div style="font-size:0.62rem;font-weight:700;color:#5c6bc0;letter-spacing:.05em;margin-bottom:5px">
-    🎲 價格波動模擬（本股歷史波動特性）
-  </div>
-  <div style="font-size:0.73rem;color:#333;line-height:1.9">
-    20D 分布&nbsp;&nbsp;
-    <span style="color:#888;margin-right:3px">10%</span><b>{_p(p10)}</b>&nbsp;&nbsp;
-    <span style="color:#888;margin-right:3px">25%</span><b>{_p(p25)}</b>&nbsp;&nbsp;
-    <span style="color:#888;margin-right:3px">中位</span><b>{_p(p50)}</b>&nbsp;&nbsp;
-    <span style="color:#888;margin-right:3px">75%</span><b>{_p(p75)}</b>&nbsp;&nbsp;
-    <span style="color:#888;margin-right:3px">90%</span><b>{_p(p90)}</b>
-  </div>
-  <div style="font-size:0.62rem;color:#9e9e9e;margin-top:4px">
-    依近 {n_hist} 個交易日日報酬（Student-t，零漂移）推算{sig_str}。不反映 Setup 情境、不預測方向。
   </div>
 </div>"""
 
@@ -288,24 +344,35 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         return ""
 
     def _tech_label():
-        if pt_val >= 70: return "偏強", "#2e7d32", "#e8f5e9"
-        if pt_val >= 50: return "普通", "#f57f17", "#fff8e1"
+        if pt_val >= 70:
+            return "偏強", "#2e7d32", "#e8f5e9"
+        if pt_val >= 50:
+            return "普通", "#f57f17", "#fff8e1"
         return "偏弱", "#c62828", "#ffebee"
 
     def _fin_label():
         n_pos, n_neg = len(fin_adv), len(fin_risk)
-        if n_pos == 0 and n_neg == 0: return "—", "#888", "#f5f5f5"
-        if n_pos > n_neg: return "改善", "#2e7d32", "#e8f5e9"
-        if n_neg > n_pos: return "惡化", "#c62828", "#ffebee"
+        if n_pos == 0 and n_neg == 0:
+            return "—", "#888", "#f5f5f5"
+        if n_pos > n_neg:
+            return "改善", "#2e7d32", "#e8f5e9"
+        if n_neg > n_pos:
+            return "惡化", "#c62828", "#ffebee"
         return "穩定", "#1565c0", "#e3f2fd"
 
     def _plain_tech():
         if setup == "near_breakout":
             return "趨勢與量能都偏強，目前唯一缺少的是價格正式突破前波壓力。"
         if setup == "pullback_buy":
-            return "回踩至支撐已確認止穩，趨勢與量能均符合進場條件。" if is_buy else "趨勢仍在，目前處於回踩整理階段，觀察能否在支撐位止穩轉強。"
+            return (
+                "回踩至支撐已確認止穩，趨勢與量能均符合進場條件。"
+                if is_buy
+                else "趨勢仍在，目前處於回踩整理階段，觀察能否在支撐位止穩轉強。"
+            )
         if setup == "breakout":
-            vol_desc = f"成交量放大（量比 {vol_r:.1f}x）" if vol_r >= 1.5 else "成交量尚可"
+            vol_desc = (
+                f"成交量放大（量比 {vol_r:.1f}x）" if vol_r >= 1.5 else "成交量尚可"
+            )
             return f"股價突破前高，{vol_desc}，型態已正式確立。"
         if setup == "trending":
             return "多頭趨勢延伸，均線排列健康，動能持續。"
@@ -341,29 +408,49 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             vol_ok = vol_r >= 1.5
             return [
                 ("🟢", "趨勢", "符合"),
-                ("🟢" if vol_ok else "🟡", "量能", f"符合｜{vol_r:.1f}x" if vol_ok else f"待觀察｜{vol_r:.1f}x"),
+                (
+                    "🟢" if vol_ok else "🟡",
+                    "量能",
+                    f"符合｜{vol_r:.1f}x" if vol_ok else f"待觀察｜{vol_r:.1f}x",
+                ),
                 ("🟡", "突破", "尚未確認"),
             ]
         if setup == "pullback_buy":
             vol_ok = vol_r <= 1.2
             return [
                 ("🟢", "趨勢", "符合"),
-                ("🟢" if is_buy else "🟡", "支撐", "已確認止穩" if is_buy else "近MA10，待確認"),
-                ("🟢" if vol_ok else "🟡", "量縮", f"符合｜{vol_r:.1f}x" if vol_ok else f"{vol_r:.1f}x，待收斂"),
+                (
+                    "🟢" if is_buy else "🟡",
+                    "支撐",
+                    "已確認止穩" if is_buy else "近MA10，待確認",
+                ),
+                (
+                    "🟢" if vol_ok else "🟡",
+                    "量縮",
+                    f"符合｜{vol_r:.1f}x" if vol_ok else f"{vol_r:.1f}x，待收斂",
+                ),
             ]
         if setup == "breakout":
             vol_ok = vol_r >= 1.5
             return [
                 ("🟢", "趨勢", "符合"),
                 ("🟢", "突破", "已確認"),
-                ("🟢" if vol_ok else "🟡", "量能", f"符合｜{vol_r:.1f}x" if vol_ok else f"量比 {vol_r:.1f}x，偏弱"),
+                (
+                    "🟢" if vol_ok else "🟡",
+                    "量能",
+                    f"符合｜{vol_r:.1f}x" if vol_ok else f"量比 {vol_r:.1f}x，偏弱",
+                ),
             ]
         if setup == "trending":
             has_pressure = any("壓力" in x for x in tech_risk)
             return [
                 ("🟢", "趨勢", "符合"),
                 ("🟢", "動能", "持續延伸"),
-                ("🟡" if has_pressure else "🟢", "壓力", "注意前波壓力" if has_pressure else "無明顯壓力"),
+                (
+                    "🟡" if has_pressure else "🟢",
+                    "壓力",
+                    "注意前波壓力" if has_pressure else "無明顯壓力",
+                ),
             ]
         return []
 
@@ -375,34 +462,40 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         except Exception:
             _ev = {}
 
-    # ── Monte Carlo: stock's own historical volatility (NOT setup-conditioned) ──
-    # Disabled: scipy.stats on ARM64 Python 3.13 causes pandas Timedelta SIGSEGV
-    _mc: dict = {}
-
     # ── Build HTML blocks ────────────────────────────────────────
     price_str = f"NT$ {price:,.1f}" if price else "—"
-    sig_bg    = "#e8f5e9" if signal == "strong_buy" else "#e3f2fd" if signal == "buy" else "#eceff1"
-    sig_col   = "#1a7f4b" if signal == "strong_buy" else "#1565c0" if signal == "buy" else "#546e7a"
+    sig_bg = (
+        "#e8f5e9"
+        if signal == "strong_buy"
+        else "#e3f2fd" if signal == "buy" else "#eceff1"
+    )
+    sig_col = (
+        "#1a7f4b"
+        if signal == "strong_buy"
+        else "#1565c0" if signal == "buy" else "#546e7a"
+    )
     label_text = dl["label"]
 
     consec_html = (
-        f'<span style="font-size:0.63rem;color:#546e7a;background:#eceff1;'
-        f'padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">'
-        f'🔄 連續第 {consecutive} 日入選</span>'
-    ) if consecutive >= 2 else ""
+        (
+            f'<span style="font-size:0.63rem;color:#546e7a;background:#eceff1;'
+            f'padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">'
+            f"🔄 連續第 {consecutive} 日入選</span>"
+        )
+        if consecutive >= 2
+        else ""
+    )
 
     t_lbl, t_col, t_bg = _tech_label()
     f_lbl, f_col, f_bg = _fin_label()
     tech_metrics = f"PT {pt_val:.0f}　｜　MA20 {ma20_gap:+.1f}%　｜　量比 {vol_r:.1f}x"
 
-    tech_rows = (
-        "".join(f'<div style="color:#2e7d32">✓ {a}</div>' for a in tech_adv[:3]) +
-        "".join(f'<div style="color:#c62828">⚠ {x}</div>' for x in tech_risk[:2])
-    )
-    fin_rows = (
-        "".join(f'<div style="color:#2e7d32">✓ {a}</div>' for a in fin_adv[:3]) +
-        "".join(f'<div style="color:#c62828">⚠ {x}</div>' for x in fin_risk[:2])
-    )
+    tech_rows = "".join(
+        f'<div style="color:#2e7d32">✓ {a}</div>' for a in tech_adv[:3]
+    ) + "".join(f'<div style="color:#c62828">⚠ {x}</div>' for x in tech_risk[:2])
+    fin_rows = "".join(
+        f'<div style="color:#2e7d32">✓ {a}</div>' for a in fin_adv[:3]
+    ) + "".join(f'<div style="color:#c62828">⚠ {x}</div>' for x in fin_risk[:2])
 
     pt_html = f'<div style="font-size:0.7rem;color:#666;margin-top:4px;font-style:italic">{_plain_tech()}</div>'
     pf_html = f'<div style="font-size:0.7rem;color:#666;margin-top:4px;font-style:italic">{_plain_fundamental()}</div>'
@@ -416,14 +509,18 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
             f'<span style="width:20px">{icon}</span>'
             f'<span style="width:50px;font-weight:600;font-size:0.76rem;color:#333">{lbl}</span>'
             f'<span style="font-size:0.76rem;color:#555">{val}</span>'
-            f'</div>'
+            f"</div>"
             for icon, lbl, val in checklist
         )
         conclusion = _checklist_conclusion()
         conclusion_html = (
-            f'<div style="margin-top:8px;font-size:0.75rem;color:#37474f;line-height:1.65;'
-            f'border-top:1px solid #e0e0e0;padding-top:7px">{conclusion}</div>'
-        ) if conclusion else ""
+            (
+                f'<div style="margin-top:8px;font-size:0.75rem;color:#37474f;line-height:1.65;'
+                f'border-top:1px solid #e0e0e0;padding-top:7px">{conclusion}</div>'
+            )
+            if conclusion
+            else ""
+        )
         check_html = f"""
 <div style="background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:10px 0">
   <div style="font-size:0.62rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:6px">現在還差什麼</div>
@@ -434,7 +531,10 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     # Triggers (WAIT only — skip BUY)
     trig_html = ""
     if not is_buy and triggers:
-        trig_rows = "".join(f'<div style="padding:2px 0;font-size:0.76rem;color:#37474f">{t}</div>' for t in triggers)
+        trig_rows = "".join(
+            f'<div style="padding:2px 0;font-size:0.76rem;color:#37474f">{t}</div>'
+            for t in triggers
+        )
         trig_html = f"""
 <div style="background:#fafafa;border-left:3px solid #90a4ae;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0">
   <div style="font-size:0.62rem;font-weight:700;color:#546e7a;letter-spacing:.05em;margin-bottom:5px">轉為 BUY 的條件</div>
@@ -448,12 +548,16 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     if price and stop_p and t1:
         risk_pts = price - stop_p
         if risk_pts > 0:
-            rr       = round((t1 - price) / risk_pts, 1)
-            rr_col   = "#00897b" if rr >= 2.0 else "#ffb300" if rr >= 1.5 else "#e53935"
-            e_str    = f"{entry_low:.1f}–{entry_high:.1f}" if (entry_low and entry_high) else f"~{price:.1f}"
-            t2_str   = f" / {t2:.1f}" if t2 else ""
+            rr = round((t1 - price) / risk_pts, 1)
+            rr_col = "#00897b" if rr >= 2.0 else "#ffb300" if rr >= 1.5 else "#e53935"
+            e_str = (
+                f"{entry_low:.1f}–{entry_high:.1f}"
+                if (entry_low and entry_high)
+                else f"~{price:.1f}"
+            )
+            t2_str = f" / {t2:.1f}" if t2 else ""
             stop_pct = round((stop_p - price) / price * 100, 1)
-            t1_pct   = round((t1 - price) / price * 100, 1)
+            t1_pct = round((t1 - price) / price * 100, 1)
             plan_html = f"""
 <div style="opacity:{plan_opacity};background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:10px 0">
   <div style="font-size:0.62rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:6px">{plan_label}</div>
@@ -490,12 +594,17 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     ps_html = ""
     if is_buy and price and stop_p and t1 and price > stop_p:
         from config import POSITION_SIZING as _PS_CFG
-        capital      = st.session_state.get("ps_capital",      _PS_CFG["capital_ntd"])
+
+        capital = st.session_state.get("ps_capital", _PS_CFG["capital_ntd"])
         max_risk_pct = st.session_state.get("ps_max_risk_pct", _PS_CFG["max_risk_pct"])
-        ps = _ps(entry=price, stop=stop_p, capital=capital,
-                 max_risk_pct=max_risk_pct,
-                 max_single_pct=_PS_CFG["max_single_pct"],
-                 lot_size=_PS_CFG["lot_size"])
+        ps = _ps(
+            entry=price,
+            stop=stop_p,
+            capital=capital,
+            max_risk_pct=max_risk_pct,
+            max_single_pct=_PS_CFG["max_single_pct"],
+            lot_size=_PS_CFG["lot_size"],
+        )
         if ps and ps.get("lots", 0) == 0 and ps.get("min_lot_ntd"):
             ps_html = (
                 f'<div style="background:#fff3e0;border-left:3px solid #ff8f00;padding:5px 10px;'
@@ -503,7 +612,11 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
                 f'⚠ 1張需 NT${ps["min_lot_ntd"]:,}，超出曝險上限，無法試算部位。</div>'
             )
         elif ps and ps.get("lots", 0) > 0:
-            cap_note = '<span style="color:#e65100">（已達曝險上限）</span>' if ps["capped"] else ""
+            cap_note = (
+                '<span style="color:#e65100">（已達曝險上限）</span>'
+                if ps["capped"]
+                else ""
+            )
             ps_html = f"""
 <div style="background:#f3e5f5;border-radius:8px;padding:8px 12px;margin:4px 0">
   <div style="font-size:0.62rem;color:#6a1b9a;font-weight:700;margin-bottom:5px">部位試算　風控 {max_risk_pct}% ／ 資金 NT${capital:,.0f}</div>
@@ -528,10 +641,11 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     if portfolio_exposure and is_buy:
         try:
             from src.services.portfolio_risk_service import portfolio_context_for_stock
+
             ctx = portfolio_context_for_stock(r.get("industry"), portfolio_exposure)
             if ctx.get("message"):
-                w_bg  = "#fff3cd" if ctx["should_warn"] else "#e8f5e9"
-                w_bd  = "#ff8f00" if ctx["should_warn"] else "#43a047"
+                w_bg = "#fff3cd" if ctx["should_warn"] else "#e8f5e9"
+                w_bd = "#ff8f00" if ctx["should_warn"] else "#43a047"
                 w_col = "#bf360c" if ctx["should_warn"] else "#2e7d32"
                 portfolio_html = f"""
 <div style="background:{w_bg};border-left:3px solid {w_bd};padding:5px 10px;margin:4px 0;border-radius:0 6px 6px 0">
@@ -561,10 +675,15 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     dq = r.get("data_quality")
     if dq:
         try:
-            from src.validators.stock_data_quality import DQFlag, _FLAG_ICON
-            _icon = lambda v: _FLAG_ICON.get(DQFlag(v), "?") if v else "❌"
+            from src.validators.stock_data_quality import _FLAG_ICON, DQFlag
+
+            def _icon(v):
+                return _FLAG_ICON.get(DQFlag(v), "?") if v else "❌"
+
             _dq_lvl = dq.get("confidence", "medium")
-            completeness = "100%" if _dq_lvl == "high" else "85%" if _dq_lvl == "medium" else "70%"
+            completeness = (
+                "100%" if _dq_lvl == "high" else "85%" if _dq_lvl == "medium" else "70%"
+            )
             dq_str = (
                 f"資料完整度 {completeness}　"
                 f"股價{_icon(dq.get('price'))}　MA60{_icon(dq.get('ma60'))}　"
@@ -603,10 +722,8 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
     </div>
   </div>
 
-  <!-- 3. 情境路徑 + 歷史類比 + 波動模擬 -->
+  <!-- 3. 情境路徑 -->
   {_scenario_paths()}
-  {_historical_analog_html(_ev)}
-  {_mc_dist_html(_mc)}
 
   <!-- 4a. 技術面 -->
   <div style="margin-bottom:10px">
@@ -646,7 +763,7 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
 
   <!-- 9. 模型資訊（dimmed） -->
   <div style="font-size:0.62rem;color:#ccc;margin-top:10px;border-top:1px solid #f5f5f5;padding-top:6px;line-height:1.6">
-    模型資訊　PT {pt_val:.0f}｜綜合 {_total_score:.0f}｜信心 {conf}%｜{level} 級｜{setup}
+    模型資訊　PT {pt_val:.0f}｜綜合 {_total_score:.0f}｜分析品質 {conf:.0f} / 100｜{level} 級｜{setup}
     <br>{dq_str}
   </div>
 
@@ -676,15 +793,20 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         _nominal_weights = {"quality": 20, "behavior": 15}
         _missing_pct = sum(_nominal_weights.get(f, 0) for f in _missing_list)
         _completeness = 100 - _missing_pct
-        _warn_items = "　".join(f'⚠️ {_factor_label.get(f, f)} 資料缺失' for f in _missing_list)
-        _rw_note    = "　".join(f'{_factor_label.get(f, f)} {_nominal_weights.get(f, 0)}% → 重分配至技術面' for f in _missing_list)
+        _warn_items = "　".join(
+            f"⚠️ {_factor_label.get(f, f)} 資料缺失" for f in _missing_list
+        )
+        _rw_note = "　".join(
+            f"{_factor_label.get(f, f)} {_nominal_weights.get(f, 0)}% → 重分配至技術面"
+            for f in _missing_list
+        )
         st.html(
             f'<div style="background:#fff8e1;border:1px solid #ffe082;border-radius:7px;'
             f'padding:8px 12px;margin-bottom:8px">'
             f'<span style="font-size:0.68rem;color:#f57f17;font-weight:700">資料完整度 {_completeness}%</span>'
             f'<span style="font-size:0.68rem;color:#e65100;margin-left:10px">{_warn_items}</span>'
             f'<div style="font-size:0.63rem;color:#9e9e9e;margin-top:3px">{_rw_note}；此分數與完整資料的同分標的可信度不同</div>'
-            f'</div>'
+            f"</div>"
         )
 
     # ── Evidence panel (expander only, data already loaded above) ──
@@ -692,32 +814,44 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
         ev = _ev
         re_ev = ev.get("research", {})
         fe_ev = ev.get("forward", {})
-        narrative    = ev.get("narrative", "")
-        r_n          = re_ev.get("n", 0)
+        narrative = ev.get("narrative", "")
+        r_n = re_ev.get("n", 0)
         r_tier_emoji = re_ev.get("tier_emoji", "🔴")
         r_tier_label = re_ev.get("tier_label", "樣本不足")
-        f_total      = fe_ev.get("total_recorded", 0)
-        f_m20        = fe_ev.get("matured_20d", 0)
-        f_m60        = fe_ev.get("matured_60d", 0)
+        f_total = fe_ev.get("total_recorded", 0)
+        f_m20 = fe_ev.get("matured_20d", 0)
+        f_m60 = fe_ev.get("matured_60d", 0)
         f_tier_emoji = fe_ev.get("tier_emoji", "🔴")
         f_tier_label = fe_ev.get("tier_label", "尚無 OOS 資料")
-        _r_wr        = re_ev.get("alpha_20d", {}).get("winrate")
-        _r_detail    = (f"（{r_n} 筆，20D 勝率 {_r_wr:.0f}%）" if (r_n >= 10 and _r_wr is not None) else f"（{r_n} 筆）")
+        _r_wr = re_ev.get("alpha_20d", {}).get("winrate")
+        _r_detail = (
+            f"（{r_n} 筆，20D 勝率 {_r_wr:.0f}%）"
+            if (r_n >= 10 and _r_wr is not None)
+            else f"（{r_n} 筆）"
+        )
         _narrative_html = (
             f'<div style="font-size:0.73rem;color:#555;margin-top:7px;font-style:italic">💬 {narrative}</div>'
-            if narrative else ""
+            if narrative
+            else ""
         )
         st.html(
             f'<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;'
             f'padding:10px 14px;margin-bottom:8px">'
             f'<div style="font-size:0.65rem;color:#888;font-weight:700;letter-spacing:.05em;margin-bottom:6px">驗證強度</div>'
             f'<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.76rem;color:#333">'
-            f'<span>🧪 Research：{r_tier_emoji} {r_tier_label} {_r_detail}</span>'
-            f'<span>🔒 Forward：{f_tier_emoji} {f_tier_label}（20D 成熟 {f_m20} 筆）</span>'
-            f'</div>{_narrative_html}</div>'
+            f"<span>🧪 Research：{r_tier_emoji} {r_tier_label} {_r_detail}</span>"
+            f"<span>🔒 Forward：{f_tier_emoji} {f_tier_label}（20D 成熟 {f_m20} 筆）</span>"
+            f"</div>{_narrative_html}</div>"
         )
-        with st.expander(f"📊 類似訊號歷史績效（{setup} × {current_regime}）"):
-            st.markdown("**🧪 Research（In-Sample）**")
+        with st.expander("📊 過去類似情境（歷史統計參考）"):
+            st.caption(
+                "此為歷史類似情境統計，不是 Out-of-Sample 證據，也不是未來價格預測。"
+            )
+            _analog_html = _historical_analog_html(_ev)
+            if _analog_html:
+                st.html(_analog_html)
+            st.divider()
+            st.markdown("**🧪 Research In-Sample 統計**")
             if r_n < 10:
                 st.caption(f"{r_tier_emoji} 樣本不足（{r_n} 筆），無法計算可靠統計。")
             else:
@@ -726,11 +860,15 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
                 c1, c2 = st.columns(2)
                 with c1:
                     st.metric("類似情境", f"{r_n} 次")
-                    if r20.get("mean") is not None: st.metric("20D Alpha 均值", f"{r20['mean']:+.1f}%")
-                    if r60.get("mean") is not None: st.metric("60D Alpha 均值", f"{r60['mean']:+.1f}%")
+                    if r20.get("mean") is not None:
+                        st.metric("20D Alpha 均值", f"{r20['mean']:+.1f}%")
+                    if r60.get("mean") is not None:
+                        st.metric("60D Alpha 均值", f"{r60['mean']:+.1f}%")
                 with c2:
-                    if r20.get("winrate") is not None: st.metric("20D 勝率", f"{r20['winrate']:.0f}%")
-                    if r60.get("winrate") is not None: st.metric("60D 勝率", f"{r60['winrate']:.0f}%")
+                    if r20.get("winrate") is not None:
+                        st.metric("20D 勝率", f"{r20['winrate']:.0f}%")
+                    if r60.get("winrate") is not None:
+                        st.metric("60D 勝率", f"{r60['winrate']:.0f}%")
                 st.caption(f"證據強度：{r_tier_emoji} {r_tier_label}")
             st.divider()
             st.markdown("**🔒 Forward Validation（真實 OOS）**")
@@ -740,14 +878,18 @@ def render_rec_card(r: dict, current_regime: str = "neutral", portfolio_exposure
                 st.metric("20D 已成熟", f"{f_m20} 筆")
                 if f_m20 >= 10:
                     f20 = fe_ev.get("alpha_20d", {})
-                    if f20.get("mean") is not None: st.metric("20D Alpha", f"{f20['mean']:+.1f}%")
+                    if f20.get("mean") is not None:
+                        st.metric("20D Alpha", f"{f20['mean']:+.1f}%")
             with c4:
                 st.metric("60D 已成熟", f"{f_m60} 筆")
                 if f_m20 >= 10:
                     f20 = fe_ev.get("alpha_20d", {})
-                    if f20.get("winrate") is not None: st.metric("20D 勝率", f"{f20['winrate']:.0f}%")
+                    if f20.get("winrate") is not None:
+                        st.metric("20D 勝率", f"{f20['winrate']:.0f}%")
             if f_m20 < 10:
-                st.caption(f"{f_tier_emoji} Forward 樣本累積中（{f_m20} 筆 20D 已成熟）")
+                st.caption(
+                    f"{f_tier_emoji} Forward 樣本累積中（{f_m20} 筆 20D 已成熟）"
+                )
             else:
                 st.caption(f"證據強度：{f_tier_emoji} {f_tier_label}")
 
@@ -810,12 +952,19 @@ def page_today(selected_date: date) -> None:
     # 直接從 recommendations 表算，避免 execution_log 記錄值與實際不符
     try:
         from sqlalchemy import text as _text
+
         from src.database import get_session as _gs
+
         _s = _gs()
-        recs_cnt = _s.execute(
-            _text("SELECT COUNT(*) FROM recommendations WHERE date=:d AND tier='recommend' AND is_valid IS NOT FALSE"),
-            {"d": selected_date},
-        ).scalar() or 0
+        recs_cnt = (
+            _s.execute(
+                _text(
+                    "SELECT COUNT(*) FROM recommendations WHERE date=:d AND tier='recommend' AND is_valid IS NOT FALSE"
+                ),
+                {"d": selected_date},
+            ).scalar()
+            or 0
+        )
         _s.close()
     except Exception:
         recs_cnt = int(today_log.iloc[0]["recs"]) if not today_log.empty else 0
@@ -885,9 +1034,9 @@ def page_today(selected_date: date) -> None:
     # P2: Pipeline funnel
     funnel = load_pipeline_funnel(selected_date)
     if funnel:
-        universe  = funnel.get("universe", 0)
+        universe = funnel.get("universe", 0)
         with_price = funnel.get("with_price", 0)
-        hf_pass   = funnel.get("hard_filter_pass", 0)
+        hf_pass = funnel.get("hard_filter_pass", 0)
         final_rec = funnel.get("recommended", 0)
         st.markdown(
             f"""
@@ -902,8 +1051,8 @@ def page_today(selected_date: date) -> None:
         )
 
     # No-Trade Today banner
-    health    = load_market_health(selected_date)
-    _h_level  = health.get("level", "green")
+    health = load_market_health(selected_date)
+    _h_level = health.get("level", "green")
     _h_mstatus = health.get("market_status", "TRADING_DAY")
     _h_last_td = health.get("last_trading_day")
 
@@ -911,14 +1060,14 @@ def page_today(selected_date: date) -> None:
         # ── 休市日專用 banner ───────────────────────────────────
         _is_holiday = _h_mstatus == "HOLIDAY"
         _closed_label = "國定假日" if _is_holiday else "週末"
-        _last_td_str  = _h_last_td.strftime("%Y/%m/%d") if _h_last_td else "—"
+        _last_td_str = _h_last_td.strftime("%Y/%m/%d") if _h_last_td else "—"
         _note = ""
         if recs:
             _note = (
                 f'<div style="font-size:0.74rem;color:#5d4037;margin-top:8px;'
                 f'background:#fff3e0;border-radius:6px;padding:5px 10px">'
-                f'⚠️ 以下顯示的是 <b>{_last_td_str}</b> 的歷史收盤分析，'
-                f'<b>不是 {selected_date} 的新交易訊號</b>。</div>'
+                f"⚠️ 以下顯示的是 <b>{_last_td_str}</b> 的歷史收盤分析，"
+                f"<b>不是 {selected_date} 的新交易訊號</b>。</div>"
             )
         st.markdown(
             f"""
@@ -932,15 +1081,18 @@ def page_today(selected_date: date) -> None:
 
     elif _h_level in ("red", "yellow"):
         # ── 交易日異常 banner ───────────────────────────────────
-        _h_regime  = health.get("regime", "neutral")
-        _h_pass    = health.get("pass_rate", 0.0)
-        _h_conds   = health.get("conditions", [])
-        _h_color   = "#c62828" if _h_level == "red" else "#f57f17"
-        _h_bg      = "#ffebee" if _h_level == "red" else "#fff8e1"
-        _h_border  = "#ef9a9a" if _h_level == "red" else "#ffe082"
-        _h_icon    = "🔴" if _h_level == "red" else "🟡"
-        _h_title   = "今日不建議交易" if _h_level == "red" else "今日交易需審慎"
-        _cond_html = "".join(f'<li style="font-size:0.77rem;margin-bottom:2px">{c}</li>' for c in _h_conds)
+        _h_regime = health.get("regime", "neutral")
+        _h_pass = health.get("pass_rate", 0.0)
+        _h_conds = health.get("conditions", [])
+        _h_color = "#c62828" if _h_level == "red" else "#f57f17"
+        _h_bg = "#ffebee" if _h_level == "red" else "#fff8e1"
+        _h_border = "#ef9a9a" if _h_level == "red" else "#ffe082"
+        _h_icon = "🔴" if _h_level == "red" else "🟡"
+        _h_title = "今日不建議交易" if _h_level == "red" else "今日交易需審慎"
+        _cond_html = "".join(
+            f'<li style="font-size:0.77rem;margin-bottom:2px">{c}</li>'
+            for c in _h_conds
+        )
         st.markdown(
             f"""
 <div style="background:{_h_bg};border:1.5px solid {_h_border};border-radius:10px;padding:12px 16px;margin:8px 0 12px">
@@ -956,6 +1108,7 @@ def page_today(selected_date: date) -> None:
     # P3: Diversity health warning (monitor only, no scoring change)
     if len(recs) >= 2:
         from collections import Counter
+
         rec_industries = [r.get("industry", "") for r in recs if r.get("industry")]
         if rec_industries:
             top_ind, top_cnt = Counter(rec_industries).most_common(1)[0]
@@ -1024,6 +1177,7 @@ def page_today(selected_date: date) -> None:
         current_regime = load_current_regime()
         try:
             from dashboard.loaders import load_portfolio_exposure as _lpe
+
             portfolio_exposure = _lpe()
         except Exception:
             portfolio_exposure = {}
@@ -1053,9 +1207,9 @@ def page_today(selected_date: date) -> None:
                 opp["name"] = stock_names.get(opp["sid"], "")
             if opp["price"] is None:
                 opp["price"] = stock_prices.get(opp["sid"])
-            sc5  = opp.get("score_change_5d")
-            tc5  = opp.get("timing_change_5d")
-            bc5  = opp.get("behavior_change_5d")
+            sc5 = opp.get("score_change_5d")
+            tc5 = opp.get("timing_change_5d")
+            bc5 = opp.get("behavior_change_5d")
             sc5_str = f"{sc5:+.1f}" if sc5 is not None else "—"
             tc5_str = f"{tc5:+.1f}" if tc5 is not None else "—"
             bc5_str = f"{bc5:+.1f}" if bc5 is not None else "—"
@@ -1067,12 +1221,14 @@ def page_today(selected_date: date) -> None:
 
             badges = (
                 _badge("總5D", sc5, sc5_str, 5)
-                + " " + _badge("技術5D", tc5, tc5_str, 8)
-                + " " + _badge("籌碼5D", bc5, bc5_str, 8)
+                + " "
+                + _badge("技術5D", tc5, tc5_str, 8)
+                + " "
+                + _badge("籌碼5D", bc5, bc5_str, 8)
             )
             total = opp.get("total_score", opp["scores"].get("total", 0))
-            name  = opp.get("name", "") or opp["sid"]
-            sid   = opp["sid"]
+            name = opp.get("name", "") or opp["sid"]
+            sid = opp["sid"]
             price = opp.get("price")
             price_str = f"NT$ {price:,.1f}" if price else "—"
             adv_tags = "".join(
@@ -1099,13 +1255,17 @@ def page_today(selected_date: date) -> None:
     # Watch List — 由 DecisionEngine.select_watchlist() 產生（percentile + min_score + confidence）
     watch_recs_list = load_watch_recs(selected_date)
     if watch_recs_list:
-        with st.expander(f"📋 Watch List（{len(watch_recs_list)} 檔，當日相對最強、待觀察）"):
+        with st.expander(
+            f"📋 Watch List（{len(watch_recs_list)} 檔，當日相對最強、待觀察）"
+        ):
             for w in watch_recs_list:
                 sc5 = w.get("score_change_5d")
                 sc5_str = f"（5D {sc5:+.1f}）" if sc5 is not None else ""
-                display_name = f"{w['name']}（{w['sid']}）" if w['name'] != w['sid'] else w['sid']
+                display_name = (
+                    f"{w['name']}（{w['sid']}）" if w["name"] != w["sid"] else w["sid"]
+                )
                 st.markdown(
                     f"**{display_name}** — 綜合 {w['total_score']:.0f} | "
                     f"技術 {w['timing_score']:.0f} | 籌碼 {w['behavior_score']:.0f} | "
-                    f"信心 {w['confidence']:.0f}%{sc5_str}"
+                    f"品質 {w['confidence']:.0f}{sc5_str}"
                 )

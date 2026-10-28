@@ -213,7 +213,7 @@ def page_history() -> None:
                 <div class="history-date">{row['date']}</div>
                 <div class="history-sid">{display}</div>
               </div>
-              <span class="rec-badge" style="background:{color};color:{'#333' if level == 'B' else 'white'};padding:4px 10px;border-radius:20px;font-size:0.78rem;font-weight:700">{level} · {row.get('confidence', 0):.0f}%</span>
+              <span class="rec-badge" style="background:{color};color:{'#333' if level == 'B' else 'white'};padding:4px 10px;border-radius:20px;font-size:0.78rem;font-weight:700">{level} · 品質 {row.get('confidence', 0):.0f}</span>
             </div>
             """,
                 unsafe_allow_html=True,

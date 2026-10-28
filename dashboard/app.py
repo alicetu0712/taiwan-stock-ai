@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # first initialization, causing a null-pointer SIGSEGV in Timedelta.__new__.
 try:
     import pandas as _pd
+
     _pd.Timedelta(0)
     del _pd
 except Exception:
@@ -269,22 +270,21 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
+    # ── Navigation: Level 1 (daily) + Level 2 (research) + Archive ──
     tabs = st.tabs(
         [
+            # Level 1 — 每日使用
             "📊今日",
             "📡盤中",
             "📈看盤",
+            "💼持倉",
+            "🔒證據",
+            # Level 2 — Research
+            "🧪研究回測",
             "🔍個股",
             "📋歷史",
-            "💼持倉",
-            "🔬驗證",
-            "🔒證據",
-            "🧪回測",
-            "🗂交易",
-            "📋成績單",
-            "🩺健康",
-            "📖說明",
-            "⚙️設定",
+            # Level 3 — Archive / Tools
+            "📦 Archive",
         ]
     )
 
@@ -299,34 +299,67 @@ def main() -> None:
         _render(page_today, sel_date)
     with tabs[1]:
         from dashboard._pages.live_monitor import page_live_monitor
+
         _render(page_live_monitor, sel_date)
     with tabs[2]:
         from dashboard._pages.market_watch import page_market_watch
+
         _render(page_market_watch, sel_date)
     with tabs[3]:
-        _render(page_search)
-    with tabs[4]:
-        _render(page_history)
-    with tabs[5]:
         _render(page_positions)
-    with tabs[6]:
-        _render(page_backtest)
-    with tabs[7]:
+    with tabs[4]:
         from dashboard._pages.evidence import page_evidence
+
         _render(page_evidence)
-    with tabs[8]:
+    with tabs[5]:
         _render(page_research_backtest)
-    with tabs[9]:
-        _render(page_my_trades)
-    with tabs[10]:
-        from dashboard._pages.scorecard import page_scorecard
-        _render(page_scorecard)
-    with tabs[11]:
-        _render(page_data_health)
-    with tabs[12]:
-        _render(page_guide)
-    with tabs[13]:
-        _render(page_settings, sel_date)
+    with tabs[6]:
+        _render(page_search)
+    with tabs[7]:
+        _render(page_history)
+    with tabs[8]:
+        # Archive: secondary selector for Level 3 pages
+        st.markdown(
+            '<div style="font-size:0.75rem;color:#888;margin-bottom:12px">'
+            "📦 Archive — 以下頁面已移出主導覽，仍可從這裡存取。</div>",
+            unsafe_allow_html=True,
+        )
+        archive_page = st.selectbox(
+            "選擇頁面",
+            [
+                "🔬 Legacy 驗證（歷史回測）",
+                "📋 成績單",
+                "🗂 交易記錄",
+                "🩺 資料健康",
+                "📖 說明",
+                "⚙️ 設定",
+            ],
+            label_visibility="collapsed",
+        )
+        if archive_page == "🔬 Legacy 驗證（歷史回測）":
+            st.info(
+                "📦 此為 Legacy 歷史回測頁面，已移出主導覽。"
+                "正式 Evidence 請使用「🔒證據」頁。",
+                icon=None,
+            )
+            _render(page_backtest)
+        elif archive_page == "📋 成績單":
+            st.info(
+                "📦 此為舊版成績單，已移出主導覽。"
+                "正式 Forward Evidence 請使用「🔒證據」頁。",
+                icon=None,
+            )
+            from dashboard._pages.scorecard import page_scorecard
+
+            _render(page_scorecard)
+        elif archive_page == "🗂 交易記錄":
+            _render(page_my_trades)
+        elif archive_page == "🩺 資料健康":
+            _render(page_data_health)
+        elif archive_page == "📖 說明":
+            _render(page_guide)
+        elif archive_page == "⚙️ 設定":
+            _render(page_settings, sel_date)
 
     st.markdown(
         '<div class="disclaimer">本工具為 AI 研究輔助，所有內容不構成投資建議，投資人應自行評估風險</div>',

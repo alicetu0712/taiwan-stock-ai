@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 def _load_scorecard_rows(limit: int = 300) -> list:
     """直接查 ForwardSignal，不透過 loaders，避免 Streamlit module-cache 問題。"""
     try:
-        from src.database import ForwardSignal, get_session
         from sqlalchemy import desc
+
+        from src.database import ForwardSignal, get_session
 
         s = get_session()
         rows = (
@@ -33,31 +34,31 @@ def _load_scorecard_rows(limit: int = 300) -> list:
         s.close()
         return [
             {
-                "trade_date":         str(r.trade_date),
-                "stock_id":           r.stock_id,
-                "stock_name":         r.stock_name or r.stock_id,
-                "setup_type":         r.setup_type,
-                "trade_signal":       r.trade_signal,
-                "decision_label":     r.decision_label,
-                "industry":           r.industry,
-                "market_regime":      r.market_regime_at_signal,
-                "close_at_signal":    r.close_at_signal,
-                "entry_low":          r.entry_low,
-                "entry_high":         r.entry_high,
-                "stop_price":         r.stop_price,
-                "target1":            r.target1,
-                "target2":            r.target2,
-                "fwd_return_20d":     r.fwd_return_20d,
-                "alpha_20d":          r.alpha_20d,
-                "fwd_return_60d":     r.fwd_return_60d,
-                "alpha_60d":          r.alpha_60d,
-                "stop_triggered_day":  r.stop_triggered_day,
-                "t1_hit_day":          r.t1_hit_day,
-                "outcome_note":        r.outcome_note,
+                "trade_date": str(r.trade_date),
+                "stock_id": r.stock_id,
+                "stock_name": r.stock_name or r.stock_id,
+                "setup_type": r.setup_type,
+                "trade_signal": r.trade_signal,
+                "decision_label": r.decision_label,
+                "industry": r.industry,
+                "market_regime": r.market_regime_at_signal,
+                "close_at_signal": r.close_at_signal,
+                "entry_low": r.entry_low,
+                "entry_high": r.entry_high,
+                "stop_price": r.stop_price,
+                "target1": r.target1,
+                "target2": r.target2,
+                "fwd_return_20d": r.fwd_return_20d,
+                "alpha_20d": r.alpha_20d,
+                "fwd_return_60d": r.fwd_return_60d,
+                "alpha_60d": r.alpha_60d,
+                "stop_triggered_day": r.stop_triggered_day,
+                "t1_hit_day": r.t1_hit_day,
+                "outcome_note": r.outcome_note,
                 "outcome_price_quality": getattr(r, "outcome_price_quality", None),
-                "pt_score":           r.pt_score,
-                "total_score":        r.total_score,
-                "confidence":         r.confidence,
+                "pt_score": r.pt_score,
+                "total_score": r.total_score,
+                "confidence": r.confidence,
             }
             for r in rows
         ]
@@ -65,15 +66,16 @@ def _load_scorecard_rows(limit: int = 300) -> list:
         logger.warning(f"_load_scorecard_rows: {e}")
         return []
 
+
 # DB stores stable codes; UI translates via to_display() / to_color()
 # Preferred default codes for the decision_label multiselect
 _PREFERRED_CODE_DEFAULTS = list(buy_codes())  # ["strong_buy", "buy"]
 
 _OUTCOME_ICON = {
-    "T1_HIT":             "🎯",
-    "STOP_TRIGGERED":     "🛑",
+    "T1_HIT": "🎯",
+    "STOP_TRIGGERED": "🛑",
     "SAME_DAY_AMBIGUOUS": "⚠️",
-    "EXPIRED":            "⏱️",
+    "EXPIRED": "⏱️",
 }
 
 
@@ -101,6 +103,7 @@ def _load_market_calendar() -> list:
     """Returns sorted list of 0050 trading dates from DB (used as Taiwan market proxy)."""
     try:
         from src.database import DailyPrice, get_session
+
         s = get_session()
         rows = (
             s.query(DailyPrice.date)
@@ -115,35 +118,49 @@ def _load_market_calendar() -> list:
         return []
 
 
-def _dedup_cohort(rows: list, n_trading_days: int, market_calendar: list = None) -> list:
+def _dedup_cohort(
+    rows: list, n_trading_days: int, market_calendar: list = None
+) -> list:
     """Per-stock trading-day cooldown dedup on list of row dicts.
 
     Uses actual Taiwan market trading days (via 0050 calendar) instead of
     calendar-day approximation, so results align with Evidence and ResearchBacktest.
     """
     from datetime import date as _date
+
     from src.utils.dedup_utils import dedup_by_trading_days
 
     sorted_rows = sorted(rows, key=lambda x: x["trade_date"])
     signals = [
-        (r["stock_id"],
-         _date.fromisoformat(r["trade_date"]) if isinstance(r["trade_date"], str) else r["trade_date"])
+        (
+            r["stock_id"],
+            (
+                _date.fromisoformat(r["trade_date"])
+                if isinstance(r["trade_date"], str)
+                else r["trade_date"]
+            ),
+        )
         for r in sorted_rows
     ]
-    kept = set(dedup_by_trading_days(signals, n_trading_days, market_calendar=market_calendar))
+    kept = set(
+        dedup_by_trading_days(signals, n_trading_days, market_calendar=market_calendar)
+    )
     return [r for r, sig in zip(sorted_rows, signals) if sig in kept]
 
 
 def _ci95_mean(values: list) -> float | None:
     """95% CI half-width for the mean: 1.96 × std / sqrt(n). Returns None if n < 2."""
     import statistics
+
     n = len(values)
     if n < 2:
         return None
-    return round(1.96 * statistics.stdev(values) / (n ** 0.5), 2)
+    return round(1.96 * statistics.stdev(values) / (n**0.5), 2)
 
 
-_OUTCOME_CODES = frozenset(("T1_HIT", "STOP_TRIGGERED", "SAME_DAY_AMBIGUOUS", "EXPIRED"))
+_OUTCOME_CODES = frozenset(
+    ("T1_HIT", "STOP_TRIGGERED", "SAME_DAY_AMBIGUOUS", "EXPIRED")
+)
 
 
 def _stats_block(matured: list, alpha_key: str) -> dict:
@@ -155,25 +172,35 @@ def _stats_block(matured: list, alpha_key: str) -> dict:
     """
     alphas = [r[alpha_key] for r in matured if r[alpha_key] is not None]
     if not alphas:
-        return {"n": 0, "n_outcome": 0, "winrate": None, "avg_alpha": None, "ci95": None,
-                "t1_rate": None, "stop_rate": None, "ambiguous_rate": None}
-    alpha_n   = len(alphas)
+        return {
+            "n": 0,
+            "n_outcome": 0,
+            "winrate": None,
+            "avg_alpha": None,
+            "ci95": None,
+            "t1_rate": None,
+            "stop_rate": None,
+            "ambiguous_rate": None,
+        }
+    alpha_n = len(alphas)
     outcome_n = sum(1 for r in matured if r["outcome_note"] in _OUTCOME_CODES)
 
     def _rate(code: str) -> float | None:
         if outcome_n == 0:
             return None
-        return round(sum(1 for r in matured if r["outcome_note"] == code) / outcome_n * 100, 1)
+        return round(
+            sum(1 for r in matured if r["outcome_note"] == code) / outcome_n * 100, 1
+        )
 
     return {
-        "n":             alpha_n,
-        "n_outcome":     outcome_n,
-        "winrate":       round(sum(1 for a in alphas if a > 0) / alpha_n * 100, 1),
-        "avg_alpha":     round(sum(alphas) / alpha_n, 2),
-        "ci95":          _ci95_mean(alphas),
-        "t1_rate":       _rate("T1_HIT"),
-        "stop_rate":     _rate("STOP_TRIGGERED"),
-        "ambiguous_rate":_rate("SAME_DAY_AMBIGUOUS"),
+        "n": alpha_n,
+        "n_outcome": outcome_n,
+        "winrate": round(sum(1 for a in alphas if a > 0) / alpha_n * 100, 1),
+        "avg_alpha": round(sum(alphas) / alpha_n, 2),
+        "ci95": _ci95_mean(alphas),
+        "t1_rate": _rate("T1_HIT"),
+        "stop_rate": _rate("STOP_TRIGGERED"),
+        "ambiguous_rate": _rate("SAME_DAY_AMBIGUOUS"),
     }
 
 
@@ -196,11 +223,11 @@ def _summary_stats(rows: list, market_calendar: list = None) -> dict:
     matured_60 = [r for r in dedup_60 if r["alpha_60d"] is not None]
 
     return {
-        "n_raw":       len(buy_rows),
-        "n_dedup_20":  len(dedup_20),
-        "n_dedup_60":  len(dedup_60),
-        "s20":         _stats_block(matured_20, "alpha_20d"),
-        "s60":         _stats_block(matured_60, "alpha_60d"),
+        "n_raw": len(buy_rows),
+        "n_dedup_20": len(dedup_20),
+        "n_dedup_60": len(dedup_60),
+        "s20": _stats_block(matured_20, "alpha_20d"),
+        "s60": _stats_block(matured_60, "alpha_60d"),
     }
 
 
@@ -223,7 +250,9 @@ def page_scorecard() -> None:
 
     # ── 篩選控制 ──────────────────────────────────────────────
     col_f1, col_f2, col_f3 = st.columns(3)
-    all_codes_in_data = sorted({r["decision_label"] for r in rows if r["decision_label"]})
+    all_codes_in_data = sorted(
+        {r["decision_label"] for r in rows if r["decision_label"]}
+    )
     all_setups = sorted({r["setup_type"] for r in rows if r["setup_type"]})
 
     # Sanitize stale session_state (handles old display-string values from pre-migration)
@@ -243,10 +272,12 @@ def page_scorecard() -> None:
         "決策標籤",
         all_codes_in_data,
         default=default_codes,
-        format_func=to_display,   # show "BUY ★" but value is "strong_buy"
+        format_func=to_display,  # show "BUY ★" but value is "strong_buy"
         key="sc_labels",
     )
-    sel_setups = col_f2.multiselect("型態", all_setups, default=all_setups, key="sc_setups")
+    sel_setups = col_f2.multiselect(
+        "型態", all_setups, default=all_setups, key="sc_setups"
+    )
     outcome_opts = ["全部", "已有結果", "待成熟"]
     sel_outcome = col_f3.selectbox("結果", outcome_opts, key="sc_outcome")
 
@@ -269,37 +300,59 @@ def page_scorecard() -> None:
     # 樣本計數
     cnt1, cnt2, cnt3, cnt4, cnt5, cnt6 = st.columns(6)
     cnt1.metric(
-        "Raw N（BUY+）", stats["n_raw"],
+        "Raw N（BUY+）",
+        stats["n_raw"],
         help="全部 BUY / BUY★ 信號數量（含重疊）。不直接用於統計。",
     )
     cnt2.metric(
-        "20D Dedup N", stats["n_dedup_20"],
+        "20D Dedup N",
+        stats["n_dedup_20"],
         help="同一股票 20 交易日冷卻去重後的樣本數（使用 0050 市場交易日曆）。20D 統計基於此集合。",
     )
     cnt3.metric(
-        "60D Dedup N", stats["n_dedup_60"],
+        "60D Dedup N",
+        stats["n_dedup_60"],
         help="同一股票 60 交易日冷卻去重後的樣本數（使用 0050 市場交易日曆）。60D 統計基於此集合。",
     )
 
     # ── 20D 統計（基於 20D Dedup 樣本）──────────────────────────
     st.markdown("**20D 統計**（基於 20D Dedup 樣本）")
     d1, d2, d3, d4, d5, d6 = st.columns(6)
-    d1.metric("20D 已成熟（Alpha）", s20["n"] if s20["n"] else "—",
-              help="有 alpha_20d 值的樣本數；用於勝率、平均 Alpha、CI。")
+    d1.metric(
+        "20D 已成熟（Alpha）",
+        s20["n"] if s20["n"] else "—",
+        help="有 alpha_20d 值的樣本數；用於勝率、平均 Alpha、CI。",
+    )
     if s20["avg_alpha"] is not None:
         ci_str = f"±{s20['ci95']:.2f}%" if s20["ci95"] is not None else ""
-        d2.metric("20D Alpha", f"{s20['avg_alpha']:+.2f}%",
-                  delta=ci_str or None, delta_color="off",
-                  help="20D Dedup 樣本的平均 Alpha；delta 為 95% CI 半寬")
-        d3.metric("20D 勝率", f"{s20['winrate']}%",
-                  help="Alpha > 0 的比例（分母 = 有 alpha 的樣本數）")
+        d2.metric(
+            "20D Alpha",
+            f"{s20['avg_alpha']:+.2f}%",
+            delta=ci_str or None,
+            delta_color="off",
+            help="20D Dedup 樣本的平均 Alpha；delta 為 95% CI 半寬",
+        )
+        d3.metric(
+            "20D 勝率",
+            f"{s20['winrate']}%",
+            help="Alpha > 0 的比例（分母 = 有 alpha 的樣本數）",
+        )
         n_out = s20.get("n_outcome", 0)
-        d4.metric("T1 率", f"{s20['t1_rate']}%" if s20["t1_rate"] is not None else "—",
-                  help=f"T1 達成 / 有 outcome 判定樣本（n={n_out}）")
-        d5.metric("停損率", f"{s20['stop_rate']}%" if s20["stop_rate"] is not None else "—",
-                  help=f"停損觸發 / 有 outcome 判定樣本（n={n_out}）")
-        d6.metric("⚠️ 同日模糊", f"{s20['ambiguous_rate']}%" if s20["ambiguous_rate"] is not None else "—",
-                  help=f"同日 High≥T1 且 Low≤Stop，無法判斷順序（n={n_out}）")
+        d4.metric(
+            "T1 率",
+            f"{s20['t1_rate']}%" if s20["t1_rate"] is not None else "—",
+            help=f"T1 達成 / 有 outcome 判定樣本（n={n_out}）",
+        )
+        d5.metric(
+            "停損率",
+            f"{s20['stop_rate']}%" if s20["stop_rate"] is not None else "—",
+            help=f"停損觸發 / 有 outcome 判定樣本（n={n_out}）",
+        )
+        d6.metric(
+            "⚠️ 同日模糊",
+            f"{s20['ambiguous_rate']}%" if s20["ambiguous_rate"] is not None else "—",
+            help=f"同日 High≥T1 且 Low≤Stop，無法判斷順序（n={n_out}）",
+        )
     else:
         for col in (d2, d3, d4, d5, d6):
             col.metric("—", "—")
@@ -310,11 +363,16 @@ def page_scorecard() -> None:
         e1, e2, e3, e4, *_ = st.columns(6)
         e1.metric("60D 已成熟", s60["n"])
         ci_str60 = f"±{s60['ci95']:.2f}%" if s60["ci95"] is not None else ""
-        e2.metric("60D Alpha", f"{s60['avg_alpha']:+.2f}%",
-                  delta=ci_str60 or None, delta_color="off",
-                  help="60D Dedup 樣本的平均 Alpha；delta 為 95% CI 半寬")
-        e3.metric("60D 勝率", f"{s60['winrate']}%",
-                  help="Alpha > 0 的比例（60D Dedup 樣本）")
+        e2.metric(
+            "60D Alpha",
+            f"{s60['avg_alpha']:+.2f}%",
+            delta=ci_str60 or None,
+            delta_color="off",
+            help="60D Dedup 樣本的平均 Alpha；delta 為 95% CI 半寬",
+        )
+        e3.metric(
+            "60D 勝率", f"{s60['winrate']}%", help="Alpha > 0 的比例（60D Dedup 樣本）"
+        )
 
     st.caption(
         "報酬均為淨報酬，已扣保守假設交易成本 0.585%。Alpha = 股票淨報酬 − 0050 淨報酬。"
@@ -335,12 +393,14 @@ def page_scorecard() -> None:
 
     # ── 逐筆展示 ──────────────────────────────────────────────
     for r in filtered:
-        code  = r["decision_label"] or "wait"
+        code = r["decision_label"] or "wait"
         label = to_display(code)
-        lc    = to_color(code)
-        outcome_icon = _OUTCOME_ICON.get(r["outcome_note"], "⏳" if r["outcome_note"] is None else "")
+        lc = to_color(code)
+        outcome_icon = _OUTCOME_ICON.get(
+            r["outcome_note"], "⏳" if r["outcome_note"] is None else ""
+        )
         alpha_20 = r["alpha_20d"]
-        ret_20   = r["fwd_return_20d"]
+        ret_20 = r["fwd_return_20d"]
 
         header = (
             f"{outcome_icon} **{r['stock_name']}**（{r['stock_id']}）"
@@ -368,12 +428,16 @@ def page_scorecard() -> None:
             with col_b:
                 st.markdown("**市場背景**")
                 regime = r.get("market_regime") or "—"
-                regime_badge = {"bull": "🟢 多頭", "bear": "🔴 空頭", "neutral": "🟡 中性"}.get(regime, regime)
+                regime_badge = {
+                    "bull": "🟢 多頭",
+                    "bear": "🔴 空頭",
+                    "neutral": "🟡 中性",
+                }.get(regime, regime)
                 st.markdown(
                     f"Regime：{regime_badge}  \n"
                     f"產業：{r.get('industry') or '—'}  \n"
                     f"PT Score：{_fmt(r['pt_score'])}  \n"
-                    f"信心：{_fmt(r['confidence'], '%')}"
+                    f"分析品質：{_fmt(r['confidence'])} / 100"
                 )
 
             with col_c:
@@ -382,25 +446,35 @@ def page_scorecard() -> None:
                     st.markdown("⏳ 尚未成熟（等待 20 交易日後回填）")
                 else:
                     outcome_display = {
-                        "T1_HIT":             "🎯 盤中觸及目標 T1（High ≥ T1）",
-                        "STOP_TRIGGERED":     "🛑 盤中觸及停損（Low ≤ Stop）",
+                        "T1_HIT": "🎯 盤中觸及目標 T1（High ≥ T1）",
+                        "STOP_TRIGGERED": "🛑 盤中觸及停損（Low ≤ Stop）",
                         "SAME_DAY_AMBIGUOUS": "⚠️ 同日觸及停損與目標（無法判斷順序）",
-                        "EXPIRED":            "⏱️ 時間到期（20 交易日內未觸發）",
+                        "EXPIRED": "⏱️ 時間到期（20 交易日內未觸發）",
                     }.get(r["outcome_note"], r["outcome_note"])
                     st.markdown(f"結果：**{outcome_display}**")
                     if r["stop_triggered_day"]:
-                        st.caption(f"停損觸發日：第 {r['stop_triggered_day']} 交易日（盤中 Low ≤ Stop Price）")
+                        st.caption(
+                            f"停損觸發日：第 {r['stop_triggered_day']} 交易日（盤中 Low ≤ Stop Price）"
+                        )
                     if r["t1_hit_day"]:
-                        st.caption(f"T1 達成日：第 {r['t1_hit_day']} 交易日（盤中 High ≥ T1）")
+                        st.caption(
+                            f"T1 達成日：第 {r['t1_hit_day']} 交易日（盤中 High ≥ T1）"
+                        )
                     _pq = r.get("outcome_price_quality")
                     if _pq == "CLOSE_ONLY":
-                        st.caption("⚠️ 價格品質：CLOSE_ONLY — 掃描期間部分交易日缺少盤中 H/L，以收盤價代替判斷停損/目標，結果可信度較低")
+                        st.caption(
+                            "⚠️ 價格品質：CLOSE_ONLY — 掃描期間部分交易日缺少盤中 H/L，以收盤價代替判斷停損/目標，結果可信度較低"
+                        )
                     elif _pq == "OHLC":
-                        st.caption("✅ 價格品質：OHLC — 停損/目標判斷全程使用盤中 High/Low")
+                        st.caption(
+                            "✅ 價格品質：OHLC — 停損/目標判斷全程使用盤中 High/Low"
+                        )
                     st.markdown(
                         f"20D 淨報酬：{_fmt(ret_20, '%', plus=True)}  \n"
                         f"20D Alpha：{_fmt(alpha_20, '%', plus=True)}  \n"
                         f"60D 淨報酬：{_fmt(r['fwd_return_60d'], '%', plus=True)}  \n"
                         f"60D Alpha：{_fmt(r['alpha_60d'], '%', plus=True)}"
                     )
-                    st.caption("淨報酬已扣保守假設交易成本 0.585%（保守固定假設值；實際成本依券商折扣、標的類型而異，不含滑價）。同日 Stop 與 T1 同時觸及時標記為「同日模糊」，不計入 T1 率或停損率。")
+                    st.caption(
+                        "淨報酬已扣保守假設交易成本 0.585%（保守固定假設值；實際成本依券商折扣、標的類型而異，不含滑價）。同日 Stop 與 T1 同時觸及時標記為「同日模糊」，不計入 T1 率或停損率。"
+                    )
