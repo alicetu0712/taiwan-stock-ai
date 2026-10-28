@@ -337,18 +337,8 @@ def main() -> None:
             label_visibility="collapsed",
         )
         if archive_page == "🔬 Legacy 驗證（歷史回測）":
-            st.info(
-                "📦 此為 Legacy 歷史回測頁面，已移出主導覽。"
-                "正式 Evidence 請使用「🔒證據」頁。",
-                icon=None,
-            )
             _render(page_backtest)
         elif archive_page == "📋 成績單":
-            st.info(
-                "📦 此為舊版成績單，已移出主導覽。"
-                "正式 Forward Evidence 請使用「🔒證據」頁。",
-                icon=None,
-            )
             from dashboard._pages.scorecard import page_scorecard
 
             _render(page_scorecard)
