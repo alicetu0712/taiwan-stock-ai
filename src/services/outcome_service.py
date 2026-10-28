@@ -20,12 +20,14 @@ Row lifecycle:
 
 import logging
 from datetime import date, datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+from src.services.research_backtest_service import ROUND_TRIP_COST
+
+if TYPE_CHECKING:
+    from src.engines.outcome_evaluation import EntryResult
 
 logger = logging.getLogger(__name__)
-
-# Transaction cost: import from research_backtest_service as canonical source
-from src.services.research_backtest_service import ROUND_TRIP_COST
 
 
 def compute_foe_outcomes(session, as_of_date: date) -> int:
@@ -34,8 +36,7 @@ def compute_foe_outcomes(session, as_of_date: date) -> int:
     Processes all BUY ForwardSignals with execution_price filled.
     Returns number of rows created or updated.
     """
-    from src.database import ForwardSignal, ForwardOutcomeEvaluation
-    from src.engines.outcome_evaluation import FORWARD_OUTCOME_PROTOCOL_VERSION
+    from src.database import ForwardSignal
 
     # Load signals eligible for foe_v1 evaluation
     signals = (
@@ -56,19 +57,27 @@ def compute_foe_outcomes(session, as_of_date: date) -> int:
     price_data = _load_price_data(session, signals)
     overnight_map = _load_overnight_contexts(session, signals)
     live_event_map = _load_live_events(session, signals)
-    lifecycle_map = _load_lifecycle_statuses(session, signals)
+    cancel_event_map = _load_cancel_events(session, signals)
     trading_calendar = _load_trading_calendar(session)
 
     rows_affected = 0
     for fs in signals:
         try:
             n = _process_signal(
-                session, fs, as_of_date, price_data, overnight_map,
-                live_event_map, lifecycle_map, trading_calendar,
+                session,
+                fs,
+                as_of_date,
+                price_data,
+                overnight_map,
+                live_event_map,
+                cancel_event_map,
+                trading_calendar,
             )
             rows_affected += n
         except Exception as exc:
-            logger.warning(f"outcome_service: error for {fs.stock_id} {fs.trade_date}: {exc}")
+            logger.warning(
+                f"outcome_service: error for {fs.stock_id} {fs.trade_date}: {exc}"
+            )
 
     if rows_affected:
         session.commit()
@@ -84,20 +93,26 @@ def get_foe_cohort(
     """Read-only cohort query for dashboard. Returns list of ForwardOutcomeEvaluation rows."""
     from src.database import ForwardOutcomeEvaluation, get_session
     from src.engines.outcome_evaluation import (
-        FORWARD_OUTCOME_PROTOCOL_VERSION, EXCL_NO_OVERNIGHT_DATA, EXEC_EXECUTED
+        EXEC_EXECUTED,
+        FORWARD_OUTCOME_PROTOCOL_VERSION,
     )
+
     s = get_session()
     try:
         q = s.query(ForwardOutcomeEvaluation).filter(
-            ForwardOutcomeEvaluation.outcome_protocol_version == FORWARD_OUTCOME_PROTOCOL_VERSION,
+            ForwardOutcomeEvaluation.outcome_protocol_version
+            == FORWARD_OUTCOME_PROTOCOL_VERSION,
             ForwardOutcomeEvaluation.entry_status == EXEC_EXECUTED,
         )
         if overnight_risk_level:
-            q = q.filter(ForwardOutcomeEvaluation.overnight_risk_level == overnight_risk_level)
+            q = q.filter(
+                ForwardOutcomeEvaluation.overnight_risk_level == overnight_risk_level
+            )
         if path_type:
             q = q.filter(ForwardOutcomeEvaluation.path_type == path_type)
         if exclude_no_overnight_data:
-            q = q.filter(ForwardOutcomeEvaluation.exclusion_reason != EXCL_NO_OVERNIGHT_DATA)
+            # P1: use IS NULL — NULL != value is NULL in SQL, not TRUE, so != would miss eligible rows
+            q = q.filter(ForwardOutcomeEvaluation.exclusion_reason.is_(None))
         if matured_horizon == "20d":
             q = q.filter(ForwardOutcomeEvaluation.horizon_20d_matured_at.isnot(None))
         elif matured_horizon == "60d":
@@ -111,10 +126,12 @@ def get_all_foe_rows(include_pending: bool = False) -> list:
     """Return all foe_v1 rows for dashboard sample health display."""
     from src.database import ForwardOutcomeEvaluation, get_session
     from src.engines.outcome_evaluation import FORWARD_OUTCOME_PROTOCOL_VERSION
+
     s = get_session()
     try:
         q = s.query(ForwardOutcomeEvaluation).filter(
-            ForwardOutcomeEvaluation.outcome_protocol_version == FORWARD_OUTCOME_PROTOCOL_VERSION,
+            ForwardOutcomeEvaluation.outcome_protocol_version
+            == FORWARD_OUTCOME_PROTOCOL_VERSION,
         )
         if not include_pending:
             # Still show all created rows; dashboard decides what to display
@@ -126,70 +143,103 @@ def get_all_foe_rows(include_pending: bool = False) -> list:
 
 # ── Internal processing ───────────────────────────────────────────────────────
 
+
 def _process_signal(
-    session, fs, as_of_date, price_data, overnight_map,
-    live_event_map, lifecycle_map, trading_calendar,
+    session,
+    fs,
+    as_of_date,
+    price_data,
+    overnight_map,
+    live_event_map,
+    cancel_event_map,
+    trading_calendar,
 ) -> int:
-    from src.database import ForwardOutcomeEvaluation
     from src.engines.outcome_evaluation import (
-        PATH_BASELINE, PATH_AWARE,
-        FORWARD_OUTCOME_PROTOCOL_VERSION,
-        find_baseline_entry, find_aware_entry,
-        compute_horizon_bundle, check_overnight_eligibility,
-        EXEC_EXECUTED, _LiveEvent,
+        EXEC_EXECUTED,
+        PATH_AWARE,
+        PATH_BASELINE,
+        check_overnight_eligibility,
+        find_aware_entry,
+        find_baseline_entry,
     )
 
-    stock_id    = fs.stock_id
+    stock_id = fs.stock_id
     signal_date = fs.trade_date
-    exec_date   = fs.execution_date
+    exec_date = fs.execution_date
     sig_eval_id = f"{stock_id}_{signal_date}"
 
     pd = price_data.get(stock_id, {})
-    stock_dates  = pd.get("dates", [])
-    close_map    = pd.get("close", {})
-    high_map     = pd.get("high", {})
-    low_map      = pd.get("low", {})
+    stock_dates = pd.get("dates", [])
+    close_map = pd.get("close", {})
+    high_map = pd.get("high", {})
+    low_map = pd.get("low", {})
 
     b0050 = price_data.get("0050", {})
-    open_0050    = b0050.get("open", {})
-    b_dates      = b0050.get("dates", [])
-    b_close_map  = b0050.get("close", {})
+    open_0050 = b0050.get("open", {})
+    b_dates = b0050.get("dates", [])
+    b_close_map = b0050.get("close", {})
 
     # Overnight context for this execution_date
     omc = overnight_map.get(exec_date)
-    overnight_context_id   = omc.id if omc else None
+    overnight_context_id = omc.id if omc else None
     overnight_rule_version = omc.overnight_rule_version if omc else None
-    overnight_risk_level   = omc.risk_level if omc else None
+    overnight_risk_level = omc.risk_level if omc else None
 
-    excl = check_overnight_eligibility(exec_date, overnight_context_id, overnight_rule_version)
+    excl = check_overnight_eligibility(
+        exec_date, overnight_context_id, overnight_rule_version
+    )
 
     live_rule = _get_live_rule_version(live_event_map, stock_id, signal_date)
-    lifecycle = lifecycle_map.get((stock_id, signal_date))
 
     rows_affected = 0
 
     for path_type, entry_fn_result in [
-        (PATH_BASELINE, find_baseline_entry(
-            exec_date, fs.execution_price, fs.execution_price_type, open_0050
-        )),
-        (PATH_AWARE, find_aware_entry(
-            exec_date, lifecycle,
-            _get_live_events(live_event_map, stock_id, signal_date),
-            as_of_date, trading_calendar, open_0050
-        )),
+        (
+            PATH_BASELINE,
+            find_baseline_entry(
+                exec_date, fs.execution_price, fs.execution_price_type, open_0050
+            ),
+        ),
+        (
+            PATH_AWARE,
+            find_aware_entry(
+                exec_date,
+                _get_live_events(live_event_map, stock_id, signal_date),
+                _get_live_events(
+                    cancel_event_map, stock_id, signal_date
+                ),  # CANCEL events
+                as_of_date,
+                trading_calendar,
+                open_0050,
+            ),
+        ),
     ]:
         row = _get_or_create_row(
-            session, fs.id, sig_eval_id, stock_id, signal_date,
-            path_type, overnight_context_id, overnight_rule_version,
-            overnight_risk_level, live_rule, excl,
+            session,
+            fs.id,
+            sig_eval_id,
+            stock_id,
+            signal_date,
+            path_type,
+            overnight_context_id,
+            overnight_rule_version,
+            overnight_risk_level,
+            live_rule,
+            excl,
         )
         changed = _apply_entry(row, entry_fn_result)
 
         if row.entry_status == EXEC_EXECUTED and entry_fn_result.entry_price:
             changed |= _fill_horizons(
-                row, entry_fn_result, fs,
-                stock_dates, close_map, high_map, low_map,
-                b_dates, b_close_map,
+                row,
+                entry_fn_result,
+                fs,
+                stock_dates,
+                close_map,
+                high_map,
+                low_map,
+                b_dates,
+                b_close_map,
             )
 
         if changed:
@@ -200,9 +250,17 @@ def _process_signal(
 
 
 def _get_or_create_row(
-    session, forward_signal_id, sig_eval_id, stock_id, signal_date,
-    path_type, overnight_context_id, overnight_rule_version,
-    overnight_risk_level, live_rule, exclusion_reason,
+    session,
+    forward_signal_id,
+    sig_eval_id,
+    stock_id,
+    signal_date,
+    path_type,
+    overnight_context_id,
+    overnight_rule_version,
+    overnight_risk_level,
+    live_rule,
+    exclusion_reason,
 ):
     from src.database import ForwardOutcomeEvaluation
     from src.engines.outcome_evaluation import FORWARD_OUTCOME_PROTOCOL_VERSION
@@ -212,26 +270,27 @@ def _get_or_create_row(
         .filter(
             ForwardOutcomeEvaluation.forward_signal_id == forward_signal_id,
             ForwardOutcomeEvaluation.path_type == path_type,
-            ForwardOutcomeEvaluation.outcome_protocol_version == FORWARD_OUTCOME_PROTOCOL_VERSION,
+            ForwardOutcomeEvaluation.outcome_protocol_version
+            == FORWARD_OUTCOME_PROTOCOL_VERSION,
         )
         .first()
     )
     if row is None:
         row = ForwardOutcomeEvaluation(
-            forward_signal_id          = forward_signal_id,
-            signal_evaluation_id       = sig_eval_id,
-            stock_id                   = stock_id,
-            signal_date                = signal_date,
-            path_type                  = path_type,
-            outcome_protocol_version   = FORWARD_OUTCOME_PROTOCOL_VERSION,
-            overnight_context_id       = overnight_context_id,
-            overnight_rule_version     = overnight_rule_version,
-            overnight_risk_level       = overnight_risk_level,
-            live_rule_version          = live_rule,
-            exclusion_reason           = exclusion_reason,
-            transaction_cost_assumption = ROUND_TRIP_COST,
-            created_at                 = datetime.utcnow(),
-            updated_at                 = datetime.utcnow(),
+            forward_signal_id=forward_signal_id,
+            signal_evaluation_id=sig_eval_id,
+            stock_id=stock_id,
+            signal_date=signal_date,
+            path_type=path_type,
+            outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
+            overnight_context_id=overnight_context_id,
+            overnight_rule_version=overnight_rule_version,
+            overnight_risk_level=overnight_risk_level,
+            live_rule_version=live_rule,
+            exclusion_reason=exclusion_reason,
+            transaction_cost_assumption=ROUND_TRIP_COST,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
         )
         session.add(row)
         session.flush()  # get id
@@ -242,17 +301,17 @@ def _apply_entry(row, entry: "EntryResult") -> bool:
     """Apply entry result to row. Returns True if anything changed."""
     changed = False
     fields = [
-        ("entry_status",                entry.entry_status),
-        ("entry_date",                  entry.entry_date),
-        ("entry_price",                 entry.entry_price),
-        ("entry_price_type",            entry.entry_price_type),
-        ("entry_timestamp",             entry.entry_timestamp),
-        ("entry_quote_quality",         entry.entry_quote_quality),
-        ("mae_mfe_start_date",          entry.mae_mfe_start_date),
+        ("entry_status", entry.entry_status),
+        ("entry_date", entry.entry_date),
+        ("entry_price", entry.entry_price),
+        ("entry_price_type", entry.entry_price_type),
+        ("entry_timestamp", entry.entry_timestamp),
+        ("entry_quote_quality", entry.entry_quote_quality),
+        ("mae_mfe_start_date", entry.mae_mfe_start_date),
         ("entry_day_excursion_excluded", entry.entry_day_excursion_excluded),
-        ("benchmark_entry_date",        entry.benchmark_entry_date),
-        ("benchmark_entry_price",       entry.benchmark_entry_price),
-        ("benchmark_entry_price_type",  entry.benchmark_entry_price_type),
+        ("benchmark_entry_date", entry.benchmark_entry_date),
+        ("benchmark_entry_price", entry.benchmark_entry_price),
+        ("benchmark_entry_price_type", entry.benchmark_entry_price_type),
         ("benchmark_timing_approximation", entry.benchmark_timing_approximation),
     ]
     for attr, val in fields:
@@ -262,10 +321,23 @@ def _apply_entry(row, entry: "EntryResult") -> bool:
     return changed
 
 
-def _fill_horizons(row, entry_result, fs, stock_dates, close_map, high_map, low_map,
-                   b_dates, b_close_map) -> bool:
+def _fill_horizons(
+    row,
+    entry_result,
+    fs,
+    stock_dates,
+    close_map,
+    high_map,
+    low_map,
+    b_dates,
+    b_close_map,
+) -> bool:
     """Fill 20D and 60D bundles if not yet matured. Honors immutability guards."""
-    from src.engines.outcome_evaluation import compute_horizon_bundle, ODQ_INCOMPLETE_HORIZON
+    from src.engines.outcome_evaluation import (
+        ODQ_INCOMPLETE_HORIZON,
+        compute_horizon_bundle,
+    )
+
     changed = False
 
     for n_days, matured_attr, bundle_attrs in [
@@ -276,21 +348,21 @@ def _fill_horizons(row, entry_result, fs, stock_dates, close_map, high_map, low_
             continue  # immutable — do not overwrite
 
         bundle = compute_horizon_bundle(
-            entry_price           = entry_result.entry_price,
-            entry_date            = entry_result.entry_date,
-            mae_mfe_start_date    = entry_result.mae_mfe_start_date,
-            n_days                = n_days,
-            stop_price            = fs.stop_price,
-            target1               = fs.target1,
-            stock_dates           = stock_dates,
-            close_map             = close_map,
-            high_map              = high_map,
-            low_map               = low_map,
-            benchmark_entry_price = entry_result.benchmark_entry_price,
-            benchmark_entry_date  = entry_result.benchmark_entry_date,
-            benchmark_dates       = b_dates,
-            benchmark_close_map   = b_close_map,
-            round_trip_cost       = ROUND_TRIP_COST,
+            entry_price=entry_result.entry_price,
+            entry_date=entry_result.entry_date,
+            mae_mfe_start_date=entry_result.mae_mfe_start_date,
+            n_days=n_days,
+            stop_price=fs.stop_price,
+            target1=fs.target1,
+            stock_dates=stock_dates,
+            close_map=close_map,
+            high_map=high_map,
+            low_map=low_map,
+            benchmark_entry_price=entry_result.benchmark_entry_price,
+            benchmark_entry_date=entry_result.benchmark_entry_date,
+            benchmark_dates=b_dates,
+            benchmark_close_map=b_close_map,
+            round_trip_cost=ROUND_TRIP_COST,
         )
 
         if bundle.data_quality == ODQ_INCOMPLETE_HORIZON:
@@ -305,40 +377,57 @@ def _fill_horizons(row, entry_result, fs, stock_dates, close_map, high_map, low_
     return changed
 
 
-_20D_ATTRS = ["return_20d", "alpha_20d", "mae_20d", "mfe_20d",
-              "target_stop_outcome_20d", "target_hit_date_20d", "stop_hit_date_20d",
-              "outcome_data_quality_20d"]
-_60D_ATTRS = ["return_60d", "alpha_60d", "mae_60d", "mfe_60d",
-              "target_stop_outcome_60d", "target_hit_date_60d", "stop_hit_date_60d",
-              "outcome_data_quality_60d"]
+_20D_ATTRS = [
+    "return_20d",
+    "alpha_20d",
+    "mae_20d",
+    "mfe_20d",
+    "target_stop_outcome_20d",
+    "target_hit_date_20d",
+    "stop_hit_date_20d",
+    "outcome_data_quality_20d",
+]
+_60D_ATTRS = [
+    "return_60d",
+    "alpha_60d",
+    "mae_60d",
+    "mfe_60d",
+    "target_stop_outcome_60d",
+    "target_hit_date_60d",
+    "stop_hit_date_60d",
+    "outcome_data_quality_60d",
+]
 
 
 def _write_bundle(row, bundle, suffix: str) -> None:
-    setattr(row, f"return{suffix}",              bundle.return_pct)
-    setattr(row, f"alpha{suffix}",               bundle.alpha_pct)
-    setattr(row, f"mae{suffix}",                 bundle.mae_pct)
-    setattr(row, f"mfe{suffix}",                 bundle.mfe_pct)
+    setattr(row, f"return{suffix}", bundle.return_pct)
+    setattr(row, f"alpha{suffix}", bundle.alpha_pct)
+    setattr(row, f"mae{suffix}", bundle.mae_pct)
+    setattr(row, f"mfe{suffix}", bundle.mfe_pct)
     setattr(row, f"target_stop_outcome{suffix}", bundle.target_stop_outcome)
-    setattr(row, f"target_hit_date{suffix}",     bundle.target_hit_date)
-    setattr(row, f"stop_hit_date{suffix}",       bundle.stop_hit_date)
+    setattr(row, f"target_hit_date{suffix}", bundle.target_hit_date)
+    setattr(row, f"stop_hit_date{suffix}", bundle.stop_hit_date)
     setattr(row, f"outcome_data_quality{suffix}", bundle.data_quality)
 
 
 def _get_live_events(live_event_map: dict, stock_id: str, signal_date) -> list:
     from src.engines.outcome_evaluation import _LiveEvent
+
     raw = live_event_map.get((stock_id, signal_date), [])
     return [
         _LiveEvent(
-            observed_at      = e.observed_at,
-            current_price    = e.current_price,
-            quote_quality    = e.quote_quality,
-            quote_trade_date = e.quote_trade_date,
+            observed_at=e.observed_at,
+            current_price=e.current_price,
+            quote_quality=e.quote_quality,
+            quote_trade_date=e.quote_trade_date,
         )
         for e in raw
     ]
 
 
-def _get_live_rule_version(live_event_map: dict, stock_id: str, signal_date) -> Optional[str]:
+def _get_live_rule_version(
+    live_event_map: dict, stock_id: str, signal_date
+) -> Optional[str]:
     evs = live_event_map.get((stock_id, signal_date), [])
     for e in evs:
         if e.live_rule_version:
@@ -348,10 +437,12 @@ def _get_live_rule_version(live_event_map: dict, stock_id: str, signal_date) -> 
 
 # ── Batch data loaders ────────────────────────────────────────────────────────
 
+
 def _load_price_data(session, signals: list) -> dict:
     """Returns {stock_id: {dates, close, high, low, open}} for all signal stocks + 0050."""
-    from src.database import DailyPrice
     from datetime import timedelta
+
+    from src.database import DailyPrice
 
     all_sids = {fs.stock_id for fs in signals} | {"0050"}
     min_date = min(fs.execution_date for fs in signals if fs.execution_date)
@@ -359,8 +450,12 @@ def _load_price_data(session, signals: list) -> dict:
 
     rows = (
         session.query(
-            DailyPrice.stock_id, DailyPrice.date,
-            DailyPrice.close, DailyPrice.high, DailyPrice.low, DailyPrice.open,
+            DailyPrice.stock_id,
+            DailyPrice.date,
+            DailyPrice.close,
+            DailyPrice.high,
+            DailyPrice.low,
+            DailyPrice.open,
         )
         .filter(
             DailyPrice.stock_id.in_(all_sids),
@@ -376,10 +471,14 @@ def _load_price_data(session, signals: list) -> dict:
         if sid not in result:
             result[sid] = {"dates": [], "close": {}, "high": {}, "low": {}, "open": {}}
         result[sid]["dates"].append(d)
-        if c  is not None: result[sid]["close"][d] = c
-        if hi is not None: result[sid]["high"][d]  = hi
-        if lo is not None: result[sid]["low"][d]   = lo
-        if op is not None: result[sid]["open"][d]  = op
+        if c is not None:
+            result[sid]["close"][d] = c
+        if hi is not None:
+            result[sid]["high"][d] = hi
+        if lo is not None:
+            result[sid]["low"][d] = lo
+        if op is not None:
+            result[sid]["open"][d] = op
     return result
 
 
@@ -410,7 +509,7 @@ def _load_live_events(session, signals: list) -> dict:
     keys = [(fs.stock_id, fs.trade_date) for fs in signals]
     if not keys:
         return {}
-    all_sids   = list({k[0] for k in keys})
+    all_sids = list({k[0] for k in keys})
     all_sdates = list({k[1] for k in keys})
 
     rows = (
@@ -431,30 +530,45 @@ def _load_live_events(session, signals: list) -> dict:
     return result
 
 
-def _load_lifecycle_statuses(session, signals: list) -> dict:
-    """Returns {(stock_id, signal_date): lifecycle_status} from Recommendation table."""
-    from src.database import Recommendation
+def _load_cancel_events(session, signals: list) -> dict:
+    """
+    Returns {(stock_id, signal_date): [LiveExecutionEvent]} for CANCEL transitions.
 
-    keys = {(fs.stock_id, fs.trade_date) for fs in signals}
-    all_sids   = list({k[0] for k in keys})
+    CANCEL (stop-loss trigger) is the only event that constitutes formal lifecycle
+    invalidation. RAPID_DROP does NOT generate CANCEL events.
+    Used by outcome_service to determine temporal order vs ENTRY_RECONFIRMED (P0-1).
+    """
+    from src.database import LiveExecutionEvent
+    from src.engines.live_decision import LiveStatus
+
+    keys = [(fs.stock_id, fs.trade_date) for fs in signals]
+    if not keys:
+        return {}
+    all_sids = list({k[0] for k in keys})
     all_sdates = list({k[1] for k in keys})
 
     rows = (
-        session.query(
-            Recommendation.stock_id, Recommendation.date, Recommendation.lifecycle_status
-        )
+        session.query(LiveExecutionEvent)
         .filter(
-            Recommendation.stock_id.in_(all_sids),
-            Recommendation.date.in_(all_sdates),
+            LiveExecutionEvent.stock_id.in_(all_sids),
+            LiveExecutionEvent.signal_date.in_(all_sdates),
+            LiveExecutionEvent.live_status == LiveStatus.CANCEL.value,
         )
         .all()
     )
-    return {(r.stock_id, r.date): r.lifecycle_status for r in rows}
+    result: dict = {}
+    for r in rows:
+        key = (r.stock_id, r.signal_date)
+        if key not in result:
+            result[key] = []
+        result[key].append(r)
+    return result
 
 
 def _load_trading_calendar(session) -> list:
     """Return sorted list of all known TW trading dates (from DailyPrice for 0050)."""
     from src.database import DailyPrice
+
     rows = (
         session.query(DailyPrice.date)
         .filter(DailyPrice.stock_id == "0050")

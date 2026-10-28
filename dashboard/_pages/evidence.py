@@ -7,21 +7,28 @@ dashboard/_pages/evidence.py — foe_v1 前向執行結果證據儀表板
 
 import logging
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
 from src.engines.outcome_evaluation import (
-    FORWARD_OUTCOME_PROTOCOL_VERSION,
-    FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS,
-    PATH_BASELINE, PATH_AWARE,
-    EXEC_EXECUTED, EXEC_EXPIRED_BEFORE_ENTRY,
-    EXEC_INVALIDATED_BEFORE_ENTRY, EXEC_PENDING, EXEC_DATA_INSUFFICIENT,
     EXCL_NO_OVERNIGHT_DATA,
-    OUTCOME_T1_FIRST, OUTCOME_STOP_FIRST, OUTCOME_SAME_DAY_AMBIGUOUS,
-    ODQ_COMPLETE, ODQ_INCOMPLETE_HORIZON, ODQ_BENCHMARK_MISSING,
+    EXEC_DATA_INSUFFICIENT,
+    EXEC_EXECUTED,
+    EXEC_EXPIRED_BEFORE_ENTRY,
+    EXEC_INVALIDATED_BEFORE_ENTRY,
+    EXEC_PENDING,
+    FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS,
+    FORWARD_OUTCOME_PROTOCOL_VERSION,
+    ODQ_COMPLETE,
+    OUTCOME_SAME_DAY_AMBIGUOUS,
+    OUTCOME_STOP_FIRST,
+    OUTCOME_T1_FIRST,
+    PATH_AWARE,
+    PATH_BASELINE,
 )
 
 logger = logging.getLogger(__name__)
+
 
 # ── Sample-size labels (pre-registered in PRD §46) ────────────────────────────
 def _n_label(n: int) -> str:
@@ -40,54 +47,62 @@ def _fmt_n(n: int) -> str:
 
 def _warn_if_small(n: int, label: str = ""):
     if n < 10:
-        st.warning(f"{'[' + label + '] ' if label else ''}樣本不足（N={n}），僅供觀察，不具統計意義。")
+        st.warning(
+            f"{'[' + label + '] ' if label else ''}樣本不足（N={n}），僅供觀察，不具統計意義。"
+        )
     elif n < 30:
-        st.info(f"{'[' + label + '] ' if label else ''}初步觀察階段（N={n}），結論需謹慎。")
+        st.info(
+            f"{'[' + label + '] ' if label else ''}初步觀察階段（N={n}），結論需謹慎。"
+        )
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
+
 @st.cache_data(ttl=300)
 def _load_all_rows() -> pd.DataFrame:
     try:
+
         from src.database import ForwardOutcomeEvaluation, get_session
-        from sqlalchemy import text
+
         s = get_session()
         rows = s.query(ForwardOutcomeEvaluation).all()
         if not rows:
             return pd.DataFrame()
         records = []
         for r in rows:
-            records.append({
-                "id": r.id,
-                "forward_signal_id": r.forward_signal_id,
-                "stock_id": r.stock_id,
-                "signal_date": r.signal_date,
-                "path_type": r.path_type,
-                "overnight_rule_version": r.overnight_rule_version,
-                "overnight_risk_level": r.overnight_risk_level,
-                "entry_status": r.entry_status,
-                "entry_date": r.entry_date,
-                "entry_price": r.entry_price,
-                # 20D
-                "return_20d": r.return_20d,
-                "alpha_20d": r.alpha_20d,
-                "mae_20d": r.mae_20d,
-                "mfe_20d": r.mfe_20d,
-                "target_stop_outcome_20d": r.target_stop_outcome_20d,
-                "outcome_data_quality_20d": r.outcome_data_quality_20d,
-                "horizon_20d_matured_at": r.horizon_20d_matured_at,
-                # 60D
-                "return_60d": r.return_60d,
-                "alpha_60d": r.alpha_60d,
-                "mae_60d": r.mae_60d,
-                "mfe_60d": r.mfe_60d,
-                "target_stop_outcome_60d": r.target_stop_outcome_60d,
-                "outcome_data_quality_60d": r.outcome_data_quality_60d,
-                "horizon_60d_matured_at": r.horizon_60d_matured_at,
-                # exclusion
-                "exclusion_reason": r.exclusion_reason,
-            })
+            records.append(
+                {
+                    "id": r.id,
+                    "forward_signal_id": r.forward_signal_id,
+                    "stock_id": r.stock_id,
+                    "signal_date": r.signal_date,
+                    "path_type": r.path_type,
+                    "overnight_rule_version": r.overnight_rule_version,
+                    "overnight_risk_level": r.overnight_risk_level,
+                    "entry_status": r.entry_status,
+                    "entry_date": r.entry_date,
+                    "entry_price": r.entry_price,
+                    # 20D
+                    "return_20d": r.return_20d,
+                    "alpha_20d": r.alpha_20d,
+                    "mae_20d": r.mae_20d,
+                    "mfe_20d": r.mfe_20d,
+                    "target_stop_outcome_20d": r.target_stop_outcome_20d,
+                    "outcome_data_quality_20d": r.outcome_data_quality_20d,
+                    "horizon_20d_matured_at": r.horizon_20d_matured_at,
+                    # 60D
+                    "return_60d": r.return_60d,
+                    "alpha_60d": r.alpha_60d,
+                    "mae_60d": r.mae_60d,
+                    "mfe_60d": r.mfe_60d,
+                    "target_stop_outcome_60d": r.target_stop_outcome_60d,
+                    "outcome_data_quality_60d": r.outcome_data_quality_60d,
+                    "horizon_60d_matured_at": r.horizon_60d_matured_at,
+                    # exclusion
+                    "exclusion_reason": r.exclusion_reason,
+                }
+            )
         return pd.DataFrame(records)
     except Exception as e:
         logger.warning(f"[evidence] load failed: {e}")
@@ -105,13 +120,31 @@ def _versions() -> dict:
         LIVE_RULE_VERSION = "—"
     return {
         "outcome_protocol": FORWARD_OUTCOME_PROTOCOL_VERSION,
-        "overnight_rule":   OVERNIGHT_RULE_VERSION,
-        "live_rule":        LIVE_RULE_VERSION,
-        "aware_window":     FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS,
+        "overnight_rule": OVERNIGHT_RULE_VERSION,
+        "live_rule": LIVE_RULE_VERSION,
+        "aware_window": FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS,
     }
 
 
+# ── Formal eligibility (single source of truth) ───────────────────────────────
+
+
+def _formal_eligible(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    P1: Formal overnight cohort requires exclusion_reason IS NULL.
+
+    Rows with exclusion_reason = NO_OVERNIGHT_DATA (legacy signals) or any other
+    exclusion must NOT appear in formal overnight evidence sections (B / C).
+    Section A (Sample Health) still shows all rows including excluded ones.
+
+    SQL note: NULL != 'X' evaluates to NULL (not TRUE), so a != filter would
+    accidentally exclude eligible rows. Only IS NULL is correct here.
+    """
+    return df[df["exclusion_reason"].isna()].copy()
+
+
 # ── Helper: matured rows subset ────────────────────────────────────────────────
+
 
 def _matured_20d(df: pd.DataFrame) -> pd.DataFrame:
     return df[df["horizon_20d_matured_at"].notna()].copy()
@@ -128,6 +161,7 @@ def _resolved_stop_t1(df: pd.DataFrame, suffix: str) -> pd.DataFrame:
 
 # ── Section A: Sample Health ──────────────────────────────────────────────────
 
+
 def _section_sample_health(df: pd.DataFrame):
     st.subheader("A｜樣本健康狀況")
 
@@ -138,7 +172,7 @@ def _section_sample_health(df: pd.DataFrame):
 
     # Split by path
     baseline_df = df[df["path_type"] == PATH_BASELINE]
-    aware_df    = df[df["path_type"] == PATH_AWARE]
+    aware_df = df[df["path_type"] == PATH_AWARE]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Baseline 路徑 (總)", len(baseline_df))
@@ -149,10 +183,13 @@ def _section_sample_health(df: pd.DataFrame):
     st.markdown("**Baseline 路徑 — 按 overnight_risk_level**")
     b_counts = (
         baseline_df.groupby("overnight_risk_level", dropna=False)
-        .size().reset_index(name="筆數")
+        .size()
+        .reset_index(name="筆數")
         .sort_values("overnight_risk_level")
     )
-    b_counts["overnight_risk_level"] = b_counts["overnight_risk_level"].fillna("(無 Overnight 資料)")
+    b_counts["overnight_risk_level"] = b_counts["overnight_risk_level"].fillna(
+        "(無 Overnight 資料)"
+    )
     b_counts["樣本評估"] = b_counts["筆數"].apply(_n_label)
     st.dataframe(b_counts, use_container_width=True, hide_index=True)
 
@@ -179,6 +216,7 @@ def _section_sample_health(df: pd.DataFrame):
 
 # ── Section B: Overnight Risk Evidence ────────────────────────────────────────
 
+
 def _section_overnight_evidence(df: pd.DataFrame):
     st.subheader("B｜Overnight 風險分組證據（Baseline 路徑）")
     st.caption(
@@ -187,10 +225,12 @@ def _section_overnight_evidence(df: pd.DataFrame):
         "所有指標皆為 Baseline Next-Open 路徑（不含 Overnight-Aware 調整）。"
     )
 
-    baseline_m = _matured_20d(df[df["path_type"] == PATH_BASELINE])
+    # P1: formal overnight cohort — exclusion_reason IS NULL only
+    formal_baseline = _formal_eligible(df[df["path_type"] == PATH_BASELINE])
+    baseline_m = _matured_20d(formal_baseline)
 
     if baseline_m.empty:
-        st.info("尚無成熟的 20D Baseline 記錄。")
+        st.info("尚無成熟的 20D Baseline 記錄（Formal Overnight Cohort）。")
         return
 
     valid = baseline_m[baseline_m["outcome_data_quality_20d"] == ODQ_COMPLETE]
@@ -199,14 +239,11 @@ def _section_overnight_evidence(df: pd.DataFrame):
         st.info("尚無品質完整的 20D 記錄（ODQ_COMPLETE）。")
         return
 
+    # Only formal overnight risk levels — no legacy "(無資料)" group
     groups = []
-    for level in ["GREEN", "YELLOW", "RED", "UNKNOWN", None]:
-        if level is None:
-            sub = valid[valid["overnight_risk_level"].isna()]
-            label = "(無資料)"
-        else:
-            sub = valid[valid["overnight_risk_level"] == level]
-            label = level
+    for level in ["GREEN", "YELLOW", "RED", "UNKNOWN"]:
+        sub = valid[valid["overnight_risk_level"] == level]
+        label = level
 
         n = len(sub)
         if n == 0:
@@ -214,22 +251,33 @@ def _section_overnight_evidence(df: pd.DataFrame):
 
         resolved = _resolved_stop_t1(sub, "20d")
         t1_rate = (
-            (resolved["target_stop_outcome_20d"] == OUTCOME_T1_FIRST).sum() / len(resolved) * 100
-            if len(resolved) > 0 else None
+            (resolved["target_stop_outcome_20d"] == OUTCOME_T1_FIRST).sum()
+            / len(resolved)
+            * 100
+            if len(resolved) > 0
+            else None
         )
         ambig = (sub["target_stop_outcome_20d"] == OUTCOME_SAME_DAY_AMBIGUOUS).sum()
 
-        groups.append({
-            "overnight_risk": label,
-            "N": n,
-            "樣本評估": _n_label(n),
-            "20D Return (avg %)": round(sub["return_20d"].mean(), 2) if n >= 5 else "—",
-            "20D Alpha (avg %)":  round(sub["alpha_20d"].mean(), 2)  if n >= 5 else "—",
-            "20D MAE (avg %)":    round(sub["mae_20d"].mean(), 2)    if n >= 5 else "—",
-            "20D MFE (avg %)":    round(sub["mfe_20d"].mean(), 2)    if n >= 5 else "—",
-            "T1達成率 (解決案件)": f"{t1_rate:.1f}%" if t1_rate is not None and n >= 5 else "—",
-            "SAME_DAY_AMBIGUOUS": int(ambig),
-        })
+        groups.append(
+            {
+                "overnight_risk": label,
+                "N": n,
+                "樣本評估": _n_label(n),
+                "20D Return (avg %)": (
+                    round(sub["return_20d"].mean(), 2) if n >= 5 else "—"
+                ),
+                "20D Alpha (avg %)": (
+                    round(sub["alpha_20d"].mean(), 2) if n >= 5 else "—"
+                ),
+                "20D MAE (avg %)": round(sub["mae_20d"].mean(), 2) if n >= 5 else "—",
+                "20D MFE (avg %)": round(sub["mfe_20d"].mean(), 2) if n >= 5 else "—",
+                "T1達成率 (解決案件)": (
+                    f"{t1_rate:.1f}%" if t1_rate is not None and n >= 5 else "—"
+                ),
+                "SAME_DAY_AMBIGUOUS": int(ambig),
+            }
+        )
 
     if not groups:
         st.info("分組後無可顯示資料。")
@@ -250,6 +298,7 @@ def _section_overnight_evidence(df: pd.DataFrame):
 
 # ── Section C: Baseline vs Overnight-Aware ────────────────────────────────────
 
+
 def _section_path_comparison(df: pd.DataFrame):
     st.subheader("C｜Baseline vs Overnight-Aware（RED 同群組對比）")
     st.caption(
@@ -262,10 +311,19 @@ def _section_path_comparison(df: pd.DataFrame):
         "與 Baseline 的起算點不完全對稱。"
     )
 
-    base_m = _matured_20d(df[(df["path_type"] == PATH_BASELINE) &
-                              (df["overnight_risk_level"] == "RED")])
-    aware_m = _matured_20d(df[(df["path_type"] == PATH_AWARE) &
-                               (df["overnight_risk_level"] == "RED")])
+    formal = _formal_eligible(df)
+    base_m = _matured_20d(
+        formal[
+            (formal["path_type"] == PATH_BASELINE)
+            & (formal["overnight_risk_level"] == "RED")
+        ]
+    )
+    aware_m = _matured_20d(
+        formal[
+            (formal["path_type"] == PATH_AWARE)
+            & (formal["overnight_risk_level"] == "RED")
+        ]
+    )
 
     if base_m.empty or aware_m.empty:
         st.info("尚無成熟的 RED overnight 20D 記錄（Baseline 或 Aware 路徑）。")
@@ -278,8 +336,8 @@ def _section_path_comparison(df: pd.DataFrame):
         suffixes=("_base", "_aware"),
     )
     paired = merged[
-        (merged["outcome_data_quality_20d_base"] == ODQ_COMPLETE) &
-        (merged["outcome_data_quality_20d_aware"] == ODQ_COMPLETE)
+        (merged["outcome_data_quality_20d_base"] == ODQ_COMPLETE)
+        & (merged["outcome_data_quality_20d_aware"] == ODQ_COMPLETE)
     ]
 
     n = len(paired)
@@ -313,15 +371,20 @@ def _section_path_comparison(df: pd.DataFrame):
     # Execution outcome breakdown for aware
     if "entry_status" in aware_m.columns:
         st.markdown("**RED 訊號 Aware 路徑執行結果分布**")
-        aware_red = df[(df["path_type"] == PATH_AWARE) &
-                       (df["overnight_risk_level"] == "RED") &
-                       df["entry_status"].notna()]
+        aware_red = formal[
+            (formal["path_type"] == PATH_AWARE)
+            & (formal["overnight_risk_level"] == "RED")
+            & formal["entry_status"].notna()
+        ]
         if not aware_red.empty:
-            status_counts = aware_red.groupby("entry_status").size().reset_index(name="筆數")
+            status_counts = (
+                aware_red.groupby("entry_status").size().reset_index(name="筆數")
+            )
             st.dataframe(status_counts, use_container_width=True, hide_index=True)
 
 
 # ── Section D: Execution Rate ─────────────────────────────────────────────────
+
 
 def _section_execution_rate(df: pd.DataFrame):
     st.subheader("D｜Aware 路徑執行率（Not Executed 分析）")
@@ -347,9 +410,13 @@ def _section_execution_rate(df: pd.DataFrame):
         EXEC_PENDING: "⏳ PENDING（仍在窗口內）",
         EXEC_DATA_INSUFFICIENT: "❓ DATA_INSUFFICIENT",
     }
-    counts["說明"] = counts["entry_status"].map(status_label).fillna(counts["entry_status"])
+    counts["說明"] = (
+        counts["entry_status"].map(status_label).fillna(counts["entry_status"])
+    )
 
-    st.dataframe(counts[["說明", "筆數", "比例"]], use_container_width=True, hide_index=True)
+    st.dataframe(
+        counts[["說明", "筆數", "比例"]], use_container_width=True, hide_index=True
+    )
     st.caption(
         f"進場窗口：{FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS} 個交易日（Day1=execution_date, Day2, Day3）。"
         "EXPIRED_BEFORE_ENTRY 不代表策略失敗，代表 overnight 情況未轉 GREEN 而未進場。"
@@ -359,7 +426,8 @@ def _section_execution_rate(df: pd.DataFrame):
     st.markdown("**Aware 執行率 × overnight_risk_level**")
     cross = (
         aware_df.groupby(["overnight_risk_level", "entry_status"], dropna=False)
-        .size().unstack(fill_value=0)
+        .size()
+        .unstack(fill_value=0)
         .reset_index()
     )
     if not cross.empty:
@@ -368,6 +436,7 @@ def _section_execution_rate(df: pd.DataFrame):
 
 
 # ── Main page ─────────────────────────────────────────────────────────────────
+
 
 def page_evidence():
     st.title("🔒 前向執行結果證據")
@@ -408,7 +477,9 @@ MAE/MFE 計算、樣本納入標準）均於資料累積前登記。
     df = _load_all_rows()
 
     if df.empty:
-        st.info("資料庫尚無 ForwardOutcomeEvaluation 記錄。請執行 `run_daily.py` 累積 foe_v1 資料。")
+        st.info(
+            "資料庫尚無 ForwardOutcomeEvaluation 記錄。請執行 `run_daily.py` 累積 foe_v1 資料。"
+        )
         return
 
     st.divider()

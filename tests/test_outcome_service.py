@@ -8,7 +8,7 @@ Uses an in-memory SQLite database.
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,24 +18,29 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.database import Base, ForwardOutcomeEvaluation
-from src.services.outcome_service import (
-    _get_or_create_row,
-    _apply_entry,
-    _write_bundle,
-    _fill_horizons,
-)
 from src.engines.outcome_evaluation import (
-    EntryResult, HorizonBundle,
-    FORWARD_OUTCOME_PROTOCOL_VERSION,
-    PATH_BASELINE, PATH_AWARE,
-    EXEC_EXECUTED, EXEC_EXPIRED_BEFORE_ENTRY,
-    ODQ_COMPLETE, ODQ_INCOMPLETE_HORIZON, ODQ_BENCHMARK_MISSING,
-    OUTCOME_T1_FIRST, OUTCOME_NEITHER,
     EPT_BASELINE_NEXT_OPEN,
+    EXEC_EXECUTED,
+    EXEC_EXPIRED_BEFORE_ENTRY,
+    FORWARD_OUTCOME_PROTOCOL_VERSION,
+    ODQ_COMPLETE,
+    ODQ_INCOMPLETE_HORIZON,
+    OUTCOME_NEITHER,
+    OUTCOME_T1_FIRST,
+    PATH_AWARE,
+    PATH_BASELINE,
+    EntryResult,
+    HorizonBundle,
 )
-
+from src.services.outcome_service import (
+    _apply_entry,
+    _fill_horizons,
+    _get_or_create_row,
+    _write_bundle,
+)
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def engine():
@@ -52,81 +57,92 @@ def session(engine):
     s.close()
 
 
-def _make_row(session, signal_id=1, path=PATH_BASELINE, stock="2368",
-              sig_date=date(2026, 10, 21)):
+def _make_row(
+    session, signal_id=1, path=PATH_BASELINE, stock="2368", sig_date=date(2026, 10, 21)
+):
     """Helper: create a raw ForwardOutcomeEvaluation row via _get_or_create_row."""
     return _get_or_create_row(
         session,
-        forward_signal_id     = signal_id,
-        sig_eval_id           = None,
-        stock_id              = stock,
-        signal_date           = sig_date,
-        path_type             = path,
-        overnight_context_id  = None,
-        overnight_rule_version= None,
-        overnight_risk_level  = None,
-        live_rule             = None,
-        exclusion_reason      = None,
+        forward_signal_id=signal_id,
+        sig_eval_id=None,
+        stock_id=stock,
+        signal_date=sig_date,
+        path_type=path,
+        overnight_context_id=None,
+        overnight_rule_version=None,
+        overnight_risk_level=None,
+        live_rule=None,
+        exclusion_reason=None,
     )
 
 
 def _baseline_entry():
     return EntryResult(
-        entry_status              = EXEC_EXECUTED,
-        entry_date                = date(2026, 10, 22),
-        entry_timestamp           = None,
-        entry_price               = 198.0,
-        entry_price_type          = EPT_BASELINE_NEXT_OPEN,
-        entry_quote_quality       = None,
-        mae_mfe_start_date        = date(2026, 10, 22),
-        entry_day_excursion_excluded = False,
-        benchmark_entry_date      = date(2026, 10, 22),
-        benchmark_entry_price     = 175.0,
-        benchmark_entry_price_type= "NEXT_OPEN",
-        benchmark_timing_approximation = False,
-        exclusion_reason          = None,
+        entry_status=EXEC_EXECUTED,
+        entry_date=date(2026, 10, 22),
+        entry_timestamp=None,
+        entry_price=198.0,
+        entry_price_type=EPT_BASELINE_NEXT_OPEN,
+        entry_quote_quality=None,
+        mae_mfe_start_date=date(2026, 10, 22),
+        entry_day_excursion_excluded=False,
+        benchmark_entry_date=date(2026, 10, 22),
+        benchmark_entry_price=175.0,
+        benchmark_entry_price_type="NEXT_OPEN",
+        benchmark_timing_approximation=False,
+        exclusion_reason=None,
     )
 
 
 def _complete_bundle_20d():
     return HorizonBundle(
-        n_days                = 20,
-        return_pct            = 5.0,
-        alpha_pct             = 2.0,
-        mae_pct               = -3.0,
-        mfe_pct               = 8.0,
-        target_stop_outcome   = OUTCOME_T1_FIRST,
-        target_hit_date       = date(2026, 11, 15),
-        stop_hit_date         = None,
-        data_quality          = ODQ_COMPLETE,
+        n_days=20,
+        return_pct=5.0,
+        alpha_pct=2.0,
+        mae_pct=-3.0,
+        mfe_pct=8.0,
+        target_stop_outcome=OUTCOME_T1_FIRST,
+        target_hit_date=date(2026, 11, 15),
+        stop_hit_date=None,
+        data_quality=ODQ_COMPLETE,
     )
 
 
 def _incomplete_bundle():
     return HorizonBundle(
         n_days=20,
-        return_pct=None, alpha_pct=None, mae_pct=None, mfe_pct=None,
-        target_stop_outcome=None, target_hit_date=None, stop_hit_date=None,
+        return_pct=None,
+        alpha_pct=None,
+        mae_pct=None,
+        mfe_pct=None,
+        target_stop_outcome=None,
+        target_hit_date=None,
+        stop_hit_date=None,
         data_quality=ODQ_INCOMPLETE_HORIZON,
     )
 
 
 # ── Unique constraint ─────────────────────────────────────────────────────────
 
+
 class TestUniqueConstraint:
 
     def test_duplicate_signal_path_version_raises(self, session):
         row1 = ForwardOutcomeEvaluation(
-            forward_signal_id=1, stock_id="2368",
-            signal_date=date(2026, 10, 21), path_type=PATH_BASELINE,
+            forward_signal_id=1,
+            stock_id="2368",
+            signal_date=date(2026, 10, 21),
+            path_type=PATH_BASELINE,
             outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
         )
         session.add(row1)
         session.commit()
 
         row2 = ForwardOutcomeEvaluation(
-            forward_signal_id=1, stock_id="2368",
-            signal_date=date(2026, 10, 21), path_type=PATH_BASELINE,
+            forward_signal_id=1,
+            stock_id="2368",
+            signal_date=date(2026, 10, 21),
+            path_type=PATH_BASELINE,
             outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
         )
         session.add(row2)
@@ -135,13 +151,17 @@ class TestUniqueConstraint:
 
     def test_different_path_type_allowed(self, session):
         row1 = ForwardOutcomeEvaluation(
-            forward_signal_id=1, stock_id="2368",
-            signal_date=date(2026, 10, 21), path_type=PATH_BASELINE,
+            forward_signal_id=1,
+            stock_id="2368",
+            signal_date=date(2026, 10, 21),
+            path_type=PATH_BASELINE,
             outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
         )
         row2 = ForwardOutcomeEvaluation(
-            forward_signal_id=1, stock_id="2368",
-            signal_date=date(2026, 10, 21), path_type=PATH_AWARE,
+            forward_signal_id=1,
+            stock_id="2368",
+            signal_date=date(2026, 10, 21),
+            path_type=PATH_AWARE,
             outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
         )
         session.add_all([row1, row2])
@@ -151,6 +171,7 @@ class TestUniqueConstraint:
 
 
 # ── Upsert (_get_or_create_row) ───────────────────────────────────────────────
+
 
 class TestUpsertBehavior:
 
@@ -174,11 +195,16 @@ class TestUpsertBehavior:
         _make_row(session, signal_id=20, path=PATH_BASELINE)
         _make_row(session, signal_id=20, path=PATH_AWARE)
         session.flush()
-        count = session.query(ForwardOutcomeEvaluation).filter_by(forward_signal_id=20).count()
+        count = (
+            session.query(ForwardOutcomeEvaluation)
+            .filter_by(forward_signal_id=20)
+            .count()
+        )
         assert count == 2
 
 
 # ── Entry application ─────────────────────────────────────────────────────────
+
 
 class TestApplyEntry:
 
@@ -203,11 +229,17 @@ class TestApplyEntry:
         row = _make_row(session, path=PATH_AWARE)
         entry = EntryResult(
             entry_status=EXEC_EXPIRED_BEFORE_ENTRY,
-            entry_date=None, entry_timestamp=None, entry_price=None,
-            entry_price_type=None, entry_quote_quality=None,
-            mae_mfe_start_date=None, entry_day_excursion_excluded=None,
-            benchmark_entry_date=None, benchmark_entry_price=None,
-            benchmark_entry_price_type=None, benchmark_timing_approximation=None,
+            entry_date=None,
+            entry_timestamp=None,
+            entry_price=None,
+            entry_price_type=None,
+            entry_quote_quality=None,
+            mae_mfe_start_date=None,
+            entry_day_excursion_excluded=None,
+            benchmark_entry_date=None,
+            benchmark_entry_price=None,
+            benchmark_entry_price_type=None,
+            benchmark_timing_approximation=None,
             exclusion_reason=None,
         )
         changed = _apply_entry(row, entry)
@@ -217,6 +249,7 @@ class TestApplyEntry:
 
 
 # ── Bundle writing ────────────────────────────────────────────────────────────
+
 
 class TestWriteBundle:
 
@@ -238,8 +271,13 @@ class TestWriteBundle:
         row = _make_row(session)
         bundle = HorizonBundle(
             n_days=60,
-            return_pct=8.0, alpha_pct=3.0, mae_pct=-4.0, mfe_pct=12.0,
-            target_stop_outcome=OUTCOME_NEITHER, target_hit_date=None, stop_hit_date=None,
+            return_pct=8.0,
+            alpha_pct=3.0,
+            mae_pct=-4.0,
+            mfe_pct=12.0,
+            target_stop_outcome=OUTCOME_NEITHER,
+            target_hit_date=None,
+            stop_hit_date=None,
             data_quality=ODQ_COMPLETE,
         )
         _write_bundle(row, bundle, "_60d")
@@ -250,6 +288,7 @@ class TestWriteBundle:
 
 
 # ── Horizon-level immutability ────────────────────────────────────────────────
+
 
 class TestHorizonImmutability:
 
@@ -274,14 +313,20 @@ class TestHorizonImmutability:
         # Attempt fill with new bundle that returns 99.0 — must be ignored
         new_bundle = HorizonBundle(
             n_days=20,
-            return_pct=99.0, alpha_pct=99.0, mae_pct=0, mfe_pct=99.0,
+            return_pct=99.0,
+            alpha_pct=99.0,
+            mae_pct=0,
+            mfe_pct=99.0,
             target_stop_outcome=OUTCOME_T1_FIRST,
-            target_hit_date=date(2026, 11, 10), stop_hit_date=None,
+            target_hit_date=date(2026, 11, 10),
+            stop_hit_date=None,
             data_quality=ODQ_COMPLETE,
         )
 
-        with patch("src.engines.outcome_evaluation.compute_horizon_bundle",
-                   return_value=new_bundle):
+        with patch(
+            "src.engines.outcome_evaluation.compute_horizon_bundle",
+            return_value=new_bundle,
+        ):
             _fill_horizons(
                 row=row,
                 entry_result=_baseline_entry(),
@@ -303,8 +348,10 @@ class TestHorizonImmutability:
         _apply_entry(row, _baseline_entry())
         session.flush()
 
-        with patch("src.engines.outcome_evaluation.compute_horizon_bundle",
-                   return_value=_incomplete_bundle()):
+        with patch(
+            "src.engines.outcome_evaluation.compute_horizon_bundle",
+            return_value=_incomplete_bundle(),
+        ):
             _fill_horizons(
                 row=row,
                 entry_result=_baseline_entry(),
@@ -342,16 +389,158 @@ class TestHorizonImmutability:
 
 # ── Signal-level counts ────────────────────────────────────────────────────────
 
+
 class TestPersistenceCounts:
 
     def test_different_signals_are_independent(self, session):
         for sig_id in [1, 2, 3]:
             row = ForwardOutcomeEvaluation(
-                forward_signal_id=sig_id, stock_id="2368",
-                signal_date=date(2026, 10, 21), path_type=PATH_BASELINE,
+                forward_signal_id=sig_id,
+                stock_id="2368",
+                signal_date=date(2026, 10, 21),
+                path_type=PATH_BASELINE,
                 outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
             )
             session.add(row)
         session.commit()
 
         assert session.query(ForwardOutcomeEvaluation).count() == 3
+
+
+# ── P1: Formal cohort filter (exclusion_reason IS NULL) ──────────────────────
+
+
+class TestFormalCohortFilter:
+    """
+    P1 regression: get_foe_cohort must use exclusion_reason IS NULL.
+
+    SQL: NULL != 'NO_OVERNIGHT_DATA' evaluates to NULL (not TRUE),
+    so the old != filter would exclude eligible rows that have exclusion_reason=NULL.
+    """
+
+    def test_eligible_null_exclusion_included(self, session):
+        """Row with exclusion_reason=NULL must be returned by the IS NULL filter."""
+        row = ForwardOutcomeEvaluation(
+            forward_signal_id=50,
+            stock_id="2368",
+            signal_date=date(2026, 10, 21),
+            path_type=PATH_BASELINE,
+            outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
+            entry_status=EXEC_EXECUTED,
+            exclusion_reason=None,  # eligible row
+            overnight_risk_level="GREEN",
+            horizon_20d_matured_at=datetime(2026, 11, 20),
+        )
+        session.add(row)
+        session.commit()
+
+        results = (
+            session.query(ForwardOutcomeEvaluation)
+            .filter(
+                ForwardOutcomeEvaluation.exclusion_reason.is_(None),
+            )
+            .all()
+        )
+        assert len(results) == 1
+        assert results[0].overnight_risk_level == "GREEN"
+
+    def test_no_overnight_data_excluded_from_formal_cohort(self, session):
+        """Row with exclusion_reason=NO_OVERNIGHT_DATA must NOT appear in formal cohort."""
+        from src.engines.outcome_evaluation import EXCL_NO_OVERNIGHT_DATA
+
+        row = ForwardOutcomeEvaluation(
+            forward_signal_id=51,
+            stock_id="2368",
+            signal_date=date(2026, 10, 20),
+            path_type=PATH_BASELINE,
+            outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
+            entry_status=EXEC_EXECUTED,
+            exclusion_reason=EXCL_NO_OVERNIGHT_DATA,
+            overnight_risk_level=None,
+            horizon_20d_matured_at=datetime(2026, 11, 20),
+        )
+        session.add(row)
+        session.commit()
+
+        results = (
+            session.query(ForwardOutcomeEvaluation)
+            .filter(
+                ForwardOutcomeEvaluation.exclusion_reason.is_(None),
+            )
+            .all()
+        )
+        assert len(results) == 0
+
+    def test_neq_filter_incorrectly_excludes_null_rows(self, session):
+        """
+        Documents the SQL NULL != 'X' bug.
+        This test proves that a != filter on a nullable column misses NULL rows.
+        """
+        from src.engines.outcome_evaluation import EXCL_NO_OVERNIGHT_DATA
+
+        row = ForwardOutcomeEvaluation(
+            forward_signal_id=52,
+            stock_id="2368",
+            signal_date=date(2026, 10, 19),
+            path_type=PATH_BASELINE,
+            outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
+            entry_status=EXEC_EXECUTED,
+            exclusion_reason=None,  # eligible row
+        )
+        session.add(row)
+        session.commit()
+
+        # Buggy filter: NULL != 'NO_OVERNIGHT_DATA' → NULL (not TRUE) → row excluded
+        buggy = (
+            session.query(ForwardOutcomeEvaluation)
+            .filter(
+                ForwardOutcomeEvaluation.exclusion_reason != EXCL_NO_OVERNIGHT_DATA,
+            )
+            .all()
+        )
+        assert len(buggy) == 0  # documents the bug: eligible row silently dropped
+
+        # Correct filter: IS NULL
+        correct = (
+            session.query(ForwardOutcomeEvaluation)
+            .filter(
+                ForwardOutcomeEvaluation.exclusion_reason.is_(None),
+            )
+            .all()
+        )
+        assert len(correct) == 1
+
+    def test_mixed_eligible_and_excluded(self, session):
+        """Eligible (NULL) and excluded (NO_OVERNIGHT_DATA) rows are correctly separated."""
+        from src.engines.outcome_evaluation import EXCL_NO_OVERNIGHT_DATA
+
+        eligible = ForwardOutcomeEvaluation(
+            forward_signal_id=60,
+            stock_id="2368",
+            signal_date=date(2026, 10, 21),
+            path_type=PATH_BASELINE,
+            outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
+            entry_status=EXEC_EXECUTED,
+            exclusion_reason=None,
+        )
+        excluded = ForwardOutcomeEvaluation(
+            forward_signal_id=61,
+            stock_id="2368",
+            signal_date=date(2026, 10, 20),
+            path_type=PATH_BASELINE,
+            outcome_protocol_version=FORWARD_OUTCOME_PROTOCOL_VERSION,
+            entry_status=EXEC_EXECUTED,
+            exclusion_reason=EXCL_NO_OVERNIGHT_DATA,
+        )
+        session.add_all([eligible, excluded])
+        session.commit()
+
+        formal = (
+            session.query(ForwardOutcomeEvaluation)
+            .filter(
+                ForwardOutcomeEvaluation.exclusion_reason.is_(None),
+            )
+            .all()
+        )
+        assert len(formal) == 1
+        assert formal[0].forward_signal_id == 60
