@@ -115,24 +115,26 @@ jobs:
         run: |
           python - <<'PYEOF'
           import os, sys
-          from datetime import date, datetime
-          from zoneinfo import ZoneInfo
+          from datetime import date
           from sqlalchemy import create_engine, text
 
           url = os.environ["NEON_URL"].replace("postgres://", "postgresql://", 1)
           engine = create_engine(url, connect_args={"sslmode": "require"})
 
-          # 決定驗收目標日期（與 pipeline 執行日期一致）
+          # Resolve the effective trade date using the SAME logic as run_daily.py.
+          # If INPUT_DATE was explicitly provided, use it directly.
+          # Otherwise, call effective_trade_date() so post-run verification
+          # checks the same date the pipeline actually ran for.
           raw_date = os.environ.get("INPUT_DATE", "").strip()
           forced   = os.environ.get("INPUT_FORCE", "false").strip().lower() == "true"
+          sys.path.insert(0, ".")
           if raw_date:
               today = date.fromisoformat(raw_date)
           else:
-              # Use Asia/Taipei to match run_daily.py date resolution.
-              today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+              from src.core.trading_calendar import effective_trade_date as _etd
+              today = _etd()
 
-          # 判斷是否為交易日（repo 已 checkout，可直接 import）
-          sys.path.insert(0, ".")
+          # 判斷是否為交易日
           from src.core.trading_calendar import is_trading_day as _is_td
           is_trading = _is_td(today) or forced
 

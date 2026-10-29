@@ -14,8 +14,11 @@ Data quality gate constants live here so every consumer uses the same vocabulary
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from enum import Enum
+from zoneinfo import ZoneInfo
+
+_TAIPEI = ZoneInfo("Asia/Taipei")
 
 _log = logging.getLogger(__name__)
 _calendar_expiry_warned: set = set()  # years already warned; avoids log spam
@@ -170,3 +173,55 @@ def prev_trading_day(d: date) -> date | None:
 
 def next_trading_day(d: date) -> date | None:
     return _calendar.next_trading_day(d)
+
+
+# ── Data-availability threshold ───────────────────────────────────────────────
+# TWSE publishes official closing data around 15:00-15:30 Asia/Taipei.
+# The scheduled pipeline runs at 15:55 (safely after publication).
+# Before this hour:minute we consider today's data NOT yet available.
+_DATA_READY_HOUR: int   = 15
+_DATA_READY_MINUTE: int = 30
+
+
+def effective_trade_date(now_taipei: datetime | None = None) -> date:
+    """Return the most recent trading day whose closing data is expected available.
+
+    Rules:
+      1. If today (Asia/Taipei) is a confirmed trading day AND current time
+         is >= _DATA_READY_HOUR:_DATA_READY_MINUTE (15:30 Taiwan) → return today.
+      2. Otherwise → return the most recent completed trading day before today.
+
+    This prevents the pipeline from requesting data for a day the market hasn't
+    closed yet (e.g., running at 02:55 Taiwan time the following morning).
+
+    The DQ gate (PRICE_DATE_MISMATCH) provides a second layer of defence and
+    must never be weakened.
+
+    Args:
+        now_taipei: override for testing; defaults to datetime.now(Asia/Taipei).
+    """
+    if now_taipei is None:
+        now_taipei = datetime.now(_TAIPEI)
+
+    today = now_taipei.date()
+    is_today_trading = _calendar.is_trading_day(today)
+    data_ready = (
+        now_taipei.hour > _DATA_READY_HOUR
+        or (now_taipei.hour == _DATA_READY_HOUR
+            and now_taipei.minute >= _DATA_READY_MINUTE)
+    )
+
+    if is_today_trading and data_ready:
+        return today
+
+    # Fall back to the most recent confirmed trading day strictly before today.
+    prev = _calendar.prev_trading_day(today)
+    if prev is not None:
+        return prev
+
+    _log.warning(
+        "effective_trade_date: prev_trading_day(%s) not found within lookback. "
+        "Returning today as fallback.",
+        today,
+    )
+    return today

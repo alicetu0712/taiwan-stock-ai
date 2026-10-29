@@ -12,10 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
-
-_TAIPEI = ZoneInfo("Asia/Taipei")
+from datetime import date
 
 def main():
     parser = argparse.ArgumentParser(description="手動執行每日分析")
@@ -24,13 +21,19 @@ def main():
     parser.add_argument("--force",   action="store_true")
     args = parser.parse_args()
 
+    from src.core.trading_calendar import _calendar, MarketStatus, effective_trade_date
+
     if args.date:
+        # Explicit override: use the given date as-is.
+        # The DQ gate will catch stale data if the date is wrong.
         trade_date = date.fromisoformat(args.date)
     else:
-        # Use Asia/Taipei to avoid UTC/Taiwan date mismatch on night runs.
-        trade_date = datetime.now(_TAIPEI).date()
+        # No explicit date: derive the most recent trading day whose
+        # closing data is expected to be available (see effective_trade_date docstring).
+        # This prevents requesting data for a market day that hasn't closed yet
+        # (e.g., running at 02:55 Taiwan time).
+        trade_date = effective_trade_date()
 
-    from src.core.trading_calendar import _calendar, MarketStatus
     if not args.force and not args.dry_run and not _calendar.is_trading_day(trade_date):
         status = _calendar.market_status(trade_date)
         if status == MarketStatus.CALENDAR_UNKNOWN:
