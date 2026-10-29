@@ -205,12 +205,17 @@ def test_60d_return_none_when_insufficient():
 # ── 5. 0050 Alpha 正確 ───────────────────────────────────────
 
 def test_alpha_calculation():
-    """Alpha = stock_ret - benchmark_ret；成本在各自報酬中扣除，alpha 本身不再扣。"""
+    """Alpha = (stock_raw - cost) - benchmark_raw；僅股票側扣成本，0050 不扣。
+    與 foe_v1 outcome_evaluation.py 的計算方式一致。
+    """
     stock_ret = round(10.0 - ROUND_TRIP_COST, 2)   # 股票報酬（已扣成本）
-    bench_ret  = round(5.0 - ROUND_TRIP_COST, 2)    # 0050 報酬（已扣成本）
+    bench_ret  = round(5.0, 2)                       # 0050 報酬（不扣成本）
     alpha = round(stock_ret - bench_ret, 2)
-    # ROUND_TRIP_COST 對兩邊相消，alpha ≈ 5.0（允許浮點誤差 0.01）
-    assert abs(alpha - 5.0) <= 0.01
+    # alpha = (10 - 0.585) - 5 ≈ 4.415
+    # 允許兩次 round(..., 2) 的累積浮點誤差（最大 0.005）
+    assert abs(alpha - (10.0 - ROUND_TRIP_COST - 5.0)) <= 0.01
+    # 關鍵：alpha 必須小於 raw spread（5.0），等同 cost 只扣股票側
+    assert alpha < (10.0 - 5.0), "alpha 必須反映單側成本，不得等於 raw spread"
 
 
 def test_alpha_none_when_benchmark_missing():

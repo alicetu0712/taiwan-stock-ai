@@ -321,6 +321,11 @@ def _apply_entry(row, entry: "EntryResult") -> bool:
     return changed
 
 
+def _fill_horizons_guard(row, matured_attr: str) -> bool:
+    """Return True if the given horizon is already matured (immutable)."""
+    return getattr(row, matured_attr, None) is not None
+
+
 def _fill_horizons(
     row,
     entry_result,

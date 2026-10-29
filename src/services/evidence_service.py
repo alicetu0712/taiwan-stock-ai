@@ -102,6 +102,9 @@ def _compute_0050_regime_map(engine=None) -> dict:
 
 
 
+_ROUND_TRIP_COST_DECIMAL: float = 0.585 / 100  # 0.585% → decimal for raw return arithmetic
+
+
 def _compute_forward_alpha(
     observations: list,
     price_map: dict,
@@ -110,7 +113,13 @@ def _compute_forward_alpha(
     sorted_0050: list,
     n_days: int,
 ) -> list:
-    """Compute n_days forward alpha (stock − 0050) for each observation."""
+    """Compute n_days forward alpha (stock_net − benchmark_raw) for each observation.
+
+    Alpha formula (consistent with foe_v1 and forward_evidence):
+      alpha = (stock_raw − ROUND_TRIP_COST) − benchmark_raw
+    Stock bears the round-trip cost; 0050 does not.
+    Returns decimal fractions (multiply × 100 for %).
+    """
     results = []
     for stock_id, signal_date, entry_close in observations:
         if not entry_close or entry_close <= 0:
@@ -133,10 +142,10 @@ def _compute_forward_alpha(
         fwd_0050 = p0050_map.get(sorted_0050[target_0050])
         if not (fwd_stock and fwd_0050):
             continue
-        results.append(
-            (fwd_stock - entry_close) / entry_close
-            - (fwd_0050 - p0050_sig) / p0050_sig
-        )
+        stock_raw = (fwd_stock - entry_close) / entry_close
+        bench_raw = (fwd_0050 - p0050_sig) / p0050_sig
+        # stock 扣成本；benchmark 不扣成本
+        results.append(stock_raw - _ROUND_TRIP_COST_DECIMAL - bench_raw)
     return results
 
 
@@ -241,16 +250,19 @@ def research_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         n = len(alphas_20)
         tier_emoji, tier_label = _evidence_tier(n)
         return {
-            "n":          n,
-            "n_raw":      len(matching),
-            "n_dedup_20": len(dedup_m20),
-            "n_dedup_60": len(dedup_m60),
-            "setup_type": setup_type,
-            "regime":     market_regime,
-            "alpha_20d":  _alpha_stats(alphas_20),
-            "alpha_60d":  _alpha_stats(alphas_60),
-            "tier_emoji": tier_emoji,
-            "tier_label": tier_label,
+            "n":                    n,
+            "n_raw":                len(matching),
+            "n_dedup_20":           len(dedup_m20),
+            "n_dedup_60":           len(dedup_m60),
+            "setup_type":           setup_type,
+            "regime":               market_regime,
+            "alpha_20d":            _alpha_stats(alphas_20),
+            "alpha_60d":            _alpha_stats(alphas_60),
+            "tier_emoji":           tier_emoji,
+            "tier_label":           tier_label,
+            # Alpha 口徑標記（供跨路徑比較時確認一致性）
+            # stock_net_minus_bench_raw = (stock_raw − ROUND_TRIP_COST) − bench_raw
+            "alpha_cost_convention": "stock_net_minus_bench_raw",
         }
     except Exception as e:
         logger.warning(f"research_evidence({setup_type}, {market_regime}): {e}")
@@ -337,16 +349,18 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         n_m20 = len(alphas_20)
         tier_emoji, tier_label = _evidence_tier(n_m20)
         return {
-            "total_recorded": len(next_open),
-            "n_legacy":       n_legacy,
-            "n_raw_20d":      len(matured_20_raw),   # 去重前
-            "n_raw_60d":      len(matured_60_raw),
-            "matured_20d":    n_m20,                  # 去重後
-            "matured_60d":    len(alphas_60),
-            "alpha_20d":      _alpha_stats(alphas_20),
-            "alpha_60d":      _alpha_stats(alphas_60),
-            "tier_emoji":     tier_emoji,
-            "tier_label":     tier_label,
+            "total_recorded":        len(next_open),
+            "n_legacy":              n_legacy,
+            "n_raw_20d":             len(matured_20_raw),
+            "n_raw_60d":             len(matured_60_raw),
+            "matured_20d":           n_m20,
+            "matured_60d":           len(alphas_60),
+            "alpha_20d":             _alpha_stats(alphas_20),
+            "alpha_60d":             _alpha_stats(alphas_60),
+            "tier_emoji":            tier_emoji,
+            "tier_label":            tier_label,
+            # Alpha 口徑標記（與 research_evidence 一致，確保可直接比較）
+            "alpha_cost_convention": "stock_net_minus_bench_raw",
         }
     except Exception as e:
         logger.warning(f"forward_evidence({setup_type}, {market_regime}): {e}")

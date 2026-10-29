@@ -370,7 +370,8 @@ class ResearchBacktestService:
             exit_c = price_dict[sid].get(sdates[exit_idx])
             if not exit_c:
                 return None, None
-            return round((exit_c - open_price) / open_price * 100 - ROUND_TRIP_COST, 2), open_price
+            # Return raw % change; caller applies ROUND_TRIP_COST to stock side only
+            return round((exit_c - open_price) / open_price * 100, 2), open_price
 
         # ── 組裝資料列 ──────────────────────────────────────────
         rows = []
@@ -382,10 +383,13 @@ class ResearchBacktestService:
             if d not in price_dict.get(ar.stock_id, {}):
                 continue
 
-            ret20, _ = _fwd(ar.stock_id, d, 20)
-            ret60, _ = _fwd(ar.stock_id, d, 60)
-            b20,   _ = _fwd("0050",      d, 20)
-            b60,   _ = _fwd("0050",      d, 60)
+            ret20_raw, _ = _fwd(ar.stock_id, d, 20)
+            ret60_raw, _ = _fwd(ar.stock_id, d, 60)
+            b20, _       = _fwd("0050",      d, 20)   # benchmark: no cost
+            b60, _       = _fwd("0050",      d, 60)   # benchmark: no cost
+            # Alpha = (stock_net - cost) - benchmark_raw  (foe_v1 consistent)
+            ret20 = round(ret20_raw - ROUND_TRIP_COST, 2) if ret20_raw is not None else None
+            ret60 = round(ret60_raw - ROUND_TRIP_COST, 2) if ret60_raw is not None else None
 
             # MA60 gap（no look-ahead: 使用到 d 為止的 MA60）
             m60_info = ma60_map.get(ar.stock_id, {}).get(d)
@@ -967,7 +971,7 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                 if not fwd_0050:
                     return None, None
                 ret   = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
-                b_ret = round((fwd_0050 - _p0) / _p0 * 100 - ROUND_TRIP_COST, 2)
+                b_ret = round((fwd_0050 - _p0) / _p0 * 100, 2)  # benchmark: no cost
                 return ret, round(ret - b_ret, 2)
         else:
             # NEXT_OPEN records must never fall back to signal_close execution.
@@ -1006,7 +1010,7 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                 if not fwd_0050:
                     return None, None
                 ret   = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
-                b_ret = round((fwd_0050 - _p0) / _p0 * 100 - ROUND_TRIP_COST, 2)
+                b_ret = round((fwd_0050 - _p0) / _p0 * 100, 2)  # benchmark: no cost
                 return ret, round(ret - b_ret, 2)
 
         stop  = fs.stop_price

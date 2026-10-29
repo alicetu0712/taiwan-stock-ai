@@ -95,6 +95,8 @@ def main():
                         help="同步幾天內的資料（預設 90 天）")
     parser.add_argument("--skip-prices", action="store_true",
                         help="跳過 daily_prices 同步（每日自動同步用，加快速度）")
+    parser.add_argument("--all-prices", action="store_true",
+                        help="同步所有股票的 daily_prices（不限推薦股票；用於補齊歷史 gap）")
     args = parser.parse_args()
 
     neon_url = args.db_url or os.environ.get("NEON_URL", "")
@@ -129,10 +131,11 @@ def main():
         logger.error("請確認連線字串正確，且 Neon 專案仍在運作")
         sys.exit(1)
 
-    # 在 Neon 建立所有資料表（若尚未建立）
+    # 在 Neon 建立所有資料表並執行 migration（若尚未建立或欠缺欄位）
+    # init_db 包含 Base.metadata.create_all + 所有 _migrate_* column additions
     from src.database import Base, init_db, get_session
-    Base.metadata.create_all(neon_engine)
-    logger.info("✓ Neon 資料表確認完成")
+    init_db(neon_engine)
+    logger.info("✓ Neon 資料表及 schema migration 確認完成")
 
     from sqlalchemy.orm import sessionmaker
     LocalSession = sessionmaker(bind=local_engine)
@@ -150,10 +153,18 @@ def main():
 
     try:
         # stocks 表（不限日期）
+        # 用 raw SQL 查現有 stock_id 集合，避免 Neon stocks 表有本機 ORM 未定義的欄位
+        # (已知 Neon 有 ks_updated_at 欄位，本機 ORM 無此欄 → ORM query 會觸發 NoSuchColumnError)
+        from sqlalchemy import text as _text
+        existing_sids = {
+            row[0] for row in neon_s.execute(
+                _text("SELECT stock_id FROM stocks")
+            ).fetchall()
+        }
         stocks = local_s.query(Stock).all()
         s_ins = 0
         for row in stocks:
-            if not neon_s.query(Stock).filter_by(stock_id=row.stock_id).first():
+            if row.stock_id not in existing_sids:
                 neon_s.add(Stock(
                     stock_id=row.stock_id, name=row.name,
                     market=row.market, industry=row.industry,
@@ -173,16 +184,26 @@ def main():
                             key_fields=["date"], days=args.days)
 
         # position_monitor（全量同步：持倉狀態隨時更新，不限日期）
+        # 用 raw SQL 取得 Neon 現有 id set，避免 ORM SELECT 觸發 schema 欄位不符
+        from sqlalchemy import text as _text_pm, inspect as _inspect
+        existing_pm_ids = {
+            row[0] for row in neon_s.execute(
+                _text_pm("SELECT id FROM position_monitor")
+            ).fetchall()
+        }
         pm_rows = local_s.query(PositionMonitor).all()
         pm_ins = pm_upd = 0
-        from sqlalchemy import inspect as _inspect
         pm_cols = [c.key for c in _inspect(PositionMonitor).columns]
         for row in pm_rows:
-            existing = neon_s.query(PositionMonitor).filter_by(id=row.id).first()
-            if existing:
-                for col in pm_cols:
-                    if col != "id":
-                        setattr(existing, col, getattr(row, col))
+            if row.id in existing_pm_ids:
+                # UPDATE: 用 raw SQL 避開 Neon schema 欄位不符的 ORM SELECT
+                update_pairs = ", ".join(
+                    f"{col} = :{col}" for col in pm_cols if col != "id"
+                )
+                neon_s.execute(
+                    _text_pm(f"UPDATE position_monitor SET {update_pairs} WHERE id = :id"),
+                    {col: getattr(row, col) for col in pm_cols},
+                )
                 pm_upd += 1
             else:
                 kwargs = {col: getattr(row, col) for col in pm_cols}
@@ -192,32 +213,59 @@ def main():
         logger.info(f"  position_monitor: 新增 {pm_ins}，更新 {pm_upd}")
         total += pm_ins + pm_upd
 
-        # DailyPrice（僅同步曾被推薦過的股票，供回測頁使用；--skip-prices 時略過）
+        # DailyPrice
+        # --skip-prices: 略過（每日 Cron 用）
+        # --all-prices:  同步近 N 天所有股票（補齊歷史 gap 用）
+        # 預設:          僅同步推薦股票（原有行為）
         if args.skip_prices:
             logger.info("  daily_prices: 已跳過（--skip-prices）")
-        rec_stock_ids = {} if args.skip_prices else {r.stock_id for r in local_s.query(Recommendation).all()}
-        if rec_stock_ids:
+        else:
             from sqlalchemy import inspect as _inspect2
             dp_cols = [c.key for c in _inspect2(DailyPrice).columns]
-            dp_rows = (local_s.query(DailyPrice)
-                       .filter(DailyPrice.stock_id.in_(rec_stock_ids))
-                       .all())
-            dp_ins = dp_upd = 0
-            for row in dp_rows:
-                existing = neon_s.query(DailyPrice).filter_by(
-                    stock_id=row.stock_id, date=row.date).first()
-                if existing:
-                    for col in dp_cols:
-                        if col != "id":
-                            setattr(existing, col, getattr(row, col))
-                    dp_upd += 1
+            since_dp = date.today() - timedelta(days=args.days)
+            if args.all_prices:
+                dp_rows = (local_s.query(DailyPrice)
+                           .filter(DailyPrice.date >= since_dp)
+                           .all())
+                label = "全市場"
+            else:
+                rec_stock_ids = {r.stock_id for r in local_s.query(Recommendation).all()}
+                if not rec_stock_ids:
+                    logger.info("  daily_prices: 本機無推薦記錄，略過")
+                    dp_rows = []
+                    label = "推薦股票（無資料）"
                 else:
-                    kwargs = {col: getattr(row, col) for col in dp_cols}
-                    neon_s.add(DailyPrice(**kwargs))
-                    dp_ins += 1
-            neon_s.commit()
-            logger.info(f"  daily_prices (推薦股票): 新增 {dp_ins}，更新 {dp_upd}")
-            total += dp_ins + dp_upd
+                    dp_rows = (local_s.query(DailyPrice)
+                               .filter(DailyPrice.stock_id.in_(rec_stock_ids))
+                               .all())
+                    label = "推薦股票"
+            if dp_rows:
+                # 先取得 Neon 已有的 (stock_id, date) set，避免逐行 SELECT
+                from sqlalchemy import text as _text2
+                existing_keys = {
+                    (r[0], r[1]) for r in neon_s.execute(
+                        _text2(
+                            "SELECT stock_id, date FROM daily_prices "
+                            "WHERE date >= :since"
+                        ),
+                        {"since": since_dp},
+                    ).fetchall()
+                }
+                dp_ins = dp_upd = 0
+                for row in dp_rows:
+                    key = (row.stock_id, row.date)
+                    if key in existing_keys:
+                        dp_upd += 1  # skip update for price history (immutable)
+                    else:
+                        kwargs = {col: getattr(row, col) for col in dp_cols if col != "id"}
+                        neon_s.add(DailyPrice(**kwargs))
+                        dp_ins += 1
+                        if dp_ins % 5000 == 0:
+                            neon_s.commit()
+                            logger.info(f"  daily_prices: 已寫入 {dp_ins} 筆...")
+                neon_s.commit()
+                logger.info(f"  daily_prices ({label}): 新增 {dp_ins}，略過已有 {dp_upd}")
+                total += dp_ins
 
         # UserTrade（全量同步，確保本機與雲端一致）
         from sqlalchemy import inspect as _insp_ut

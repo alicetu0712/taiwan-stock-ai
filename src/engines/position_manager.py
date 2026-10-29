@@ -12,11 +12,20 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional
 
+import config as _cfg
+
 logger = logging.getLogger(__name__)
 
-# 依等級建議持倉比例
+# Shadow Trading integrity: 執行窗口最大允許落後天數。
+# 0 = pipeline 必須在 expected_execution_date 當日執行；隔天跑即視為錯過。
+# 若設 1，允許 1 個日曆日的 pipeline 延遲（但開盤價已為昨日資訊，非即時）。
+# 保守設為 0：只有 as_of_date == expected_execution_date 才能激活。
+MAX_EXECUTION_LAG_DAYS: int = 0
+
+# 依等級建議基準持倉比例（信心調整前）
+# 最終持倉受 config.POSITION_SIZING["max_single_pct"] 硬性上限約束
 POSITION_SIZE_MAP = {
-    "A+": 30.0,
+    "A+": 20.0,
     "A": 20.0,
     "B": 10.0,
     "C": 5.0,
@@ -45,6 +54,187 @@ class ExitSignal:
     detail: str
 
 
+def _compute_position_pct(rec_level: str, confidence: float) -> float:
+    """計算倉位百分比，上限強制為 config.max_single_pct。"""
+    max_single_pct = _cfg.POSITION_SIZING.get("max_single_pct", 20.0)
+    base_pct = POSITION_SIZE_MAP.get(rec_level, 10.0)
+    conf_adj = round((confidence - 80.0) / 10.0 * 5.0)
+    new_pct = max(base_pct - 10, min(base_pct + 10, base_pct + conf_adj))
+    return round(min(new_pct, max_single_pct), 0)
+
+
+def create_pending_position(
+    session,
+    stock_id: str,
+    stock_name: str,
+    signal_date: date,
+    expected_execution_date: date,
+    rec_level: str,
+    rec_score: float,
+    confidence: float,
+    target_price: float,
+    stop_loss_price: float,
+    target_pct: float,
+    stop_loss_pct: float,
+    ai_rationale: str = "",
+) -> bool:
+    """
+    Signal Date 建立 pending_open 持倉（無進場價）。
+
+    規則：
+      - 同一 stock_id 若已有 pending_open 或 active 持倉，跳過（防重複）。
+      - entry_price / date_entered 留 NULL，待 activate_pending_positions 填入。
+      - 不得使用 fallback close 或推估價格。
+    """
+    from src.database import PositionMonitor
+
+    already = (
+        session.query(PositionMonitor)
+        .filter(
+            PositionMonitor.stock_id == stock_id,
+            PositionMonitor.status.in_(["pending_open", "active"]),
+        )
+        .first()
+    )
+    if already:
+        logger.info(f"[Position] {stock_id} 已有 pending_open/active 持倉，跳過")
+        return False
+
+    new_pct = _compute_position_pct(rec_level, confidence)
+    logger.info(
+        f"[Position] {stock_id} 倉位：{new_pct:.0f}%（base={POSITION_SIZE_MAP.get(rec_level,10):.0f}%"
+        f", conf={confidence:.0f}%, cap={_cfg.POSITION_SIZING.get('max_single_pct',20):.0f}%）"
+    )
+
+    pos = PositionMonitor(
+        stock_id=stock_id,
+        stock_name=stock_name,
+        signal_date=signal_date,
+        expected_execution_date=expected_execution_date,
+        entry_price=None,        # 未執行，不得填收盤價
+        date_entered=None,       # 未執行
+        target_price=target_price,
+        stop_loss_price=stop_loss_price,
+        target_pct=target_pct,
+        stop_loss_pct=stop_loss_pct,
+        position_pct=new_pct,
+        ai_price_rationale=ai_rationale,
+        rec_level=rec_level,
+        rec_score=rec_score,
+        confidence=confidence,
+        status="pending_open",
+    )
+    session.add(pos)
+    session.flush()
+    logger.info(
+        f"[Position] pending_open 建立 {stock_id}（{stock_name}）"
+        f"  signal={signal_date}  exec_date={expected_execution_date}"
+        f"  目標 {target_price}（+{target_pct:.1f}%）停損 {stop_loss_price}（{stop_loss_pct:.1f}%）"
+    )
+    return True
+
+
+def activate_pending_positions(session, as_of_date: date) -> int:
+    """
+    Execution Date：將 pending_open 持倉轉為 active（填入真實 open 進場價）。
+
+    Shadow Trading 完整性規則：
+      - 僅當 as_of_date == expected_execution_date（或在 MAX_EXECUTION_LAG_DAYS 範圍內）才激活。
+      - 超過執行窗口 → status = 'missed_execution'（不得事後補成交）。
+      - 進場價必須來自 DailyPrice.open；open 不存在時，不激活、不 fallback。
+      - 檢查訊號有效性：is_valid=False 或 lifecycle 異常 → status = 'cancelled'。
+    Returns: 激活筆數
+    """
+    from src.database import DailyPrice, PositionMonitor, Recommendation
+
+    pending = (
+        session.query(PositionMonitor)
+        .filter(
+            PositionMonitor.status == "pending_open",
+            PositionMonitor.expected_execution_date.isnot(None),
+            PositionMonitor.expected_execution_date <= as_of_date,
+        )
+        .all()
+    )
+    if not pending:
+        return 0
+
+    activated = 0
+    for pos in pending:
+        exec_date = pos.expected_execution_date
+
+        # ── Shadow Trading 完整性：逾期執行窗口 ──────────────
+        lag = (as_of_date - exec_date).days
+        if lag > MAX_EXECUTION_LAG_DAYS:
+            pos.status = "missed_execution"
+            logger.warning(
+                f"[Position] {pos.stock_id} exec_date={exec_date} lag={lag}d "
+                f"> MAX_EXECUTION_LAG_DAYS={MAX_EXECUTION_LAG_DAYS} "
+                "→ missed_execution（不得事後補成交）"
+            )
+            continue
+
+        # ── 檢查訊號有效性（signal_date 對應的 Recommendation）──
+        if pos.signal_date:
+            rec = (
+                session.query(Recommendation)
+                .filter(
+                    Recommendation.stock_id == pos.stock_id,
+                    Recommendation.date == pos.signal_date,
+                )
+                .first()
+            )
+            if rec is not None:
+                if getattr(rec, "is_valid", True) is False:
+                    pos.status = "cancelled"
+                    logger.info(f"[Position] {pos.stock_id} signal is_valid=False → cancelled")
+                    continue
+                lifecycle = getattr(rec, "lifecycle_status", None)
+                if lifecycle is not None and lifecycle not in ("active", None, ""):
+                    pos.status = "cancelled"
+                    logger.info(
+                        f"[Position] {pos.stock_id} lifecycle={lifecycle} → cancelled"
+                    )
+                    continue
+
+        # ── 取真實開盤進場價 ──────────────────────────────────
+        dp = (
+            session.query(DailyPrice)
+            .filter(
+                DailyPrice.stock_id == pos.stock_id,
+                DailyPrice.date == exec_date,
+            )
+            .first()
+        )
+        if dp is None or dp.open is None or dp.open <= 0:
+            logger.info(
+                f"[Position] {pos.stock_id} exec_date={exec_date}"
+                " open 尚未取得，保持 pending_open"
+            )
+            continue
+
+        # ── 激活：NEXT_OPEN_HISTORICAL ─────────────────────────
+        # 注意：pipeline 在收盤後執行，open 為已知資訊（歷史模擬語意）。
+        # 欲取得 LIVE_PREOPEN_OBSERVED，需在盤前單獨建立 pre-open execution 流程。
+        now = datetime.utcnow()
+        pos.entry_price            = dp.open
+        pos.date_entered           = exec_date
+        pos.entry_source           = "NEXT_OPEN"
+        pos.shadow_trading_type    = "NEXT_OPEN_HISTORICAL"
+        pos.execution_recorded_at  = now
+        pos.status                 = "active"
+        pos.updated_at             = now
+        activated += 1
+        logger.info(
+            f"[Position] 激活 {pos.stock_id}  進場價 {dp.open:.2f}（{exec_date}）"
+            f" [NEXT_OPEN_HISTORICAL / pipeline 收盤後執行，open 已知]"
+        )
+
+    # flush all state changes (activated, missed_execution, cancelled)
+    session.flush()
+    return activated
+
+
 def open_position(
     session,
     stock_id: str,
@@ -60,33 +250,38 @@ def open_position(
     stop_loss_pct: float,
     ai_rationale: str = "",
 ) -> bool:
-    """建立新持倉。若同一股票已有 active 持倉則跳過。"""
+    """已確認進場價時直接建立 active 持倉（後向相容，供測試及手動呼叫）。
+
+    正式 Shadow Trading 流程請改用 create_pending_position + activate_pending_positions。
+    """
     from src.database import PositionMonitor
+
+    if entry_price is None or entry_price <= 0:
+        logger.warning(f"[Position] {stock_id} open_position 缺 entry_price，拒絕建倉")
+        return False
 
     existing = (
         session.query(PositionMonitor)
         .filter(
             PositionMonitor.stock_id == stock_id,
-            PositionMonitor.status == "active",
+            PositionMonitor.status.in_(["pending_open", "active"]),
         )
         .first()
     )
     if existing:
-        logger.info(f"[Position] {stock_id} 已有活躍持倉，跳過建立")
+        logger.info(f"[Position] {stock_id} 已有 pending_open/active 持倉，跳過建立")
         return False
 
-    # 動態倉位：依信心度在基礎倉位上下調整（±5%，以 80% 信心為基準）
-    # confidence 70% → -5%  | 80% → 基準  | 90% → +5%  | 最大單支 35%
+    max_single_pct = _cfg.POSITION_SIZING.get("max_single_pct", 20.0)
     base_pct = POSITION_SIZE_MAP.get(rec_level, 10.0)
-    conf_adj = round((confidence - 80.0) / 10.0 * 5.0)  # 每 10% 信心差異 = ±5%
+    conf_adj = round((confidence - 80.0) / 10.0 * 5.0)
     new_pct = max(base_pct - 10, min(base_pct + 10, base_pct + conf_adj))
-    new_pct = min(new_pct, 35.0)  # 單支上限 35%
+    new_pct = min(new_pct, max_single_pct)
     new_pct = round(new_pct, 0)
     logger.info(
         f"[Position] {stock_id} 倉位：{base_pct:.0f}%（基準）× 信心 {confidence:.0f}% → {new_pct:.0f}%"
     )
 
-    # 資金控管：確認剩餘資金足夠
     used_pct = (
         session.query(PositionMonitor)
         .filter(PositionMonitor.status == "active")
@@ -103,8 +298,11 @@ def open_position(
     pos = PositionMonitor(
         stock_id=stock_id,
         stock_name=stock_name,
+        signal_date=entry_date,
+        expected_execution_date=entry_date,
         date_entered=entry_date,
         entry_price=entry_price,
+        entry_source="CONFIRMED",
         target_price=target_price,
         stop_loss_price=stop_loss_price,
         target_pct=target_pct,

@@ -31,7 +31,9 @@ def main():
         sys.exit(0)
 
     from main import run_pipeline
-    run_pipeline(trade_date=trade_date, dry_run=args.dry_run)
+    result = run_pipeline(trade_date=trade_date, dry_run=args.dry_run)
+    if result is None:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

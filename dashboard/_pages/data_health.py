@@ -203,6 +203,29 @@ def _load_health_metrics() -> dict:
             "missing_dates": missing_fs_dates,
         }
 
+        # ── Pipeline 健康度 ─────────────────────────────────
+        from src.database import ForwardOutcomeEvaluation
+        # 有 execution_date 在昨天或更早但 execution_price 仍 NULL → 代表 pipeline 曾跳過該天
+        yesterday = date.today() - timedelta(days=1)
+        fs_unfilled_past = (
+            s.query(func.count(ForwardSignal.id))
+            .filter(
+                ForwardSignal.execution_price_type == "NEXT_OPEN",
+                ForwardSignal.execution_price.is_(None),
+                ForwardSignal.execution_date <= yesterday,
+            )
+            .scalar()
+        ) or 0
+        foe_total = s.query(func.count(ForwardOutcomeEvaluation.id)).scalar() or 0
+        foe_latest_matured = (
+            s.query(func.max(ForwardOutcomeEvaluation.horizon_20d_matured_at)).scalar()
+        )
+        metrics["pipeline_health"] = {
+            "fs_unfilled_past": fs_unfilled_past,
+            "foe_total":        foe_total,
+            "foe_latest_matured": foe_latest_matured,
+        }
+
         # ── 最近執行記錄（最新 5 筆）────────────────────────
         exec_logs = (
             s.query(ExecutionLog).order_by(ExecutionLog.date.desc()).limit(5).all()
@@ -450,6 +473,61 @@ def page_data_health() -> None:
         fs_detail,
         fs_extra,
     )
+
+    st.markdown("---")
+
+    # ── Pipeline 健康度 ─────────────────────────────────────
+    st.markdown("#### 🔧 Pipeline 健康度")
+    ph = m.get("pipeline_health", {})
+    ph_cols = st.columns(3)
+    with ph_cols[0]:
+        unfilled = ph.get("fs_unfilled_past", 0)
+        c = _RED if unfilled > 0 else _GREEN
+        st.markdown(
+            f'<div style="text-align:center;padding:10px;border-radius:8px;'
+            f'border:2px solid {c}20;background:{c}10">'
+            f'<div style="font-size:1.4rem;font-weight:800;color:{c}">{unfilled}</div>'
+            f'<div style="font-size:0.72rem;color:#666">未填入執行價<br>'
+            f'<small>(過去 NEXT_OPEN 訊號缺 execution_price)</small></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with ph_cols[1]:
+        foe_total = ph.get("foe_total", 0)
+        c = _GREEN if foe_total > 0 else _GRAY
+        st.markdown(
+            f'<div style="text-align:center;padding:10px;border-radius:8px;'
+            f'border:2px solid {c}20;background:{c}10">'
+            f'<div style="font-size:1.4rem;font-weight:800;color:{c}">{foe_total:,}</div>'
+            f'<div style="font-size:0.72rem;color:#666">foe_v1 已計算結果<br>'
+            f'<small>(Forward Outcome Evaluation 總筆數)</small></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with ph_cols[2]:
+        last_mat = ph.get("foe_latest_matured")
+        if last_mat is None:
+            mat_label = "尚無成熟訊號"
+            c = _GRAY
+        else:
+            mat_date = last_mat.date() if hasattr(last_mat, "date") else last_mat
+            mat_label = str(mat_date)
+            c = _GREEN
+        st.markdown(
+            f'<div style="text-align:center;padding:10px;border-radius:8px;'
+            f'border:2px solid {c}20;background:{c}10">'
+            f'<div style="font-size:1.1rem;font-weight:800;color:{c}">{mat_label}</div>'
+            f'<div style="font-size:0.72rem;color:#666">最新 foe_v1 成熟日<br>'
+            f'<small>(horizon_20td_matured_at)</small></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    if ph.get("fs_unfilled_past", 0) > 0:
+        st.warning(
+            f"⚠️  {ph['fs_unfilled_past']} 筆 NEXT_OPEN 訊號的 execution_date ≤ 昨日但 execution_price 仍為 NULL。"
+            "表示至少有一個交易日的 pipeline 未成功執行 `fill_execution_prices()`。"
+            "請手動補跑對應日期：`python scripts/run_daily.py --date YYYY-MM-DD`"
+        )
 
     st.markdown("---")
 

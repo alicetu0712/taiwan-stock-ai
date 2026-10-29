@@ -278,15 +278,41 @@ class ResearchStatus(Base):
 
 
 class PositionMonitor(Base):
-    """持倉追蹤（推薦後自動建立，手動或訊號觸發關倉）"""
+    """持倉追蹤（推薦後建立 pending_open，次日 open 確認後轉 active）
+
+    狀態機：
+      pending_open  → active（次日 open 取得）
+      pending_open  → cancelled（訊號失效：lifecycle != BUY / is_valid=False）
+      active        → closed_profit / closed_loss / closed_manual / closed_signal
+    """
 
     __tablename__ = "position_monitor"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     stock_id = Column(String(10), nullable=False)
     stock_name = Column(String(50))
-    date_entered = Column(Date, nullable=False)
-    entry_price = Column(Float, nullable=False)
+    # signal_date = 推薦當日（= ForwardSignal.trade_date）
+    signal_date = Column(Date)
+    # expected_execution_date = 次日交易日（signal_date + 1 trading day）
+    expected_execution_date = Column(Date)
+    # date_entered / entry_price 在 pending_open 時為 NULL；active 時必填
+    date_entered = Column(Date)
+    entry_price = Column(Float)
+    # entry_source 追溯進場語意：
+    #   NEXT_OPEN            = Shadow Trading（次日開盤進場，foe_v1 對齊）
+    #   SIGNAL_CLOSE_LEGACY  = Pre-fix 持倉（以訊號日收盤進場，不計入 Shadow Trading 績效）
+    #   CONFIRMED            = 手動/直接建倉
+    entry_source = Column(String(30))
+
+    # shadow_trading_type 區分執行時點語意：
+    #   NEXT_OPEN_HISTORICAL   = 收盤後 pipeline 執行，open 為已知資訊（回測等同）
+    #   LIVE_PREOPEN_OBSERVED  = 盤前 pipeline 執行，open 尚未揭示（須另建盤前流程才可用）
+    #   NULL                   = SIGNAL_CLOSE_LEGACY 舊資料（不計入 Shadow Trading 績效）
+    shadow_trading_type = Column(String(30))
+
+    # execution_recorded_at：activate_pending_positions 激活此持倉的時間戳記
+    # 對照 expected_execution_date 可計算激活延遲，供績效分類稽核使用
+    execution_recorded_at = Column(DateTime)
 
     # AI 設定的價格目標
     target_price = Column(Float)  # 目標價
@@ -302,8 +328,9 @@ class PositionMonitor(Base):
     confidence = Column(Float)
 
     # 狀態
-    status = Column(String(20), default="active")
-    # active / closed_profit / closed_loss / closed_manual / closed_signal
+    status = Column(String(20), default="pending_open")
+    # pending_open / active / cancelled
+    # closed_profit / closed_loss / closed_manual / closed_signal
 
     exit_date = Column(Date)
     exit_price = Column(Float)
@@ -706,6 +733,36 @@ def get_engine() -> Engine:
     return engine
 
 
+def _safe_add_cols(engine, table: str, new_cols: list) -> None:
+    """ALTER TABLE helper: each column runs in its own transaction.
+    Converts DATETIME → TIMESTAMP on PostgreSQL so the same migration list
+    works on both SQLite (local dev) and PostgreSQL (Railway / Neon).
+    """
+    from sqlalchemy import inspect, text
+
+    is_pg = engine.dialect.name == "postgresql"
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns(table)}
+    except Exception:
+        return
+    for col_name, col_type in new_cols:
+        if col_name in existing:
+            continue
+        if is_pg:
+            pg_type = (col_type
+                       .replace("DATETIME", "TIMESTAMP")
+                       .replace("DEFAULT 1", "DEFAULT TRUE")
+                       .replace("DEFAULT 0", "DEFAULT FALSE"))
+        else:
+            pg_type = col_type
+        with engine.begin() as conn:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {pg_type}"))
+                logger.info(f"{table}: added column {col_name}")
+            except Exception as exc:
+                logger.warning(f"{table} migration {col_name}: {exc}")
+
+
 def _migrate_stocks(engine) -> None:
     """stocks テーブルに新カラムを追加（自動マイグレーション）。"""
     from sqlalchemy import inspect, text
@@ -767,20 +824,7 @@ def _migrate_forward_signals(engine) -> None:
         ("execution_price",         "FLOAT"),
         ("execution_price_type",    "VARCHAR(20)"),
     ]
-    try:
-        existing = {c["name"] for c in inspect(engine).get_columns("forward_signals")}
-    except Exception:
-        return  # table might not exist yet; create_all handles it
-    with engine.begin() as conn:
-        for col_name, col_type in new_cols:
-            if col_name not in existing:
-                try:
-                    conn.execute(text(
-                        f"ALTER TABLE forward_signals ADD COLUMN {col_name} {col_type}"
-                    ))
-                    logger.info(f"forward_signals: added column {col_name}")
-                except Exception as exc:
-                    logger.warning(f"forward_signals migration {col_name}: {exc}")
+    _safe_add_cols(engine, "forward_signals", new_cols)
 
 
 def _migrate_recommendations(engine) -> None:
@@ -811,21 +855,31 @@ def _migrate_recommendations(engine) -> None:
         ("missing_data_factors", "VARCHAR(40)"),
         # Signal Lifecycle
         ("lifecycle_status", "VARCHAR(20) DEFAULT 'active'"),
+        # Scoring fields added in v7+
+        ("tier",             "VARCHAR(20)"),
+        ("stock_name",       "VARCHAR(60)"),
+        ("behavior_score",   "FLOAT"),
+        ("timing_score",     "FLOAT"),
+        ("total_score",      "FLOAT"),
+        ("score_change_5d",  "FLOAT"),
+        ("score_change_10d", "FLOAT"),
+        ("timing_change_5d", "FLOAT"),
+        ("behavior_change_5d", "FLOAT"),
     ]
-    try:
-        existing = {c["name"] for c in inspect(engine).get_columns("recommendations")}
-    except Exception:
-        return
-    with engine.begin() as conn:
-        for col_name, col_type in new_cols:
-            if col_name not in existing:
-                try:
-                    conn.execute(text(
-                        f"ALTER TABLE recommendations ADD COLUMN {col_name} {col_type}"
-                    ))
-                    logger.info(f"recommendations: added column {col_name}")
-                except Exception as exc:
-                    logger.warning(f"recommendations migration {col_name}: {exc}")
+    _safe_add_cols(engine, "recommendations", new_cols)
+
+
+def _migrate_analysis_results(engine) -> None:
+    """analysis_results に新カラムを追加（自動マイグレーション）。"""
+    from sqlalchemy import inspect, text
+
+    new_cols = [
+        ("score_change_5d",    "FLOAT"),
+        ("score_change_10d",   "FLOAT"),
+        ("timing_change_5d",   "FLOAT"),
+        ("behavior_change_5d", "FLOAT"),
+    ]
+    _safe_add_cols(engine, "analysis_results", new_cols)
 
 
 def _migrate_forward_outcome_evaluations(engine) -> None:
@@ -878,20 +932,7 @@ def _migrate_forward_outcome_evaluations(engine) -> None:
         ("created_at",                   "DATETIME"),
         ("updated_at",                   "DATETIME"),
     ]
-    try:
-        existing = {c["name"] for c in inspect(engine).get_columns("forward_outcome_evaluations")}
-    except Exception:
-        return  # table doesn't exist yet; create_all will handle it
-    with engine.begin() as conn:
-        for col_name, col_type in new_cols:
-            if col_name not in existing:
-                try:
-                    conn.execute(text(
-                        f"ALTER TABLE forward_outcome_evaluations ADD COLUMN {col_name} {col_type}"
-                    ))
-                    logger.info(f"forward_outcome_evaluations: added column {col_name}")
-                except Exception as exc:
-                    logger.warning(f"forward_outcome_evaluations migration {col_name}: {exc}")
+    _safe_add_cols(engine, "forward_outcome_evaluations", new_cols)
 
 
 def _migrate_overnight_market_contexts(engine) -> None:
@@ -935,16 +976,53 @@ def _migrate_decision_label_to_codes(engine) -> None:
                 logger.warning(f"decision_label migration {display!r}: {exc}")
 
 
+def _migrate_position_monitor(engine) -> None:
+    """position_monitor に pending execution カラムを追加（後方互換）。
+    既存 active 持倉は SIGNAL_CLOSE_LEGACY としてマークする。
+    """
+    from sqlalchemy import inspect, text
+
+    new_cols = [
+        ("signal_date",              "DATE"),
+        ("expected_execution_date",  "DATE"),
+        ("entry_source",             "VARCHAR(30)"),
+        ("shadow_trading_type",      "VARCHAR(30)"),
+        ("execution_recorded_at",    "DATETIME"),  # _safe_add_cols converts to TIMESTAMP on PG
+    ]
+    _safe_add_cols(engine, "position_monitor", new_cols)
+    # 將所有 entry_source IS NULL 的 active/closed 記錄標記為 SIGNAL_CLOSE_LEGACY
+    from sqlalchemy import inspect, text
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns("position_monitor")}
+        if "entry_source" in existing:
+            with engine.begin() as conn:
+                result = conn.execute(text(
+                    "UPDATE position_monitor "
+                    "SET entry_source = 'SIGNAL_CLOSE_LEGACY' "
+                    "WHERE entry_source IS NULL AND status IN "
+                    "('active','closed_profit','closed_loss','closed_manual','closed_signal')"
+                ))
+                if result.rowcount:
+                    logger.info(
+                        f"position_monitor: marked {result.rowcount} pre-fix records "
+                        "as SIGNAL_CLOSE_LEGACY"
+                    )
+    except Exception as exc:
+        logger.warning(f"position_monitor SIGNAL_CLOSE_LEGACY migration: {exc}")
+
+
 def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
     _migrate_stocks(engine)
+    _migrate_analysis_results(engine)
     _migrate_forward_signals(engine)
     _migrate_recommendations(engine)
     _migrate_decision_label_to_codes(engine)
     _migrate_overnight_market_contexts(engine)
     _migrate_forward_outcome_evaluations(engine)
+    _migrate_position_monitor(engine)
     from config import DATABASE_URL
 
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")

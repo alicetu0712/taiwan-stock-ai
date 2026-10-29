@@ -641,18 +641,18 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
         # ── Step 9b: 持倉管理 ────────────────────────────────
         logger.info("[Step 9b] Position management...")
         try:
+            from src.core.trading_calendar import next_trading_day as _next_td
             from src.engines import position_manager
             from src.engines.monte_carlo import simulate
 
-            # 建立新持倉（本日推薦）
-            price_map    = {r.stock_id: r.close for r in candidates if r.close}
-            timing_map   = {r.stock_id: r.timing_score   for r in candidates}
-            behavior_map = {r.stock_id: r.behavior_score for r in candidates}
-
+            # Step 9b-1: 本日推薦 → 建立 pending_open（無進場價）
+            # 進場價將在次日 activate_pending_positions 時從 DailyPrice.open 取得
             for rec in top_recs:
-                if not rec.close or rec.close <= 0:
+                exec_date = _next_td(trade_date)
+                if exec_date is None:
+                    logger.warning(f"[Step 9b] {rec.stock_id} 找不到次日交易日，跳過建倉")
                     continue
-                # AI 生成停損/目標價
+
                 hist_returns = []
                 try:
                     from src.database import DailyPrice
@@ -671,27 +671,38 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
                     pass
 
                 targets = analyst.generate_price_targets(rec, hist_returns)
-                opened  = position_manager.open_position(
-                    session        = session,
-                    stock_id       = rec.stock_id,
-                    stock_name     = rec.name,
-                    entry_date     = trade_date,
-                    entry_price    = rec.close,
-                    rec_level      = rec.rec_level,
-                    rec_score      = rec.total_score,
-                    confidence     = rec.confidence,
-                    target_price   = targets["target_price"],
-                    stop_loss_price= targets["stop_loss_price"],
-                    target_pct     = targets["target_pct"],
-                    stop_loss_pct  = targets["stop_loss_pct"],
-                    ai_rationale   = targets["rationale"],
+                created = position_manager.create_pending_position(
+                    session                  = session,
+                    stock_id                 = rec.stock_id,
+                    stock_name               = rec.name,
+                    signal_date              = trade_date,
+                    expected_execution_date  = exec_date,
+                    rec_level                = rec.rec_level,
+                    rec_score                = rec.total_score,
+                    confidence               = rec.confidence,
+                    target_price             = targets["target_price"],
+                    stop_loss_price          = targets["stop_loss_price"],
+                    target_pct               = targets["target_pct"],
+                    stop_loss_pct            = targets["stop_loss_pct"],
+                    ai_rationale             = targets["rationale"],
                 )
-                if opened:
+                if created:
                     logger.info(
-                        f"   建倉 {rec.name}（{rec.stock_id}）"
+                        f"   pending_open {rec.name}（{rec.stock_id}）"
+                        f" exec_date={exec_date}"
                         f" 目標 {targets['target_price']}（+{targets['target_pct']}%）"
                         f" 停損 {targets['stop_loss_price']}（{targets['stop_loss_pct']}%）"
                     )
+
+            # Step 9b-2: 激活昨日（或更早）pending_open（次日 open 已到位）
+            activated = position_manager.activate_pending_positions(session, trade_date)
+            if activated:
+                logger.info(f"[Step 9b] 激活 {activated} 筆 pending_open → active")
+
+            # 計算持倉所需的 price_map / timing_map / behavior_map（供出場訊號用）
+            price_map    = {r.stock_id: r.close for r in candidates if r.close}
+            timing_map   = {r.stock_id: r.timing_score   for r in candidates}
+            behavior_map = {r.stock_id: r.behavior_score for r in candidates}
 
             # 檢查現有持倉出場訊號
             signals = position_manager.check_exit_signals(
