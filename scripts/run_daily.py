@@ -12,7 +12,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+_TAIPEI = ZoneInfo("Asia/Taipei")
 
 def main():
     parser = argparse.ArgumentParser(description="手動執行每日分析")
@@ -21,13 +24,24 @@ def main():
     parser.add_argument("--force",   action="store_true")
     args = parser.parse_args()
 
-    trade_date = date.today()
     if args.date:
         trade_date = date.fromisoformat(args.date)
+    else:
+        # Use Asia/Taipei to avoid UTC/Taiwan date mismatch on night runs.
+        trade_date = datetime.now(_TAIPEI).date()
 
-    from src.scheduler import is_trading_day
-    if not args.force and not args.dry_run and not is_trading_day(trade_date):
-        print(f"{trade_date} 非台股交易日。使用 --force 可強制執行。")
+    from src.core.trading_calendar import _calendar, MarketStatus
+    if not args.force and not args.dry_run and not _calendar.is_trading_day(trade_date):
+        status = _calendar.market_status(trade_date)
+        if status == MarketStatus.CALENDAR_UNKNOWN:
+            print(
+                f"ERROR: {trade_date} → CALENDAR_UNKNOWN — "
+                f"trading_calendar.py _COVERED_YEARS does not include {trade_date.year}. "
+                "Update _TWSE_HOLIDAYS before this date or use --force to bypass.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(f"{trade_date} 非台股交易日（{status.value}）。使用 --force 可強制執行。")
         sys.exit(0)
 
     from main import run_pipeline

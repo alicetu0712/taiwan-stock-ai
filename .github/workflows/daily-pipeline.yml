@@ -115,7 +115,8 @@ jobs:
         run: |
           python - <<'PYEOF'
           import os, sys
-          from datetime import date
+          from datetime import date, datetime
+          from zoneinfo import ZoneInfo
           from sqlalchemy import create_engine, text
 
           url = os.environ["NEON_URL"].replace("postgres://", "postgresql://", 1)
@@ -127,7 +128,8 @@ jobs:
           if raw_date:
               today = date.fromisoformat(raw_date)
           else:
-              today = date.today()
+              # Use Asia/Taipei to match run_daily.py date resolution.
+              today = datetime.now(ZoneInfo("Asia/Taipei")).date()
 
           # 判斷是否為交易日（repo 已 checkout，可直接 import）
           sys.path.insert(0, ".")
@@ -181,7 +183,9 @@ jobs:
                   sys.exit(1)
 
               # ── forward_signals 寫入確認 ──────────────────────
-              # 有效訊號數可為 0（市場未達標），但需可追蹤
+              # n_fs=0 不代表失敗：gate L1-L3 正常拒絕或全 dedup 都回傳 0。
+              # 真正的寫入失敗（DB exception）會使 execution_log.status="failed"，
+              # 上方 status 檢查已攔截並 exit(1)。
               n_fs = conn.execute(text(
                   "SELECT COUNT(*) FROM forward_signals WHERE trade_date = :d"
               ), {"d": today}).scalar()
@@ -190,6 +194,12 @@ jobs:
                   "WHERE trade_date = :d AND is_valid = true"
               ), {"d": today}).scalar()
               print(f"forward_signals [{today}]: total={n_fs}  valid={n_fs_valid}")
+              if n_fs == 0 and is_trading:
+                  print(
+                      f"  NOTE: forward_signals=0 on trading day {today}. "
+                      "Normal if L1-L3 gate rejected or all signals already exist (dedup). "
+                      "Pipeline status=success confirms no DB write failure."
+                  )
 
               # ── Neon 最新資料日期確認（防 DB 指向錯誤）──────────
               latest_ar = conn.execute(text(

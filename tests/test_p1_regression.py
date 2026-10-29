@@ -10,6 +10,7 @@ tests/test_p1_regression.py — P1 Bug Regression Tests
   T6  各等級倉位不得超過 config max_single_pct
   T7  Research Alpha 不扣 benchmark 成本（與 foe_v1 一致）
   T8  ForwardOutcomeEvaluation 的 horizon 不可被覆寫（foe_v1 immutability）
+  T12 sync_table INSERT 不帶 explicit id（避免 PG sequence lag）
 """
 
 from datetime import date, datetime
@@ -731,3 +732,119 @@ class TestT11EntrySourceMarking:
             f"Expected SIGNAL_CLOSE_LEGACY, got '{pos.entry_source}'"
         )
         s.close()
+
+
+# ── T12: sync_table does not include explicit id in INSERT ────────────────────
+
+class TestT12SyncTableNoExplicitId:
+    """T12: sync_table INSERT 不帶 explicit id，防止 PG sequence lag。
+
+    製造兩個獨立的 in-memory SQLite DB，以 sync_table() 把 analysis_results
+    從 source sync 到 target，驗證 target 的自動分配 id ≠ source id。
+    SQLite AUTOINCREMENT 行為與 PG sequences 類比。
+    """
+
+    def test_inserted_row_gets_new_id(self, tmp_path):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from src.database import AnalysisResult, Base, init_db
+
+        src_engine = create_engine("sqlite:///:memory:")
+        dst_engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(src_engine)
+        Base.metadata.create_all(dst_engine)
+
+        SrcSession = sessionmaker(bind=src_engine)
+        DstSession = sessionmaker(bind=dst_engine)
+
+        src_s = SrcSession()
+        ar = AnalysisResult(
+            stock_id="2330",
+            date=date(2026, 10, 29),
+            total_score=75.0,
+            rec_level="A",
+        )
+        src_s.add(ar)
+        src_s.commit()
+        src_id = ar.id  # SQLite assigned (e.g. 1)
+        src_s.close()
+
+        # Insert a dummy row first in dst so its autoincrement starts at a different value
+        dst_s = DstSession()
+        dummy = AnalysisResult(
+            stock_id="0050",
+            date=date(2026, 10, 28),
+            total_score=50.0,
+            rec_level="B",
+        )
+        dst_s.add(dummy)
+        dst_s.commit()
+        dst_s.close()
+
+        # Now sync — this is the function under test
+        from scripts.sync_to_neon import sync_table
+        src_s2 = SrcSession()
+        dst_s2 = DstSession()
+        sync_table(src_s2, dst_s2, AnalysisResult, key_fields=["stock_id", "date"], days=365)
+        src_s2.close()
+
+        # Verify: the synced row has a dst-assigned id (not the src id)
+        dst_s3 = DstSession()
+        synced = (
+            dst_s3.query(AnalysisResult)
+            .filter_by(stock_id="2330", date=date(2026, 10, 29))
+            .first()
+        )
+        assert synced is not None, "sync_table failed to insert row into dst"
+        assert synced.id != src_id, (
+            f"sync_table must NOT carry over src id={src_id}. "
+            f"Got dst id={synced.id} — sequence lag bug re-introduced."
+        )
+        dst_s3.close()
+
+    def test_second_sync_does_not_duplicate(self, tmp_path):
+        """連跑兩次 sync_table，第二次應 UPDATE 而不是 INSERT。"""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from src.database import AnalysisResult, Base
+
+        src_engine = create_engine("sqlite:///:memory:")
+        dst_engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(src_engine)
+        Base.metadata.create_all(dst_engine)
+
+        SrcSession = sessionmaker(bind=src_engine)
+        DstSession = sessionmaker(bind=dst_engine)
+
+        src_s = SrcSession()
+        src_s.add(AnalysisResult(
+            stock_id="2330", date=date(2026, 10, 29),
+            total_score=75.0, rec_level="A",
+        ))
+        src_s.commit()
+        src_s.close()
+
+        from scripts.sync_to_neon import sync_table
+
+        # First sync
+        s1, d1 = SrcSession(), DstSession()
+        sync_table(s1, d1, AnalysisResult, key_fields=["stock_id", "date"], days=365)
+        s1.close(); d1.close()
+
+        # Second sync — must not create a duplicate
+        s2, d2 = SrcSession(), DstSession()
+        sync_table(s2, d2, AnalysisResult, key_fields=["stock_id", "date"], days=365)
+        s2.close(); d2.close()
+
+        dst_s = DstSession()
+        count = (
+            dst_s.query(AnalysisResult)
+            .filter_by(stock_id="2330", date=date(2026, 10, 29))
+            .count()
+        )
+        assert count == 1, (
+            f"Expected 1 row after two syncs, got {count} — duplicate INSERT on second sync."
+        )
+        dst_s.close()

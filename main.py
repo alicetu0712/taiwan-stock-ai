@@ -733,38 +733,49 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
         # ── Step 9c: 凍結 Forward Signal（cutoff 當日起，append-only）──
         from src.database import RESEARCH_CUTOFF_DATE
         if trade_date >= RESEARCH_CUTOFF_DATE:
-            try:
-                from src.database import AnalysisResult
-                from src.services.research_backtest_service import write_forward_signals
+            from src.database import AnalysisResult
+            from src.services.research_backtest_service import write_forward_signals
 
-                today_ars = (
-                    session.query(AnalysisResult)
-                    .filter(AnalysisResult.date == trade_date)
-                    .all()
+            today_ars = (
+                session.query(AnalysisResult)
+                .filter(AnalysisResult.date == trade_date)
+                .all()
+            )
+            n_ars = len(today_ars)
+
+            # DB write failures propagate to the outer except → pipeline returns None → exit(1).
+            # Gate rejections (L1-L3) already log their own WARNING and return 0 — not an error.
+            inserted = write_forward_signals(session, trade_date, today_ars)
+
+            if n_ars == 0:
+                logger.info("[Step 9c] 無今日 AnalysisResult，Forward Signal 凍結跳過")
+            elif inserted == 0:
+                logger.info(
+                    f"[Step 9c] Forward signal 凍結：0 新增 / {n_ars} AR。"
+                    "可能原因：gate L1–L3 拒絕（見上方 WARNING）或所有訊號已存在（dedup）。"
                 )
-                inserted = write_forward_signals(session, trade_date, today_ars)
+            else:
                 logger.info(
                     f"[Step 9c] Forward signal 凍結完成："
-                    f"{inserted} 筆新增，{len(today_ars) - inserted} 筆已存在（skip）"
+                    f"{inserted} 筆新增，{n_ars - inserted} 筆已存在（skip）"
                 )
-                # 填入執行日開盤進場價（NEXT_OPEN）
-                try:
-                    from src.services.research_backtest_service import fill_execution_prices
-                    exec_filled = fill_execution_prices(session, trade_date)
-                    if exec_filled:
-                        logger.info(f"[Step 9c] 執行價回填：{exec_filled} 筆更新")
-                except Exception as fe:
-                    logger.warning(f"[Step 9c] 執行價回填失敗：{fe}")
-                # 回填已成熟信號的績效
-                try:
-                    from src.services.research_backtest_service import compute_signal_outcomes
-                    outcomes_updated = compute_signal_outcomes(session, trade_date)
-                    if outcomes_updated:
-                        logger.info(f"[Step 9c] 績效回填：{outcomes_updated} 筆更新")
-                except Exception as oe:
-                    logger.warning(f"[Step 9c] 績效回填失敗：{oe}")
-            except Exception as e:
-                logger.warning(f"[Step 9c] Forward signal 凍結失敗（不影響主流程）：{e}")
+
+            # 填入執行日開盤進場價（NEXT_OPEN）—— 次日回填，可重跑
+            try:
+                from src.services.research_backtest_service import fill_execution_prices
+                exec_filled = fill_execution_prices(session, trade_date)
+                if exec_filled:
+                    logger.info(f"[Step 9c] 執行價回填：{exec_filled} 筆更新")
+            except Exception as fe:
+                logger.warning(f"[Step 9c] 執行價回填失敗（recoverable next run）：{fe}")
+            # 回填已成熟信號的績效
+            try:
+                from src.services.research_backtest_service import compute_signal_outcomes
+                outcomes_updated = compute_signal_outcomes(session, trade_date)
+                if outcomes_updated:
+                    logger.info(f"[Step 9c] 績效回填：{outcomes_updated} 筆更新")
+            except Exception as oe:
+                logger.warning(f"[Step 9c] 績效回填失敗（recoverable next run）：{oe}")
 
         # ── Step 9d: foe_v1 前向執行結果評估 ─────────────────
         try:

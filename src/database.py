@@ -760,7 +760,7 @@ def _safe_add_cols(engine, table: str, new_cols: list) -> None:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {pg_type}"))
                 logger.info(f"{table}: added column {col_name}")
             except Exception as exc:
-                logger.warning(f"{table} migration {col_name}: {exc}")
+                logger.error(f"{table} migration {col_name} FAILED: {exc}")
 
 
 def _migrate_stocks(engine) -> None:

@@ -13,8 +13,12 @@ Update _TWSE_HOLIDAYS when TWSE releases next year's schedule (usually Oct-Nov).
 Data quality gate constants live here so every consumer uses the same vocabulary.
 """
 
+import logging
 from datetime import date, timedelta
 from enum import Enum
+
+_log = logging.getLogger(__name__)
+_calendar_expiry_warned: set = set()  # years already warned; avoids log spam
 
 
 class MarketStatus(str, Enum):
@@ -87,7 +91,17 @@ class TaiwanTradingCalendar:
                 return MarketStatus.HOLIDAY
             return MarketStatus.TRADING_DAY
 
-        # 3. Year not covered — fall back to weekday check with UNKNOWN flag
+        # 3. Year not covered — emit a one-time WARNING then return UNKNOWN (fail-closed).
+        if d.year not in _calendar_expiry_warned:
+            _calendar_expiry_warned.add(d.year)
+            max_covered = max(_COVERED_YEARS) if _COVERED_YEARS else 0
+            _log.warning(
+                "CALENDAR_UNKNOWN for year %d — _COVERED_YEARS only extends to %d. "
+                "Add %d TWSE holidays to _TWSE_HOLIDAYS in trading_calendar.py "
+                "(TWSE publishes next year's schedule around Oct-Nov). "
+                "Pipeline will skip all days in %d until updated. Use --force to bypass.",
+                d.year, max_covered, d.year, d.year,
+            )
         return MarketStatus.CALENDAR_UNKNOWN
 
     def is_trading_day(self, d: date) -> bool:

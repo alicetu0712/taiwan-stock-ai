@@ -77,14 +77,50 @@ def sync_table(local_session, neon_session, Model, key_fields: list, days: int =
                     setattr(existing, col, getattr(row, col))
             updated += 1
         else:
-            # 帶入本機 id，避免 Neon sequence 與已有記錄衝突
-            kwargs = {col: getattr(row, col) for col in all_cols}
+            # Exclude 'id' — let Neon's sequence assign the key.
+            # key_fields (stock_id+date etc.) handle dedup on subsequent syncs.
+            # _reset_pg_sequences() called after all syncs prevents UniqueViolation.
+            kwargs = {col: getattr(row, col) for col in all_cols if col != "id"}
             neon_session.add(Model(**kwargs))
             inserted += 1
 
     neon_session.commit()
     logger.info(f"  {Model.__tablename__}: 新增 {inserted}，更新 {updated}")
     return inserted + updated
+
+
+def _reset_pg_sequences(engine) -> None:
+    """Advance PG sequences past MAX(id) for all synced tables.
+
+    Prevents UniqueViolation when the next auto-increment INSERT follows
+    a sync that inserted rows with explicit IDs.
+    """
+    from sqlalchemy import text
+
+    seq_map = [
+        ("analysis_results",            "analysis_results_id_seq"),
+        ("recommendations",             "recommendations_id_seq"),
+        ("forward_signals",             "forward_signals_id_seq"),
+        ("position_monitor",            "position_monitor_id_seq"),
+        ("execution_logs",              "execution_logs_id_seq"),
+        ("forward_outcome_evaluations", "forward_outcome_evaluations_id_seq"),
+        ("user_trades",                 "user_trades_id_seq"),
+        ("daily_reports",               "daily_reports_id_seq"),
+    ]
+    with engine.connect() as conn:
+        for table, seq in seq_map:
+            try:
+                max_id = conn.execute(
+                    text(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
+                ).scalar()
+                conn.execute(
+                    text(f"SELECT setval(:seq, GREATEST(:max_id, 1), true)"),
+                    {"seq": seq, "max_id": max_id},
+                )
+                conn.commit()
+                logger.debug(f"  sequence {seq}: reset to {max_id}")
+            except Exception as exc:
+                logger.warning(f"  sequence reset {seq}: {exc}")
 
 
 def main():
@@ -206,6 +242,8 @@ def main():
                 )
                 pm_upd += 1
             else:
+                # Keep explicit id: dedup uses 'row.id in existing_pm_ids' as match key.
+                # _reset_pg_sequences() fixes sequence drift after sync completes.
                 kwargs = {col: getattr(row, col) for col in pm_cols}
                 neon_s.add(PositionMonitor(**kwargs))
                 pm_ins += 1
@@ -310,6 +348,12 @@ def main():
     finally:
         local_s.close()
         neon_s.close()
+
+    # Reset PG sequences so the next auto-increment INSERT doesn't conflict
+    # with rows that were inserted with explicit IDs during this sync.
+    if neon_engine.dialect.name == "postgresql":
+        _reset_pg_sequences(neon_engine)
+        logger.info("  sequences: reset complete")
 
     logger.info("=" * 60)
     logger.info(f"✅ 同步完成！共 {total} 筆資料推到 Neon")
