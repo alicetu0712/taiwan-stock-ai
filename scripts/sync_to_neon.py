@@ -94,6 +94,10 @@ def _reset_pg_sequences(engine) -> None:
 
     Prevents UniqueViolation when the next auto-increment INSERT follows
     a sync that inserted rows with explicit IDs.
+
+    Raises RuntimeError if any existing table's sequence cannot be reset —
+    leaving a broken sequence is worse than failing loudly.
+    Tables that do not yet exist are skipped silently (fresh DB scenario).
     """
     from sqlalchemy import text
 
@@ -107,20 +111,38 @@ def _reset_pg_sequences(engine) -> None:
         ("user_trades",                 "user_trades_id_seq"),
         ("daily_reports",               "daily_reports_id_seq"),
     ]
+    failures: list[str] = []
     with engine.connect() as conn:
+        # Collect existing tables in one query rather than per-table try/except.
+        existing_tables: set[str] = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+            ).fetchall()
+        }
         for table, seq in seq_map:
+            if table not in existing_tables:
+                logger.debug(f"  sequence reset skipped: {table} not yet created")
+                continue
             try:
                 max_id = conn.execute(
                     text(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
                 ).scalar()
                 conn.execute(
-                    text(f"SELECT setval(:seq, GREATEST(:max_id, 1), true)"),
+                    text("SELECT setval(:seq, GREATEST(:max_id, 1), true)"),
                     {"seq": seq, "max_id": max_id},
                 )
                 conn.commit()
-                logger.debug(f"  sequence {seq}: reset to {max_id}")
+                logger.debug(f"  sequence {seq}: advanced to {max_id}")
             except Exception as exc:
-                logger.warning(f"  sequence reset {seq}: {exc}")
+                failures.append(f"{seq}: {exc}")
+
+    if failures:
+        raise RuntimeError(
+            "Sequence reset FAILED for the following sequences — "
+            "next pipeline INSERT may hit UniqueViolation:\n  "
+            + "\n  ".join(failures)
+        )
 
 
 def main():
@@ -352,8 +374,12 @@ def main():
     # Reset PG sequences so the next auto-increment INSERT doesn't conflict
     # with rows that were inserted with explicit IDs during this sync.
     if neon_engine.dialect.name == "postgresql":
-        _reset_pg_sequences(neon_engine)
-        logger.info("  sequences: reset complete")
+        try:
+            _reset_pg_sequences(neon_engine)
+            logger.info("  sequences: reset complete")
+        except RuntimeError as seq_err:
+            logger.error(f"SYNC INCOMPLETE — sequence reset failed: {seq_err}")
+            sys.exit(1)
 
     logger.info("=" * 60)
     logger.info(f"✅ 同步完成！共 {total} 筆資料推到 Neon")

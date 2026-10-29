@@ -525,6 +525,14 @@ class ResearchBacktestService:
 
 # ── Forward Signal 工具函數（供 main.py 呼叫）────────────────
 
+# Populated by write_forward_signals on every call.
+# main.py reads this after the call to determine the outcome state and
+# store a structured note in execution_log.errors.
+# Keys: status (str), inserted (int), n_ars (int), gate_rejected_by (str|None),
+#       gate_detail (str|None), n_existing (int), l4_skipped (int)
+_last_fs_diagnosis: dict = {}
+
+
 def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     """
     凍結當日 analysis_results 為 forward_signals。
@@ -550,18 +558,27 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     from datetime import timedelta
     from config import FORWARD_MARKET_COVERAGE
 
+    global _last_fs_diagnosis
+    _last_fs_diagnosis = {}
+
     _min_count = FORWARD_MARKET_COVERAGE["min_count"]
     _min_ratio = FORWARD_MARKET_COVERAGE.get("min_ratio")  # None = disabled
 
+    n_ars = len(today_ars)
     if not today_ars:
+        _last_fs_diagnosis = {"status": "no_ars", "inserted": 0, "n_ars": 0,
+                               "gate_rejected_by": None, "gate_detail": None,
+                               "n_existing": 0, "l4_skipped": 0}
         return 0
 
     # ── L1: Trading Calendar ─────────────────────────────────────────
     cal = TaiwanTradingCalendar()
     if not cal.is_trading_day(trade_date):
-        logger.warning(
-            f"[write_forward_signals] REJECTED L1: {trade_date} 非交易日"
-        )
+        detail = f"{trade_date} 非交易日"
+        logger.warning(f"[write_forward_signals] REJECTED L1: {detail}")
+        _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
+                               "gate_rejected_by": "L1", "gate_detail": detail,
+                               "n_existing": 0, "l4_skipped": 0}
         return 0
 
     # ── L2: Market Coverage ──────────────────────────────────────────
@@ -573,11 +590,14 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
 
     # L2a: absolute floor
     if market_count < _min_count:
+        detail = f"市場資料不足 ({market_count} 檔 < 絕對下限 {_min_count})"
         logger.warning(
-            f"[write_forward_signals] REJECTED L2a: {trade_date} 市場資料不足 "
-            f"({market_count} 檔 < 絕對下限 {_min_count})，"
+            f"[write_forward_signals] REJECTED L2a: {trade_date} {detail}，"
             f"疑似資料抓取失敗，不寫入 Forward signals"
         )
+        _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
+                               "gate_rejected_by": "L2a", "gate_detail": detail,
+                               "n_existing": 0, "l4_skipped": 0}
         return 0
 
     # L2b: coverage ratio (disabled when min_ratio is None)
@@ -589,11 +609,16 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         ) or 1
         actual_ratio = market_count / expected_universe
         if actual_ratio < _min_ratio:
+            detail = (f"市場覆蓋率不足 "
+                      f"({market_count}/{expected_universe} = {actual_ratio:.1%} "
+                      f"< 門檻 {_min_ratio:.0%})")
             logger.warning(
-                f"[write_forward_signals] REJECTED L2b: {trade_date} 市場覆蓋率不足 "
-                f"({market_count}/{expected_universe} = {actual_ratio:.1%} "
-                f"< 門檻 {_min_ratio:.0%})，不寫入 Forward signals"
+                f"[write_forward_signals] REJECTED L2b: {trade_date} {detail}，"
+                f"不寫入 Forward signals"
             )
+            _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
+                                   "gate_rejected_by": "L2b", "gate_detail": detail,
+                                   "n_existing": 0, "l4_skipped": 0}
             return 0
 
     # ── L3: Benchmark (0050) Exact Date ─────────────────────────────
@@ -607,10 +632,13 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         .first()
     )
     if not has_0050:
+        detail = f"{trade_date} 無 0050 收盤價，Alpha 計算基準缺失"
         logger.warning(
-            f"[write_forward_signals] REJECTED L3: {trade_date} 無 0050 收盤價，"
-            f"Alpha 計算基準缺失，不寫入 Forward signals"
+            f"[write_forward_signals] REJECTED L3: {detail}，不寫入 Forward signals"
         )
+        _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
+                               "gate_rejected_by": "L3", "gate_detail": detail,
+                               "n_existing": 0, "l4_skipped": 0}
         return 0
     # ── End Global Gates ─────────────────────────────────────────────
 
@@ -775,6 +803,26 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         logger.warning(
             f"[write_forward_signals] {trade_date}: {skipped_no_price} 筆訊號因缺當日 DailyPrice 而略過（L4 gate）"
         )
+
+    n_existing = n_ars - inserted - skipped_no_price
+    if inserted > 0:
+        fs_status = "ok"
+    elif n_existing == n_ars:
+        fs_status = "all_dedup"
+    elif skipped_no_price == n_ars:
+        fs_status = "all_l4_skipped"
+    else:
+        fs_status = "zero_inserted"
+
+    _last_fs_diagnosis = {
+        "status": fs_status,
+        "inserted": inserted,
+        "n_ars": n_ars,
+        "gate_rejected_by": None,
+        "gate_detail": None,
+        "n_existing": n_existing,
+        "l4_skipped": skipped_no_price,
+    }
     return inserted
 
 

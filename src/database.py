@@ -1011,6 +1011,63 @@ def _migrate_position_monitor(engine) -> None:
         logger.warning(f"position_monitor SIGNAL_CLOSE_LEGACY migration: {exc}")
 
 
+# ── Post-migration required column registry ───────────────────────────────────
+# Columns that the pipeline reads/writes at runtime.
+# If any are missing after init_db(), _verify_schema_integrity() raises RuntimeError
+# to fail-closed rather than silently producing wrong results.
+_SCHEMA_REQUIRED_COLS: dict = {
+    "forward_signals": frozenset({
+        "trade_date", "stock_id", "is_valid",
+        "execution_price_type", "execution_date", "execution_price",
+    }),
+    "recommendations": frozenset({
+        "stock_id", "date", "is_valid",
+    }),
+    "position_monitor": frozenset({
+        "stock_id", "status", "entry_source",
+    }),
+    "analysis_results": frozenset({
+        "stock_id", "date", "total_score",
+    }),
+    "execution_logs": frozenset({
+        "date", "status",
+    }),
+}
+
+
+def _verify_schema_integrity(engine) -> None:
+    """Check required columns exist after all migrations.
+
+    Raises RuntimeError listing every missing column so the caller
+    (init_db → pipeline start) fails immediately rather than hitting
+    an AttributeError mid-run.
+    """
+    from sqlalchemy import inspect as _insp
+
+    insp = _insp(engine)
+    report: list[str] = []
+
+    for table, required_cols in _SCHEMA_REQUIRED_COLS.items():
+        try:
+            existing = {c["name"] for c in insp.get_columns(table)}
+        except Exception:
+            # Table not yet created on a brand-new DB — create_all() handles this.
+            continue
+
+        missing = required_cols - existing
+        if missing:
+            report.append(f"  {table}: missing {sorted(missing)}")
+
+    if report:
+        raise RuntimeError(
+            "Schema integrity check FAILED — required columns absent:\n"
+            + "\n".join(report)
+            + "\nRun init_db() to apply migrations, or add the columns manually."
+        )
+
+    logger.info("Schema integrity check PASS")
+
+
 def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
@@ -1023,8 +1080,11 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     _migrate_overnight_market_contexts(engine)
     _migrate_forward_outcome_evaluations(engine)
     _migrate_position_monitor(engine)
-    from config import DATABASE_URL
 
+    # Fail-closed: raise if required columns are still missing after all migrations.
+    _verify_schema_integrity(engine)
+
+    from config import DATABASE_URL
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")
     return engine
 

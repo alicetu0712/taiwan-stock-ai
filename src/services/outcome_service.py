@@ -61,6 +61,7 @@ def compute_foe_outcomes(session, as_of_date: date) -> int:
     trading_calendar = _load_trading_calendar(session)
 
     rows_affected = 0
+    per_signal_errors = 0
     for fs in signals:
         try:
             n = _process_signal(
@@ -75,9 +76,17 @@ def compute_foe_outcomes(session, as_of_date: date) -> int:
             )
             rows_affected += n
         except Exception as exc:
+            per_signal_errors += 1
             logger.warning(
                 f"outcome_service: error for {fs.stock_id} {fs.trade_date}: {exc}"
             )
+
+    if per_signal_errors:
+        logger.error(
+            f"compute_foe_outcomes: {per_signal_errors}/{len(signals)} signals "
+            "encountered errors (see WARNING lines above). "
+            "Affected signals will be retried on next pipeline run."
+        )
 
     if rows_affected:
         session.commit()

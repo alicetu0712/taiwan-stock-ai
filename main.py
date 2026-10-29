@@ -110,6 +110,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
     n_analyzed   = 0
     n_qualified  = 0
     n_universe   = 0   # 全市場取得股價數（Step 1 完成後）
+    _fs_note: str | None = None  # Step 9c forward signal gate/dedup note
     recommendations = []
     fail_reasons    = []
 
@@ -747,17 +748,35 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
             # Gate rejections (L1-L3) already log their own WARNING and return 0 — not an error.
             inserted = write_forward_signals(session, trade_date, today_ars)
 
+            # Read structured diagnosis from write_forward_signals for execution_log + audit.
+            from src.services.research_backtest_service import _last_fs_diagnosis as _fsd
+            _fs_note: str | None = None
+
             if n_ars == 0:
                 logger.info("[Step 9c] 無今日 AnalysisResult，Forward Signal 凍結跳過")
+            elif _fsd.get("status") == "gate_rejected":
+                _fs_note = (
+                    f"fs_gate_rejected:{_fsd['gate_rejected_by']} "
+                    f"detail:{_fsd.get('gate_detail', '')}"
+                )
+                logger.info(f"[Step 9c] Forward signal gate 拒絕 — {_fsd['gate_rejected_by']}: "
+                            f"{_fsd.get('gate_detail', '')}")
+            elif _fsd.get("status") == "all_dedup":
+                logger.info(
+                    f"[Step 9c] Forward signal 全 dedup：{n_ars} AR 均已存在，0 新增（正常）"
+                )
             elif inserted == 0:
                 logger.info(
-                    f"[Step 9c] Forward signal 凍結：0 新增 / {n_ars} AR。"
-                    "可能原因：gate L1–L3 拒絕（見上方 WARNING）或所有訊號已存在（dedup）。"
+                    f"[Step 9c] Forward signal 0 新增 / {n_ars} AR "
+                    f"(l4_skipped={_fsd.get('l4_skipped',0)}, "
+                    f"n_existing={_fsd.get('n_existing',0)})"
                 )
             else:
                 logger.info(
                     f"[Step 9c] Forward signal 凍結完成："
-                    f"{inserted} 筆新增，{n_ars - inserted} 筆已存在（skip）"
+                    f"{inserted} 筆新增，"
+                    f"n_existing={_fsd.get('n_existing',0)}，"
+                    f"l4_skipped={_fsd.get('l4_skipped',0)}"
                 )
 
             # 填入執行日開盤進場價（NEXT_OPEN）—— 次日回填，可重跑
@@ -829,7 +848,8 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
         elapsed  = (end_time - start_time).total_seconds()
         _save_execution_log(
             session, trade_date, start_time, "success",
-            n_analyzed, n_qualified, len(top_recs)
+            n_analyzed, n_qualified, len(top_recs),
+            errors=_fs_note,
         )
 
         logger.info(f"{'='*60}")

@@ -205,7 +205,9 @@ def _load_health_metrics() -> dict:
 
         # ── Pipeline 健康度 ─────────────────────────────────
         from src.database import ForwardOutcomeEvaluation
-        # 有 execution_date 在昨天或更早但 execution_price 仍 NULL → 代表 pipeline 曾跳過該天
+        from datetime import timedelta as _td
+
+        # 有 execution_date 在昨天或更早但 execution_price 仍 NULL → pipeline 曾跳過該天
         yesterday = date.today() - timedelta(days=1)
         fs_unfilled_past = (
             s.query(func.count(ForwardSignal.id))
@@ -216,14 +218,29 @@ def _load_health_metrics() -> dict:
             )
             .scalar()
         ) or 0
+
+        # compute_signal_outcomes 待處理：trade_date ≤ 30 天前且 outcomes_computed_at IS NULL
+        outcomes_pending_cutoff = date.today() - _td(days=30)
+        fs_outcomes_pending = (
+            s.query(func.count(ForwardSignal.id))
+            .filter(
+                ForwardSignal.trade_date <= outcomes_pending_cutoff,
+                ForwardSignal.outcomes_computed_at.is_(None),
+                ForwardSignal.decision_label.isnot(None),
+                ForwardSignal.is_valid.isnot(False),
+            )
+            .scalar()
+        ) or 0
+
         foe_total = s.query(func.count(ForwardOutcomeEvaluation.id)).scalar() or 0
         foe_latest_matured = (
             s.query(func.max(ForwardOutcomeEvaluation.horizon_20d_matured_at)).scalar()
         )
         metrics["pipeline_health"] = {
-            "fs_unfilled_past": fs_unfilled_past,
-            "foe_total":        foe_total,
-            "foe_latest_matured": foe_latest_matured,
+            "fs_unfilled_past":    fs_unfilled_past,
+            "fs_outcomes_pending": fs_outcomes_pending,
+            "foe_total":           foe_total,
+            "foe_latest_matured":  foe_latest_matured,
         }
 
         # ── 最近執行記錄（最新 5 筆）────────────────────────
@@ -479,7 +496,7 @@ def page_data_health() -> None:
     # ── Pipeline 健康度 ─────────────────────────────────────
     st.markdown("#### 🔧 Pipeline 健康度")
     ph = m.get("pipeline_health", {})
-    ph_cols = st.columns(3)
+    ph_cols = st.columns(4)
     with ph_cols[0]:
         unfilled = ph.get("fs_unfilled_past", 0)
         c = _RED if unfilled > 0 else _GREEN
@@ -493,6 +510,18 @@ def page_data_health() -> None:
             unsafe_allow_html=True,
         )
     with ph_cols[1]:
+        outcomes_pend = ph.get("fs_outcomes_pending", 0)
+        c = _YELLOW if outcomes_pend > 0 else _GREEN
+        st.markdown(
+            f'<div style="text-align:center;padding:10px;border-radius:8px;'
+            f'border:2px solid {c}20;background:{c}10">'
+            f'<div style="font-size:1.4rem;font-weight:800;color:{c}">{outcomes_pend}</div>'
+            f'<div style="font-size:0.72rem;color:#666">績效待計算<br>'
+            f'<small>(trade_date ≤ 30d 前但 outcomes_computed_at IS NULL)</small></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with ph_cols[2]:
         foe_total = ph.get("foe_total", 0)
         c = _GREEN if foe_total > 0 else _GRAY
         st.markdown(
@@ -504,7 +533,7 @@ def page_data_health() -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
-    with ph_cols[2]:
+    with ph_cols[3]:
         last_mat = ph.get("foe_latest_matured")
         if last_mat is None:
             mat_label = "尚無成熟訊號"
@@ -518,7 +547,7 @@ def page_data_health() -> None:
             f'border:2px solid {c}20;background:{c}10">'
             f'<div style="font-size:1.1rem;font-weight:800;color:{c}">{mat_label}</div>'
             f'<div style="font-size:0.72rem;color:#666">最新 foe_v1 成熟日<br>'
-            f'<small>(horizon_20td_matured_at)</small></div>'
+            f'<small>(horizon_20d_matured_at)</small></div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -527,6 +556,13 @@ def page_data_health() -> None:
             f"⚠️  {ph['fs_unfilled_past']} 筆 NEXT_OPEN 訊號的 execution_date ≤ 昨日但 execution_price 仍為 NULL。"
             "表示至少有一個交易日的 pipeline 未成功執行 `fill_execution_prices()`。"
             "請手動補跑對應日期：`python scripts/run_daily.py --date YYYY-MM-DD`"
+        )
+    if ph.get("fs_outcomes_pending", 0) > 0:
+        st.info(
+            f"ℹ️  {ph['fs_outcomes_pending']} 筆訊號符合成熟條件（trade_date ≤ 30 天前）"
+            "但 outcomes_computed_at 仍為 NULL。"
+            "這通常表示 compute_signal_outcomes() 在執行時尚未有 DailyPrice 資料。"
+            "下次 pipeline 成功執行後應自動回填。"
         )
 
     st.markdown("---")
