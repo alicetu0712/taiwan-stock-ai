@@ -101,11 +101,17 @@ jobs:
           echo "Launching: python scripts/run_daily.py${ARGS}"
           python scripts/run_daily.py ${ARGS}
 
-      # ── 5. 執行後快速驗收（Neon 寫入確認）────────────────────
+      # ── 5. 執行後正式驗收（Neon 寫入確認）────────────────────
+      # 規則：
+      #   交易日 pipeline 真正執行後，必須有可驗證的 execution_log。
+      #   缺少必要紀錄時，本 step 必須 exit(1)。
+      #   只有明確確認為非交易日跳過，才允許正常結束。
       - name: Post-run verification
         if: success()
         env:
           NEON_URL: ${{ secrets.NEON_URL }}
+          INPUT_DATE: ${{ inputs.trade_date }}
+          INPUT_FORCE: ${{ inputs.force }}
         run: |
           python - <<'PYEOF'
           import os, sys
@@ -115,39 +121,88 @@ jobs:
           url = os.environ["NEON_URL"].replace("postgres://", "postgresql://", 1)
           engine = create_engine(url, connect_args={"sslmode": "require"})
 
-          today = date.today()
+          # 決定驗收目標日期（與 pipeline 執行日期一致）
+          raw_date = os.environ.get("INPUT_DATE", "").strip()
+          forced   = os.environ.get("INPUT_FORCE", "false").strip().lower() == "true"
+          if raw_date:
+              today = date.fromisoformat(raw_date)
+          else:
+              today = date.today()
+
+          # 判斷是否為交易日（repo 已 checkout，可直接 import）
+          sys.path.insert(0, ".")
+          from src.core.trading_calendar import is_trading_day as _is_td
+          is_trading = _is_td(today) or forced
+
+          print(f"Verification target date : {today}")
+          print(f"Is trading day           : {is_trading}  (forced={forced})")
+
           with engine.connect() as conn:
-              # execution_logs
+              # ── execution_log 存在性檢查 ──────────────────────
               r = conn.execute(text(
                   "SELECT status, total_stocks, qualified_stocks, recommended_stocks, errors "
                   "FROM execution_logs WHERE date = :d ORDER BY id DESC LIMIT 1"
               ), {"d": today}).fetchone()
 
               if r is None:
-                  # 非交易日跳過是正常的（run_daily.py exit 0）
-                  print(f"No execution_log for {today} — likely a non-trading day skip.")
-                  sys.exit(0)
+                  if not is_trading:
+                      print(f"Non-trading day {today} — pipeline correctly skipped. PASS")
+                      sys.exit(0)
+                  else:
+                      # 交易日應有 execution_log；缺少代表寫入失敗
+                      print(
+                          f"ERROR: Trading day {today} but no execution_log found in Neon.",
+                          file=sys.stderr,
+                      )
+                      print(
+                          "Possible causes: sequence conflict, pipeline crashed before logging, "
+                          "or NEON_URL points to wrong database.",
+                          file=sys.stderr,
+                      )
+                      sys.exit(1)
 
+              # ── execution_log 狀態檢查 ────────────────────────
               status, total, qualified, recs, errors = r
-              print(f"Pipeline result: status={status}  analyzed={total}  qualified={qualified}  recs={recs}")
+              print(f"execution_log  : status={status}  analyzed={total}  qualified={qualified}  recs={recs}")
               if errors:
-                  print(f"  errors: {errors[:200]}")
+                  print(f"  logged errors: {errors[:300]}")
 
               if status != "success":
-                  print(f"ERROR: pipeline status={status}", file=sys.stderr)
+                  print(f"ERROR: pipeline status={status!r} (expected 'success')", file=sys.stderr)
                   sys.exit(1)
 
-              # analysis_results
+              # ── analysis_results 寫入確認 ─────────────────────
               n_ar = conn.execute(text(
                   "SELECT COUNT(*) FROM analysis_results WHERE date = :d"
               ), {"d": today}).scalar()
-              print(f"analysis_results today: {n_ar} rows")
+              print(f"analysis_results [{today}]: {n_ar} rows")
+              if n_ar == 0:
+                  print("ERROR: analysis_results empty for today — write failed?", file=sys.stderr)
+                  sys.exit(1)
 
-              # forward_signals
+              # ── forward_signals 寫入確認 ──────────────────────
+              # 有效訊號數可為 0（市場未達標），但需可追蹤
               n_fs = conn.execute(text(
                   "SELECT COUNT(*) FROM forward_signals WHERE trade_date = :d"
               ), {"d": today}).scalar()
-              print(f"forward_signals today: {n_fs} rows")
+              n_fs_valid = conn.execute(text(
+                  "SELECT COUNT(*) FROM forward_signals "
+                  "WHERE trade_date = :d AND is_valid = true"
+              ), {"d": today}).scalar()
+              print(f"forward_signals [{today}]: total={n_fs}  valid={n_fs_valid}")
 
-              print("Post-run verification PASS")
+              # ── Neon 最新資料日期確認（防 DB 指向錯誤）──────────
+              latest_ar = conn.execute(text(
+                  "SELECT MAX(date) FROM analysis_results"
+              )).scalar()
+              print(f"Neon MAX(analysis_results.date): {latest_ar}")
+              if str(latest_ar) != str(today):
+                  print(
+                      f"WARNING: Neon latest analysis_results date ({latest_ar}) "
+                      f"!= expected ({today}). "
+                      "If this is the first run after a long gap, "
+                      "verify manually.",
+                  )
+
+              print(f"\nPost-run verification PASS  [{today}]")
           PYEOF

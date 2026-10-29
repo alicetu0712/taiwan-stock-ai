@@ -1270,7 +1270,7 @@ def _save_execution_log(
         session.add(log)
         session.commit()
     except Exception as e:
-        logger.debug(f"ExecutionLog save failed: {e}")
+        logger.error(f"ExecutionLog save failed (sequence/schema issue?): {e}")
 
 
 def _enrich_score_changes(session, trade_date: date, candidates: list) -> None:
