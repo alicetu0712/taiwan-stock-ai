@@ -106,6 +106,25 @@ def load_exec_logs(limit: int = 90) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
+def load_latest_completed_date() -> "date | None":
+    """Most recent date in execution_log with status='success'."""
+    try:
+        from sqlalchemy import func, select
+
+        from src.database import ExecutionLog, get_session
+
+        s = get_session()
+        result = s.execute(
+            select(func.max(ExecutionLog.date)).where(ExecutionLog.status == "success")
+        ).scalar()
+        s.close()
+        return result
+    except Exception as e:
+        logger.warning(f"load_latest_completed_date: {e}")
+        return None
+
+
 @st.cache_data(ttl=1800)
 def load_recent_recs(days: int = 60) -> pd.DataFrame:
     try:
@@ -287,7 +306,8 @@ def load_db_recommendations(target_date: date) -> list:
             r.stock_id: r for r in s.execute(select(PositionMonitor)).scalars().all()
         }
         rec_ids = [r.stock_id for r in recs_rows]
-        db_price_map = {}
+        db_price_map: dict = {}
+        db_price_date_map: dict = {}
         for sid in rec_ids:
             dp = s.execute(
                 select(DailyPrice)
@@ -297,6 +317,7 @@ def load_db_recommendations(target_date: date) -> list:
             ).scalar_one_or_none()
             if dp:
                 db_price_map[sid] = dp.close
+                db_price_date_map[sid] = dp.date
         s.close()
 
         # Consecutive Core Picks days per stock
@@ -378,6 +399,8 @@ def load_db_recommendations(target_date: date) -> list:
                     "data_quality":           json.loads(r.data_quality_json)
                                               if getattr(r, "data_quality_json", None) else None,
                     "missing_data_factors":   getattr(r, "missing_data_factors", None),
+                    # Phase 3: price source date for PREVIOUS_CLOSE labeling
+                    "price_date":             db_price_date_map.get(r.stock_id),
                 }
             )
             _sanitize_trading_plan(result[-1])

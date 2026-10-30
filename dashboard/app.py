@@ -221,7 +221,18 @@ def main() -> None:
     from dashboard._pages.research_backtest import page_research_backtest
 
     if "selected_date" not in st.session_state:
-        st.session_state["selected_date"] = date.today()
+        from src.core.trading_calendar import effective_trade_date
+        from dashboard.loaders import load_latest_completed_date
+        try:
+            eff = effective_trade_date()
+            latest = load_latest_completed_date()
+            # Auto-use latest completed date when effective date has no data yet
+            if latest and latest < eff:
+                st.session_state["selected_date"] = latest
+            else:
+                st.session_state["selected_date"] = eff
+        except Exception:
+            st.session_state["selected_date"] = date.today()
     sel_date = st.session_state["selected_date"]
 
     with st.sidebar:
@@ -235,7 +246,17 @@ def main() -> None:
         """,
             unsafe_allow_html=True,
         )
-        st.caption(f"查看日期：{sel_date}")
+        _new_date = st.date_input(
+            "查看日期",
+            value=sel_date,
+            max_value=date.today(),
+            format="YYYY/MM/DD",
+            key="sidebar_date_picker",
+        )
+        if _new_date != sel_date:
+            st.session_state["selected_date"] = _new_date
+            sel_date = _new_date
+            st.rerun()
         if st.button("🔄 重新整理資料", use_container_width=True):
             st.cache_data.clear()
             st.rerun()

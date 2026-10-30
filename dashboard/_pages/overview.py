@@ -14,6 +14,7 @@ from dashboard.loaders import (
     load_db_recommendations,
     load_evidence_stats,
     load_exec_logs,
+    load_latest_completed_date,
     load_market_health,
     load_opportunity_recs,
     load_pipeline_funnel,
@@ -74,6 +75,150 @@ def _historical_analog_html(ev: dict) -> str:
     以上為相同 Setup × 市場情境的歷史分布，非 AI 預測。實際路徑受多種因素影響。
   </div>
 </div>"""
+
+
+def _render_trading_reference(
+    selected_date: date,
+    recs: list,
+    latest_date: "date | None" = None,
+) -> None:
+    """今日交易參考：分析日 / 適用交易日 / 進場摘要 / 報價聲明。"""
+    from config import ENTRY_QUALITY
+
+    try:
+        from src.core.trading_calendar import next_trading_day
+        next_td = next_trading_day(selected_date)
+    except Exception:
+        next_td = None
+
+    today = date.today()
+    days_old = (today - selected_date).days
+    chase_gap = ENTRY_QUALITY.get("chase_gap_pct", 5.0)
+
+    td_label = next_td.strftime("%Y/%m/%d") if next_td else "—"
+
+    # — freshness note —
+    freshness_html = ""
+    if days_old > 1:
+        freshness_html = (
+            f'<div style="font-size:0.7rem;color:#ff8c00;margin-top:6px">'
+            f"⚠️ 此訊號已有 {days_old} 天，次日進場窗口可能已過。</div>"
+        )
+    elif latest_date and latest_date > selected_date:
+        freshness_html = (
+            f'<div style="font-size:0.7rem;color:#f57f17;margin-top:6px">'
+            f"🔄 資料庫最新分析：{latest_date}（側邊欄可切換日期）</div>"
+        )
+
+    # — signal rows —
+    buy_recs = [r for r in recs if (r.get("trade_signal") or "").lower() in ("buy", "strong_buy")]
+    wait_recs = [r for r in recs if (r.get("trade_signal") or "").lower() == "wait"]
+
+    sig_html = ""
+    if buy_recs:
+        rows_html = ""
+        for r in buy_recs:
+            name = r.get("name") or r.get("sid", "—")
+            entry_low  = r.get("entry_low")
+            entry_high = r.get("entry_high")
+            stop_p     = r.get("stop_price")
+            t1         = r.get("target1")
+            ma20_gap   = r.get("ma20_gap")
+            price      = r.get("price")
+            price_date = r.get("price_date")
+
+            chase_warn = ""
+            if ma20_gap is not None and abs(ma20_gap) > chase_gap:
+                chase_warn = ' <span style="color:#ff6e40;font-size:0.65rem">⚡高乖離</span>'
+
+            price_str = ""
+            if price:
+                src = (
+                    "前收盤"
+                    if (price_date and price_date < selected_date)
+                    else "收盤"
+                )
+                price_str = (
+                    f' <span style="opacity:0.55;font-size:0.6rem">{src} {price:.1f}</span>'
+                )
+
+            if entry_low and entry_high:
+                entry_str = f"{entry_low:.1f}–{entry_high:.1f}"
+            elif entry_low:
+                entry_str = f"≥{entry_low:.1f}"
+            else:
+                entry_str = "—"
+
+            stop_str = f"{stop_p:.1f}" if stop_p else "—"
+            t1_str   = f"{t1:.1f}"    if t1    else "—"
+
+            rows_html += (
+                f"<tr>"
+                f'<td style="padding:2px 12px 2px 0;font-weight:700">{name}{price_str}</td>'
+                f'<td style="padding:2px 12px 2px 0;color:#00e5ff">{entry_str}</td>'
+                f'<td style="padding:2px 12px 2px 0;color:#ff6e6e">{stop_str}</td>'
+                f'<td style="padding:2px 0;color:#81c784">{t1_str}</td>'
+                f"<td>{chase_warn}</td>"
+                f"</tr>"
+            )
+
+        sig_html = f"""
+<div style="margin-top:10px">
+  <div style="font-size:0.6rem;opacity:0.55;margin-bottom:5px">BUY 訊號（{len(buy_recs)} 檔）</div>
+  <table style="font-size:0.74rem;color:#fff;border-collapse:collapse;width:100%">
+    <tr style="font-size:0.58rem;opacity:0.45">
+      <th style="text-align:left;padding:0 12px 4px 0;font-weight:400">標的</th>
+      <th style="text-align:left;padding:0 12px 4px 0;font-weight:400">進場區間</th>
+      <th style="text-align:left;padding:0 12px 4px 0;font-weight:400">停損</th>
+      <th style="text-align:left;padding:0 0 4px 0;font-weight:400">目標1</th>
+      <th></th>
+    </tr>
+    {rows_html}
+  </table>
+</div>"""
+    elif recs:
+        wait_names = "、".join(
+            r.get("name") or r.get("sid", "") for r in (wait_recs or recs)[:3]
+        )
+        sig_html = (
+            f'<div style="margin-top:8px;font-size:0.78rem;color:#b0bec5">'
+            f"WAIT — {wait_names}</div>"
+        )
+    else:
+        sig_html = (
+            '<div style="margin-top:8px;font-size:0.78rem;color:#546e7a">'
+            "今日無推薦標的</div>"
+        )
+
+    disclaimer = (
+        '<div style="font-size:0.6rem;color:#546e7a;margin-top:10px;'
+        'border-top:1px solid #263040;padding-top:6px">'
+        "⚠️ 所有報價為前一日收盤，非盤中即時報價。進場前請確認當日市場報價。"
+        "</div>"
+    )
+
+    st.markdown(
+        f"""
+<div style="background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:12px;
+            padding:14px 18px;margin:8px 0 14px;color:white">
+  <div style="font-size:0.6rem;font-weight:700;opacity:0.45;letter-spacing:.1em;
+              text-transform:uppercase;margin-bottom:9px">今日交易參考</div>
+  <div style="display:flex;gap:28px">
+    <div>
+      <div style="font-size:0.58rem;opacity:0.5">訊號分析日</div>
+      <div style="font-size:0.9rem;font-weight:700">{selected_date.strftime("%Y/%m/%d")}</div>
+    </div>
+    <div>
+      <div style="font-size:0.58rem;opacity:0.5">適用交易日</div>
+      <div style="font-size:0.9rem;font-weight:700;color:#00e5ff">{td_label}</div>
+    </div>
+  </div>
+  {sig_html}
+  {freshness_html}
+  {disclaimer}
+</div>""",
+        unsafe_allow_html=True,
+    )
 
 
 def render_rec_card(
@@ -192,6 +337,17 @@ def render_rec_card(
         else ""
     )
 
+    # ── Price source label (Phase 3) ──────────────────────────────
+    _price_date = r.get("price_date")
+    _price_val  = r.get("price")
+    if _price_date and _price_val:
+        _price_src_label = (
+            f'<span style="font-size:0.6rem;color:#aaa;margin-left:5px">'
+            f'{_price_date.strftime("%m/%d")} 收盤</span>'
+        )
+    else:
+        _price_src_label = ""
+
     # ── Level 1: Main card ────────────────────────────────────────
     st.html(f"""
 <div style="border:1px solid #e0e0e0;border-radius:12px;padding:16px 18px;margin-bottom:4px;background:#fff">
@@ -202,7 +358,7 @@ def render_rec_card(
       <span style="font-size:1.1rem;font-weight:800;color:#1a1a2e">{card.name}</span>
       <span style="font-size:0.78rem;font-weight:400;color:#888;margin-left:6px">{card.sid}</span>
       {consec_html}
-      <div style="font-size:1rem;font-weight:700;color:#333;margin-top:2px">{card.price_str}</div>
+      <div style="font-size:1rem;font-weight:700;color:#333;margin-top:2px">{card.price_str}{_price_src_label}</div>
     </div>
     <div style="text-align:right">
       <span style="background:{card.signal_bg};color:{card.signal_col};font-weight:800;font-size:0.95rem;padding:5px 14px;border-radius:20px">{dl["label"]}</span>
@@ -638,8 +794,24 @@ def page_today(selected_date: date) -> None:
         unsafe_allow_html=True,
     )
 
+    # Phase 4: data health — auto-redirect to latest available date
+    latest_data_date = load_latest_completed_date()
+
     if not report:
-        st.warning(f"尚無 {selected_date} 的分析報告，請先執行分析。")
+        if latest_data_date and latest_data_date != selected_date:
+            st.info(
+                f"**尚無 {selected_date} 的分析報告。**  \n"
+                f"資料庫最新完成日期：**{latest_data_date}**"
+            )
+            if st.button(
+                f"切換至 {latest_data_date} 的分析結果",
+                type="primary",
+                key="auto_redirect_btn",
+            ):
+                st.session_state["selected_date"] = latest_data_date
+                st.rerun()
+        else:
+            st.warning(f"尚無 {selected_date} 的分析報告，請先執行分析。")
         return
 
     stock_names = load_stock_names()
@@ -652,6 +824,9 @@ def page_today(selected_date: date) -> None:
     for r in recs:
         if r["price"] is None:
             r["price"] = stock_prices.get(r["sid"])
+
+    # Phase 2+3+4: 今日交易參考
+    _render_trading_reference(selected_date, recs, latest_data_date)
 
     # P2: Pipeline funnel
     funnel = load_pipeline_funnel(selected_date)
