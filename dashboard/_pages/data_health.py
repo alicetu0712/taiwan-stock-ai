@@ -115,8 +115,18 @@ def _load_health_metrics() -> dict:
             if fin_latest_year
             else None
         )
+        # Use analysis universe (Stock, is_excluded=False) as denominator.
+        # price_distinct spans ALL stocks ever in DailyPrice (TWSE+TPEx+ETFs),
+        # which would make fin_coverage falsely low.
+        _analysis_universe_size = (
+            s.query(func.count(Stock.stock_id))
+            .filter(Stock.is_excluded.isnot(True))
+            .scalar()
+        ) or 0
         fin_coverage = (
-            round(fin_stocks / price_distinct * 100, 1) if price_distinct > 0 else 0.0
+            round(fin_stocks / _analysis_universe_size * 100, 1)
+            if _analysis_universe_size > 0
+            else 0.0
         )
         metrics["financial"] = {
             "stocks": fin_stocks,
@@ -293,8 +303,15 @@ def _render_source_row(
 @st.cache_data(ttl=300)
 def _load_coverage_history(n_days: int = 20) -> dict:
     """
-    近 n_days 個有 DailyPrice 資料的交易日的市場覆蓋率分布。
-    Expected universe = Stock 資料表中 is_excluded != True 的標的數。
+    近 n_days 個交易日的市場資料完整度。
+
+    分子：指定日 DailyPrice 中屬於分析宇宙（Stock, is_excluded=False）
+          的 DISTINCT stock_id 數量。
+    分母：Stock 資料表中 is_excluded != True 的標的總數（固定宇宙）。
+
+    原始資料筆數（raw_count）也一併回傳，供異常診斷：
+    若 raw_count >> expected，表示 DailyPrice 包含分析宇宙外的全市場股票。
+    覆蓋率計算永遠使用修正後的分子，不得用 min(100%, ratio) 掩蓋問題。
     """
     try:
         from sqlalchemy import func
@@ -318,18 +335,93 @@ def _load_coverage_history(n_days: int = 20) -> dict:
 
         rows = []
         for d in dates:
+            # Scoped count: only analysis-universe stocks
             cnt = (
+                s.query(func.count(func.distinct(DailyPrice.stock_id)))
+                .join(Stock, Stock.stock_id == DailyPrice.stock_id)
+                .filter(
+                    DailyPrice.date == d,
+                    DailyPrice.close.isnot(None),
+                    Stock.is_excluded.isnot(True),
+                )
+                .scalar()
+            ) or 0
+            # Raw total: all rows in DailyPrice for this date (anomaly detection)
+            raw_count = (
                 s.query(func.count(DailyPrice.stock_id))
                 .filter(DailyPrice.date == d, DailyPrice.close.isnot(None))
                 .scalar()
             ) or 0
             ratio = cnt / expected if expected > 0 else None
-            rows.append({"date": d, "count": cnt, "expected": expected, "ratio": ratio})
+            # Flag if raw count suggests non-universe data (>5% above expected)
+            anomaly = raw_count > int(expected * 1.05) if expected > 0 else False
+            rows.append({
+                "date": d,
+                "count": cnt,           # analysis-universe scoped
+                "raw_count": raw_count, # all DailyPrice rows
+                "expected": expected,
+                "ratio": ratio,
+                "anomaly": anomaly,
+            })
         s.close()
         return {"expected": expected, "rows": rows}
     except Exception as e:
         logger.warning(f"_load_coverage_history: {e}")
         return {"expected": 0, "rows": []}
+
+
+@st.cache_data(ttl=300)
+def _load_coverage_detail(check_date) -> dict:
+    """
+    指定交易日的缺漏股票分析：分析宇宙中哪些股票缺少收盤價，原因為何。
+    """
+    try:
+        from sqlalchemy import func
+        s = get_session()
+
+        universe_stocks = (
+            s.query(Stock)
+            .filter(Stock.is_excluded.isnot(True))
+            .all()
+        )
+        universe_ids = {st.stock_id for st in universe_stocks}
+
+        priced_ids = {
+            r[0]
+            for r in s.query(DailyPrice.stock_id)
+            .filter(DailyPrice.date == check_date, DailyPrice.close.isnot(None))
+            .all()
+        }
+        priced_universe = universe_ids & priced_ids
+        missing_ids = universe_ids - priced_ids
+
+        missing_stocks_map = {st.stock_id: st for st in universe_stocks if st.stock_id in missing_ids}
+
+        delisted, suspended, not_listed, other_missing = [], [], [], []
+        for sid, st in missing_stocks_map.items():
+            if (st.delisted_date and st.delisted_date <= check_date) or st.security_status == "delisted":
+                delisted.append(sid)
+            elif st.security_status == "suspended":
+                suspended.append(sid)
+            elif st.listing_date and st.listing_date > check_date:
+                not_listed.append(sid)
+            else:
+                other_missing.append(sid)
+
+        s.close()
+        return {
+            "expected": len(universe_ids),
+            "actual": len(priced_universe),
+            "missing": len(missing_ids),
+            "delisted": len(delisted),
+            "suspended": len(suspended),
+            "not_listed": len(not_listed),
+            "other_missing": len(other_missing),
+            "other_missing_ids": sorted(other_missing)[:30],
+        }
+    except Exception as e:
+        logger.warning(f"_load_coverage_detail: {e}")
+        return {}
 
 
 def page_data_health() -> None:
@@ -640,48 +732,134 @@ def page_data_health() -> None:
 
     st.markdown("---")
 
-    # ── Forward Gate 市場覆蓋率監控 ──────────────────────────────
-    st.markdown("#### 📊 Forward Gate 市場覆蓋率（近 20 交易日）")
+    # ── 每日市場資料完整度 ────────────────────────────────────────
+    st.markdown("#### 📊 每日市場資料完整度（近 20 交易日）")
     st.caption(
-        "此面板用於觀察每日 DailyPrice 實際筆數佔標的宇宙的比例，"
-        "協助校準 `FORWARD_MARKET_COVERAGE[min_ratio]`（目前設定為 None = 停用比例檢查）。"
-        "觀察完真實分布後再設定門檻，不要事先猜測。"
+        "追蹤各交易日分析股票池（826 檔）中有多少比例具備有效收盤價，"
+        "供判斷今日選股結果的可信度。"
     )
+
+    import pandas as _pd
 
     cov = _load_coverage_history(n_days=20)
     cov_rows = cov.get("rows", [])
     expected_uni = cov.get("expected", 0)
 
     if not cov_rows:
-        st.info("尚無覆蓋率資料")
+        st.info("尚無市場資料完整度記錄")
     else:
-        import pandas as _pd
+        # ── 最新交易日摘要 ────────────────────────────────────────
+        latest_row = cov_rows[-1]
+        latest_date = latest_row["date"]
+        detail = _load_coverage_detail(latest_date)
 
-        ratios = [r["ratio"] for r in cov_rows if r["ratio"] is not None]
-        counts = [r["count"] for r in cov_rows]
+        actual    = detail.get("actual",   latest_row["count"])
+        missing   = detail.get("missing",  max(0, expected_uni - actual))
+        ratio_now = latest_row.get("ratio") or 0.0
+
+        if ratio_now >= 0.93:
+            impact_text, impact_c = "正常，選股可信度高", _GREEN
+        elif ratio_now >= 0.85:
+            impact_text, impact_c = "輕微缺漏，選股可信度尚可", _YELLOW
+        else:
+            impact_text, impact_c = "缺漏較多，請確認資料來源", _RED
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("標的宇宙（Stock 表）", f"{expected_uni:,} 檔")
-        col2.metric("覆蓋率 最低", f"{min(ratios)*100:.1f}%" if ratios else "—")
-        col3.metric("覆蓋率 中位數", f"{sorted(ratios)[len(ratios)//2]*100:.1f}%" if ratios else "—")
-        col4.metric("覆蓋率 最高", f"{max(ratios)*100:.1f}%" if ratios else "—")
+        col1.metric("今日應追蹤", f"{expected_uni:,} 檔")
+        col2.metric("實際取得", f"{actual:,} 檔")
+        col3.metric("缺少資料", f"{missing:,} 檔")
+        with col4:
+            st.markdown(
+                f'<div style="text-align:center;padding:10px;border-radius:8px;'
+                f'border:2px solid {impact_c}20;background:{impact_c}10">'
+                f'<div style="font-size:0.85rem;font-weight:700;color:{impact_c}">'
+                f"{impact_text}</div>"
+                f'<div style="font-size:0.7rem;color:#666">對今日選股可信度</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
+        # ── 缺漏原因分解 ─────────────────────────────────────────
+        if missing > 0 and detail:
+            n_delisted    = detail.get("delisted", 0)
+            n_suspended   = detail.get("suspended", 0)
+            n_not_listed  = detail.get("not_listed", 0)
+            n_other       = detail.get("other_missing", 0)
+            parts = []
+            if n_delisted:   parts.append(f"已下市 {n_delisted} 檔")
+            if n_suspended:  parts.append(f"停牌 {n_suspended} 檔")
+            if n_not_listed: parts.append(f"尚未上市 {n_not_listed} 檔")
+            if n_other:      parts.append(f"資料缺漏 {n_other} 檔")
+            st.caption(f"**缺少 {missing} 檔原因：** " + "、".join(parts))
+
+            other_ids = detail.get("other_missing_ids", [])
+            if other_ids:
+                st.warning(
+                    f"⚠️ 以下 {len(other_ids)} 檔狀態正常但無今日收盤價（可能 API 未更新）：\n"
+                    + "、".join(other_ids)
+                )
+
+        # ── 異常警示（DailyPrice 含分析宇宙外資料）──────────────
+        anomaly_days = [r for r in cov_rows if r.get("anomaly")]
+        if anomaly_days:
+            st.error(
+                f"⚠️ **資料異常：{len(anomaly_days)} 個交易日的 DailyPrice 原始筆數遠超分析股票池大小。**\n\n"
+                "表示 DailyPrice 包含非分析宇宙股票（如全市場股票、ETF、衍生品等）。"
+                "以下覆蓋率已修正為股票池內的實際覆蓋，原始資料筆數供診斷用。"
+            )
+
+        # ── 近 20 日明細表 ────────────────────────────────────────
+        ratios = [r["ratio"] for r in cov_rows if r["ratio"] is not None]
         df_cov = _pd.DataFrame([
             {
                 "日期": str(r["date"]),
-                "DailyPrice 筆數": r["count"],
-                "標的宇宙": r["expected"],
-                "覆蓋率 %": f"{r['ratio']*100:.1f}" if r["ratio"] is not None else "—",
+                "股票池有價格": r["count"],
+                "應有檔數": r["expected"],
+                "覆蓋率": f"{r['ratio']*100:.1f}%" if r["ratio"] is not None else "—",
+                "原始筆數": r.get("raw_count", r["count"]),
+                "異常": "⚠️ 含宇宙外資料" if r.get("anomaly") else "",
             }
-            for r in reversed(cov_rows)  # newest first
+            for r in reversed(cov_rows)
         ])
         st.dataframe(df_cov.set_index("日期"), use_container_width=True)
 
-        from config import FORWARD_MARKET_COVERAGE
-        _min_ratio = FORWARD_MARKET_COVERAGE.get("min_ratio")
-        _min_count = FORWARD_MARKET_COVERAGE.get("min_count", 200)
-        if _min_ratio is None:
+        # ── 進階資訊（Gate 設定 + 門檻模擬）────────────────────
+        with st.expander("🔧 進階資訊：Forward Gate 設定與門檻模擬"):
+            from config import FORWARD_MARKET_COVERAGE
+            _min_ratio = FORWARD_MARKET_COVERAGE.get("min_ratio")
+            _min_count = FORWARD_MARKET_COVERAGE.get("min_count", 200)
+
+            st.markdown("**目前 Gate 設定**")
             st.caption(
-                f"⚙️ 目前 Gate 設定：絕對下限 {_min_count} 檔，比例下限 **停用**（None）。"
-                " 觀察以上分布後，在 `config.py` 設定 `min_ratio` 啟用。"
+                f"L2a 絕對下限：{_min_count} 檔（分析宇宙中有 ≥ {_min_count} 檔具備收盤價才允許寫入）\n\n"
+                f"L2b 比例下限：{'**停用（None）**' if _min_ratio is None else f'**{_min_ratio:.0%}**'}"
+            )
+            if _min_ratio is None:
+                st.info(
+                    "**min_ratio=None 實際行為**：只要分析宇宙中有 ≥ 200 檔具備收盤價，"
+                    "L2 Gate 就通過，不設比例下限。"
+                )
+
+            if ratios:
+                st.markdown("**門檻模擬（近 20 交易日）**")
+                st.caption("若啟用各門檻，以下天數的 ForwardSignal 寫入會被阻擋（唯讀模擬）：")
+                sim_rows = []
+                for thr in [0.70, 0.75, 0.80, 0.85, 0.90]:
+                    blocked = sum(1 for r in ratios if r < thr)
+                    sim_rows.append({
+                        "門檻": f"{thr:.0%}",
+                        "阻擋天數": blocked,
+                        "通過天數": len(ratios) - blocked,
+                        "阻擋率": f"{blocked / len(ratios) * 100:.0f}%",
+                        "建議": "可考慮" if blocked <= 2 else "謹慎評估" if blocked <= 5 else "過於嚴格",
+                    })
+                st.dataframe(_pd.DataFrame(sim_rows).set_index("門檻"), use_container_width=True)
+
+            st.markdown("**覆蓋率定義說明**")
+            st.caption(
+                "分子：指定交易日、分析股票池（Stock.is_excluded=False）內，"
+                "具備有效收盤價的 DISTINCT stock_id 數量。\n\n"
+                "分母：Stock 資料表中 is_excluded != True 的標的總數（固定宇宙）。\n\n"
+                "若「原始筆數」大於「應有檔數」，表示 DailyPrice 包含分析宇宙外的股票，"
+                "已修正分子避免覆蓋率超過 100%。"
             )

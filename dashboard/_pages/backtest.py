@@ -88,7 +88,7 @@ def load_validation_funnel() -> dict:
     try:
         from sqlalchemy import func
         from sqlalchemy.orm import Session
-        from src.database import init_db, ForwardSignal, Recommendation
+        from src.database import init_db, ForwardSignal, MODEL_VERSION, Recommendation
 
         engine = init_db()
         with Session(engine) as s:
@@ -104,6 +104,7 @@ def load_validation_funnel() -> dict:
                     ForwardSignal.fwd_return_20d,
                     ForwardSignal.fwd_return_60d,
                 )
+                .filter(ForwardSignal.model_version == MODEL_VERSION)
                 .filter(ForwardSignal.is_valid.isnot(False))  # exclude invalid
                 .all()
             )

@@ -20,11 +20,12 @@ def _load_scorecard_rows(limit: int = 300) -> list:
     try:
         from sqlalchemy import desc
 
-        from src.database import ForwardSignal, get_session
+        from src.database import ForwardSignal, MODEL_VERSION, get_session
 
         s = get_session()
         rows = (
             s.query(ForwardSignal)
+            .filter(ForwardSignal.model_version == MODEL_VERSION)
             .filter(ForwardSignal.decision_label.isnot(None))
             .filter(ForwardSignal.is_valid.isnot(False))  # exclude invalid records
             .order_by(desc(ForwardSignal.trade_date), ForwardSignal.candidate_rank)

@@ -287,11 +287,14 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         "tier_emoji": "🔴", "tier_label": "尚無 OOS 資料",
     }
     try:
-        from src.database import DailyPrice, ForwardSignal, get_session
+        from src.database import DailyPrice, ForwardSignal, MODEL_VERSION, get_session
         s = get_session(engine)
         fs_rows = (
             s.query(ForwardSignal)
-            .filter(ForwardSignal.setup_type == setup_type)
+            .filter(
+                ForwardSignal.model_version == MODEL_VERSION,
+                ForwardSignal.setup_type == setup_type,
+            )
             .all()
         )
         # 載入 0050 交易日曆供 dedup 用

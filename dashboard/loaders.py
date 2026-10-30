@@ -540,6 +540,63 @@ def load_watch_recs(target_date: date) -> list:
         return []
 
 
+@st.cache_data(ttl=300)
+def load_candidate_pool_data() -> dict:
+    """
+    載入候選追蹤池完整資料（active 候選、近期退出、統計）。
+
+    Returns dict:
+      active:       list of CandidatePool rows (watching/near_entry/overdue)
+      recent_exits: list of CandidatePool rows (exited/triggered_buy last 7 days)
+      stats:        dict from get_pool_stats()
+      today_history: dict[candidate_id → CandidatePoolHistory] for change display
+    """
+    try:
+        from src.database import CandidatePoolHistory, get_session
+        from src.services.candidate_pool_service import (
+            get_active_candidates,
+            get_pool_stats,
+            get_recent_exits,
+        )
+
+        s = get_session()
+        active = get_active_candidates(s)
+        recent_exits = get_recent_exits(s, days=7)
+        stats = get_pool_stats(s)
+
+        # 載入今日歷史快照（change_notes 顯示用）
+        if active:
+            most_recent_check = max(c.last_checked_date for c in active)
+            history_rows = (
+                s.query(CandidatePoolHistory)
+                .filter(
+                    CandidatePoolHistory.candidate_id.in_([c.id for c in active]),
+                    CandidatePoolHistory.check_date == most_recent_check,
+                )
+                .all()
+            )
+            today_history = {h.candidate_id: h for h in history_rows}
+        else:
+            today_history = {}
+
+        s.close()
+        return {
+            "active": active,
+            "recent_exits": recent_exits,
+            "stats": stats,
+            "today_history": today_history,
+        }
+    except Exception as e:
+        logger.warning(f"load_candidate_pool_data failed: {e}")
+        return {
+            "active": [],
+            "recent_exits": [],
+            "stats": {"n_total": 0, "n_active": 0, "n_buy": 0, "n_exited": 0,
+                      "avg_wait_days": None, "conversion_rate": None, "sufficient_data": False},
+            "today_history": {},
+        }
+
+
 @st.cache_data(ttl=1800)
 def load_analysis_results(target_date: date) -> pd.DataFrame:
     try:
@@ -1045,12 +1102,13 @@ def load_forward_signals_scorecard(limit: int = 200) -> list:
     Returns: list of dicts, 依 trade_date DESC 排序。
     """
     try:
-        from src.database import ForwardSignal, get_session
+        from src.database import ForwardSignal, MODEL_VERSION, get_session
         from sqlalchemy import desc
 
         s = get_session()
         rows = (
             s.query(ForwardSignal)
+            .filter(ForwardSignal.model_version == MODEL_VERSION)
             .filter(ForwardSignal.decision_label.isnot(None))
             .filter(ForwardSignal.is_valid.isnot(False))  # exclude invalid records
             .order_by(desc(ForwardSignal.trade_date), ForwardSignal.candidate_rank)

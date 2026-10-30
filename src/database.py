@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 # Out-of-Sample: forward_signals.trade_date >= RESEARCH_CUTOFF_DATE
 RESEARCH_CUTOFF_DATE: _date = _date(2026, 10, 9)
 
-MODEL_VERSION = "v8.0"
+V1_MODEL_VERSION = "v8.0"   # frozen — identifies all existing v8.0 signals
+MODEL_VERSION    = "v8.0"   # current pipeline (equals V1 until V2 is built)
 
 
 class Base(DeclarativeBase):
@@ -452,14 +453,16 @@ class ForwardSignal(Base):
     Forward validation signals — append-only，features 在建立當下凍結。
 
     Rules:
-      - (trade_date, stock_id) UNIQUE — 重複資料只 skip，永不 UPDATE
+      - (trade_date, stock_id, model_version) UNIQUE — 重複資料只 skip，永不 UPDATE
+      - 不同 model_version 可在同一日期同一股票共存（Phase 0 升級準備）
       - locked_at 記錄凍結時間戳
       - 即使演算法改版，也禁止回頭覆寫歷史記錄
     """
 
     __tablename__ = "forward_signals"
     __table_args__ = (
-        UniqueConstraint("trade_date", "stock_id", name="uq_fs_date_stock"),
+        # model_version added in Phase 0 so V1 and V2 can coexist on same date+stock
+        UniqueConstraint("trade_date", "stock_id", "model_version", name="uq_fs_date_stock_version"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -501,6 +504,10 @@ class ForwardSignal(Base):
     target1        = Column(Float)        # 目標價 T1
     target2        = Column(Float)        # 目標價 T2
     decision_label = Column(String(30))   # stable code: strong_buy/buy/wait_pullback/wait/reduce/sell
+
+    # ── 隔夜市場風險連結（盤前 pipeline 回填）────────────────────
+    overnight_rule_version = Column(String(20))   # overnight_v1 or NULL (legacy/unlinked)
+    overnight_context_id   = Column(Integer)       # FK → overnight_market_contexts.id
 
     locked_at = Column(DateTime, default=datetime.utcnow)
 
@@ -713,6 +720,89 @@ class PipelineFunnel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class CandidatePool(Base):
+    """
+    進場候選追蹤池 — 每次候選週期一筆記錄（append-only）。
+
+    Rules:
+      - (stock_id, first_seen_date, pool_version) UNIQUE — 同版本同日不重複
+      - 退出後重新符合條件 → 建立新紀錄，不覆寫舊紀錄
+      - 入池快照欄位（entry_*）凍結，不得修改
+      - 所有 BUY 觸發必須來自 ForwardSignal（不自行產生 BUY 訊號）
+    """
+
+    __tablename__ = "candidate_pool"
+    __table_args__ = (
+        UniqueConstraint("stock_id", "first_seen_date", "pool_version",
+                         name="uq_cp_stock_firstdate_ver"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_id = Column(String(10), nullable=False, index=True)
+    stock_name = Column(String(60))
+    model_version = Column(String(20), nullable=False)
+    pool_version = Column(String(20), nullable=False)
+
+    # ── 候選週期 ────────────────────────────────────────────────
+    first_seen_date = Column(Date, nullable=False)
+    last_checked_date = Column(Date, nullable=False)
+    # watching / near_entry / overdue / triggered_buy / exited
+    status = Column(String(20), nullable=False)
+    trading_days_watched = Column(Integer, default=0)
+
+    # ── 入池快照（凍結）─────────────────────────────────────────
+    entry_setup_type = Column(String(20))
+    entry_total_score = Column(Float)
+    entry_trade_signal = Column(String(20))
+    entry_decision_code = Column(String(20))
+    entry_reason = Column(String(200))
+
+    # ── 每日更新（當前狀態）────────────────────────────────────
+    latest_setup_type = Column(String(20))
+    latest_total_score = Column(Float)
+    latest_trade_signal = Column(String(20))
+    latest_decision_code = Column(String(20))
+    current_missing_conditions = Column(Text)
+
+    # ── 正式 BUY 連結 ──────────────────────────────────────────
+    triggered_buy_date = Column(Date)
+    forward_signal_id = Column(Integer)     # FK → forward_signals.id（nullable）
+
+    # ── 退出資訊 ──────────────────────────────────────────────
+    exit_date = Column(Date)
+    # TRIGGERED_BUY / THESIS_FAILED / EXPIRED / NOT_IN_UNIVERSE
+    exit_reason = Column(String(100))
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CandidatePoolHistory(Base):
+    """
+    候選追蹤池每日狀態快照 — 供稽核與「今昨對比」顯示。
+    每個候選每個交易日最多一筆記錄。
+    """
+
+    __tablename__ = "candidate_pool_history"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "check_date", name="uq_cph_candidate_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    candidate_id = Column(Integer, nullable=False, index=True)
+    check_date = Column(Date, nullable=False)
+
+    status = Column(String(20))
+    setup_type = Column(String(20))
+    total_score = Column(Float)
+    decision_code = Column(String(20))
+    trade_signal = Column(String(20))
+    missing_conditions = Column(Text)
+    change_notes = Column(String(300))
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 # ── 引擎與 Session ───────────────────────────────────────────
 
 
@@ -823,6 +913,9 @@ def _migrate_forward_signals(engine) -> None:
         ("execution_date",          "DATE"),
         ("execution_price",         "FLOAT"),
         ("execution_price_type",    "VARCHAR(20)"),
+        # Overnight context link (populated by pre-market pipeline)
+        ("overnight_rule_version",  "VARCHAR(20)"),
+        ("overnight_context_id",    "INTEGER"),
     ]
     _safe_add_cols(engine, "forward_signals", new_cols)
 
@@ -1126,6 +1219,58 @@ def _verify_schema_integrity(engine) -> None:
     logger.info("Schema integrity check PASS")
 
 
+def _migrate_forward_signals_unique_constraint(engine) -> None:
+    """
+    Migrate forward_signals unique constraint from (trade_date, stock_id)
+    to (trade_date, stock_id, model_version).
+
+    PostgreSQL only — uses pg_constraint to check/drop/add idempotently.
+    SQLite is skipped; recreate the local DB to pick up the new schema.
+    """
+    from sqlalchemy import text
+
+    if engine.dialect.name != "postgresql":
+        logger.info(
+            "_migrate_forward_signals_unique_constraint: SQLite — skipped. "
+            "Delete the local DB file and re-run init_db() to get new constraint."
+        )
+        return
+
+    with engine.begin() as conn:
+        # Drop old 2-column constraint if it still exists
+        conn.execute(text("""
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'uq_fs_date_stock'
+                      AND conrelid = 'forward_signals'::regclass
+                ) THEN
+                    ALTER TABLE forward_signals DROP CONSTRAINT uq_fs_date_stock;
+                END IF;
+            END $$;
+        """))
+
+        # Add new 3-column constraint if not yet present
+        conn.execute(text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'uq_fs_date_stock_version'
+                      AND conrelid = 'forward_signals'::regclass
+                ) THEN
+                    ALTER TABLE forward_signals
+                    ADD CONSTRAINT uq_fs_date_stock_version
+                    UNIQUE (trade_date, stock_id, model_version);
+                END IF;
+            END $$;
+        """))
+
+    logger.info(
+        "_migrate_forward_signals_unique_constraint: "
+        "uq_fs_date_stock_version (trade_date, stock_id, model_version) ensured"
+    )
+
+
 def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
@@ -1139,6 +1284,7 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     _migrate_forward_outcome_evaluations(engine)
     _migrate_position_monitor(engine)
     _migrate_position_monitor_nullable(engine)
+    _migrate_forward_signals_unique_constraint(engine)
 
     # Fail-closed: raise if required columns are still missing after all migrations.
     _verify_schema_integrity(engine)

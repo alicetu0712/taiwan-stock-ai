@@ -582,15 +582,29 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         return 0
 
     # ── L2: Market Coverage ──────────────────────────────────────────
+    # Count DISTINCT analysis-universe stocks (is_excluded=False) with valid price.
+    # Must join to Stock table — DailyPrice may contain market-wide data (all TWSE+TPEx
+    # stocks, ETFs, etc.) that would inflate the raw row count far beyond the 826-stock
+    # analysis universe, producing ratios > 100% if not scoped correctly.
+    expected_universe = (
+        session.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    ) or 1
     market_count = (
-        session.query(func.count(DailyPrice.stock_id))
-        .filter(DailyPrice.date == trade_date, DailyPrice.close.isnot(None))
+        session.query(func.count(func.distinct(DailyPrice.stock_id)))
+        .join(Stock, Stock.stock_id == DailyPrice.stock_id)
+        .filter(
+            DailyPrice.date == trade_date,
+            DailyPrice.close.isnot(None),
+            Stock.is_excluded.isnot(True),
+        )
         .scalar()
     ) or 0
 
     # L2a: absolute floor
     if market_count < _min_count:
-        detail = f"市場資料不足 ({market_count} 檔 < 絕對下限 {_min_count})"
+        detail = f"市場資料不足 ({market_count} 檔 < 絕對下限 {_min_count}，分析宇宙 {expected_universe} 檔)"
         logger.warning(
             f"[write_forward_signals] REJECTED L2a: {trade_date} {detail}，"
             f"疑似資料抓取失敗，不寫入 Forward signals"
@@ -602,11 +616,6 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
 
     # L2b: coverage ratio (disabled when min_ratio is None)
     if _min_ratio is not None:
-        expected_universe = (
-            session.query(func.count(Stock.stock_id))
-            .filter(Stock.is_excluded.isnot(True))
-            .scalar()
-        ) or 1
         actual_ratio = market_count / expected_universe
         if actual_ratio < _min_ratio:
             detail = (f"市場覆蓋率不足 "
@@ -737,11 +746,14 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         except Exception:
             return None
 
-    # 查已存在的 (trade_date, stock_id) 以避免衝突
+    # 查已存在的 (trade_date, stock_id, model_version) 以避免衝突
     existing = {
         r.stock_id
         for r in session.query(ForwardSignal.stock_id)
-        .filter(ForwardSignal.trade_date == trade_date)
+        .filter(
+            ForwardSignal.trade_date == trade_date,
+            ForwardSignal.model_version == MODEL_VERSION,
+        )
         .all()
     }
 
@@ -838,11 +850,12 @@ def fill_execution_prices(session, as_of_date: date) -> int:
     import bisect
     from datetime import timedelta
 
-    from src.database import DailyPrice, ForwardSignal
+    from src.database import DailyPrice, ForwardSignal, MODEL_VERSION
 
     pending = (
         session.query(ForwardSignal)
         .filter(
+            ForwardSignal.model_version == MODEL_VERSION,
             ForwardSignal.execution_price_type == "NEXT_OPEN",
             ForwardSignal.execution_price.is_(None),
             ForwardSignal.trade_date < as_of_date,
@@ -922,13 +935,14 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
     """
     from datetime import datetime, timedelta
 
-    from src.database import DailyPrice, ForwardSignal
+    from src.database import DailyPrice, ForwardSignal, MODEL_VERSION
 
     cutoff = as_of_date - timedelta(days=30)
 
     pending = (
         session.query(ForwardSignal)
         .filter(
+            ForwardSignal.model_version == MODEL_VERSION,
             ForwardSignal.trade_date <= cutoff,
             ForwardSignal.outcomes_computed_at.is_(None),
             ForwardSignal.decision_label.isnot(None),

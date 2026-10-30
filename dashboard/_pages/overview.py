@@ -10,18 +10,17 @@ import streamlit as st
 
 from dashboard.loaders import (
     load_analysis_results,
+    load_candidate_pool_data,
     load_current_regime,
     load_db_recommendations,
     load_evidence_stats,
     load_exec_logs,
     load_latest_completed_date,
     load_market_health,
-    load_opportunity_recs,
     load_pipeline_funnel,
     load_report,
     load_stock_names,
     load_stock_prices,
-    load_watch_recs,
     parse_market_summary,
     parse_recs_from_report,
 )
@@ -288,6 +287,202 @@ def _render_trading_reference(
   {sig_html}
   {freshness_html}
   {disclaimer}
+</div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_candidate_pool(stock_prices: dict) -> None:
+    """進場候選追蹤池 UI（取代原 New Opportunities + Watch List）。"""
+    pool_data = load_candidate_pool_data()
+    active = pool_data["active"]
+    recent_exits = pool_data["recent_exits"]
+    stats = pool_data["stats"]
+    today_history = pool_data["today_history"]
+
+    if not active and not recent_exits:
+        st.info("候選追蹤池目前沒有記錄。系統正式上線後開始累積。")
+        return
+
+    # ── 狀態分組 ───────────────────────────────────────────────
+    near_entry  = [c for c in active if c.status == "near_entry"]
+    watching    = [c for c in active if c.status in ("watching", "overdue")]
+    today_new   = [c for c in active if c.first_seen_date == c.last_checked_date]
+    today_exited = [c for c in recent_exits if c.exit_date == (
+        recent_exits[0].exit_date if recent_exits else None)]
+
+    # ── 區塊標題 ───────────────────────────────────────────────
+    if near_entry:
+        st.markdown(
+            f'<div class="section-title">接近進場條件（{len(near_entry)} 檔）</div>',
+            unsafe_allow_html=True,
+        )
+        for c in near_entry:
+            _render_candidate_card(c, today_history, stock_prices, highlight=True)
+
+    if watching:
+        st.markdown(
+            f'<div class="section-title">觀察中（{len(watching)} 檔）</div>',
+            unsafe_allow_html=True,
+        )
+        for c in watching:
+            _render_candidate_card(c, today_history, stock_prices, highlight=False)
+
+    if today_new:
+        new_names = "、".join(
+            (c.stock_name or c.stock_id) for c in today_new[:5]
+        )
+        extra = f"等 {len(today_new)} 檔" if len(today_new) > 5 else f"{len(today_new)} 檔"
+        st.caption(f"今日新進候選：{new_names}（{extra}）")
+
+    if not active:
+        st.info("目前沒有符合追蹤條件的候選股票。")
+
+    # ── 今日退出 ────────────────────────────────────────────────
+    if recent_exits:
+        latest_exit_date = max(c.exit_date for c in recent_exits if c.exit_date)
+        today_exit_list  = [c for c in recent_exits if c.exit_date == latest_exit_date]
+        if today_exit_list:
+            with st.expander(f"今日退出與退出原因（{len(today_exit_list)} 檔）"):
+                for c in today_exit_list:
+                    reason_map = {
+                        "TRIGGERED_BUY":   "正式 BUY 觸發",
+                        "THESIS_FAILED":   "技術型態失效或賣出訊號",
+                        "EXPIRED":         f"觀察滿 {c.trading_days_watched} 交易日未觸發 BUY",
+                        "NOT_IN_UNIVERSE": "不再出現於分析宇宙",
+                    }
+                    raw_reason = c.exit_reason or ""
+                    reason_key = raw_reason.split(":")[0] if ":" in raw_reason else raw_reason
+                    reason_text = reason_map.get(reason_key, raw_reason or "—")
+                    icon = "✅" if reason_key == "TRIGGERED_BUY" else "❌"
+                    name = c.stock_name or c.stock_id
+                    st.markdown(
+                        f"{icon} **{name}**（{c.stock_id}）— "
+                        f"退出：{reason_text}  ·  "
+                        f"觀察 {c.trading_days_watched or 0} 個交易日"
+                    )
+
+    # ── 追蹤統計（折疊）──────────────────────────────────────────
+    if stats["n_total"] > 0:
+        with st.expander("候選追蹤統計"):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("累計入池", stats["n_total"])
+            col2.metric("觀察中", stats["n_active"])
+            col3.metric("已觸發 BUY", stats["n_buy"])
+            col4.metric("已失效／逾期", stats["n_exited"])
+            if stats["sufficient_data"]:
+                col_a, col_b = st.columns(2)
+                col_a.metric(
+                    "平均等待交易日",
+                    f"{stats['avg_wait_days']:.1f}" if stats["avg_wait_days"] else "—"
+                )
+                col_b.metric(
+                    "BUY 轉換率",
+                    f"{stats['conversion_rate']:.1f}%" if stats["conversion_rate"] else "—",
+                    help="分母 = 已完成週期（觸發BUY + 失效退出），不含仍在觀察的候選",
+                )
+            else:
+                st.caption("資料累積中（需 ≥ 5 個完成週期才計算轉換率）")
+            st.caption(
+                "⚠️ 以上為候選池追蹤指標，不等於策略交易績效。"
+                "正式績效請見 Evidence Dashboard。"
+            )
+
+
+def _render_candidate_card(cand, today_history: dict, stock_prices: dict,
+                           highlight: bool = False) -> None:
+    """渲染單一候選卡片。"""
+    name = cand.stock_name or cand.stock_id
+    sid = cand.stock_id
+    price = stock_prices.get(sid)
+    price_str = f"NT$ {price:,.1f}" if price else "—"
+
+    days = cand.trading_days_watched or 0
+    overdue = cand.status == "overdue"
+
+    # 狀態徽章
+    status_badges = {
+        "near_entry": ('<span style="background:#e65100;color:#fff;border-radius:4px;'
+                       'padding:2px 8px;font-size:0.68rem;font-weight:700">接近進場</span>', "#1a1a2e", "#e65100"),
+        "watching":   ('<span style="background:#1565c0;color:#fff;border-radius:4px;'
+                       'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察中</span>', "#0d0d1a", "#1565c0"),
+        "overdue":    ('<span style="background:#5d4037;color:#fff;border-radius:4px;'
+                       'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察逾期</span>', "#0d0d1a", "#5d4037"),
+    }
+    badge_html, bg_color, border_color = status_badges.get(
+        cand.status, ('', "#0d0d1a", "#444")
+    )
+
+    # 觀察天數顯示
+    overdue_warn = f' <span style="color:#ff7043;font-size:0.7rem">（逾期）</span>' if overdue else ""
+    days_str = f"已觀察 {days} 個交易日{overdue_warn}"
+
+    # 今日變化
+    history = today_history.get(cand.id)
+    change_text = history.change_notes if history else "—"
+    change_is_new = change_text == "新進候選追蹤池"
+    change_color = "#4caf50" if change_is_new else "#90a4ae"
+
+    # 為什麼值得觀察（entry_reason）
+    watch_why = cand.entry_reason or "—"
+
+    # 還差什麼（missing conditions）
+    missing = cand.current_missing_conditions or "持續觀察各項技術指標"
+
+    # 退出條件說明
+    exit_cond_map = {
+        "breakout":     "突破失敗、量縮回落或型態轉為 breakdown",
+        "near_breakout": "突破失敗、下跌跌破近期低點或訊號轉賣",
+        "pullback_buy": "跌破 MA10/MA20 且無力收復",
+        "pullback_hold": "跌破 MA20 收盤",
+        "trending":     "趨勢結構破壞（跌破 MA60 或 breakdown 型態）",
+    }
+    exit_when = exit_cond_map.get(
+        cand.entry_setup_type or "none",
+        f"達第 20 個交易日仍無 BUY 訊號，或技術型態失效"
+    )
+
+    score_str = f"{cand.latest_total_score:.0f}" if cand.latest_total_score else "—"
+
+    st.markdown(
+        f"""
+<div style="background:{bg_color};border:1px solid {border_color};border-radius:8px;
+     padding:12px 16px;margin-bottom:8px">
+  <div style="display:flex;justify-content:space-between;align-items:center;
+       flex-wrap:wrap;gap:6px;margin-bottom:8px">
+    <div>
+      {badge_html}
+      <span style="font-weight:700;font-size:1rem;color:#f0f6fc;margin-left:8px">{name}</span>
+      <span style="color:#aaa;font-size:0.75rem;margin-left:6px">{sid} · {price_str}</span>
+    </div>
+    <span style="color:#90a4ae;font-size:0.72rem">{days_str}</span>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.78rem">
+    <div>
+      <div style="color:#78909c;font-size:0.65rem;text-transform:uppercase;
+           letter-spacing:.04em;margin-bottom:2px">為什麼值得觀察</div>
+      <div style="color:#cfd8dc">{watch_why}</div>
+    </div>
+    <div>
+      <div style="color:#78909c;font-size:0.65rem;text-transform:uppercase;
+           letter-spacing:.04em;margin-bottom:2px">距離 BUY 還差什麼</div>
+      <div style="color:#ffe082">{missing}</div>
+    </div>
+    <div>
+      <div style="color:#78909c;font-size:0.65rem;text-transform:uppercase;
+           letter-spacing:.04em;margin-bottom:2px">今日變化</div>
+      <div style="color:{change_color}">{change_text}</div>
+    </div>
+    <div>
+      <div style="color:#78909c;font-size:0.65rem;text-transform:uppercase;
+           letter-spacing:.04em;margin-bottom:2px">退出條件</div>
+      <div style="color:#ef9a9a;font-size:0.72rem">{exit_when}</div>
+    </div>
+  </div>
+  <div style="margin-top:6px;color:#546e7a;font-size:0.68rem">
+    綜合 {score_str} 分 · 型態：{cand.latest_setup_type or "—"} ·
+    首次入池：{cand.first_seen_date}
+  </div>
 </div>""",
         unsafe_allow_html=True,
     )
@@ -1129,80 +1324,5 @@ def page_today(selected_date: date) -> None:
     else:
         st.info("今日尚無分析資料，請先執行分析。")
 
-    # ── New Opportunities（分數動能強勁但在冷卻期外的新股）──────────
-    opp_recs = load_opportunity_recs(selected_date)
-    if opp_recs:
-        st.markdown(
-            f'<div class="section-title">🔥 New Opportunities（{len(opp_recs)} 檔，觀察追蹤中）</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "⚡ 分數動能突出但尚未進入正式 Core Picks。追蹤 4–8 週績效後再決定是否納入正式推薦。"
-        )
-        for opp in opp_recs:
-            if not opp.get("name"):
-                opp["name"] = stock_names.get(opp["sid"], "")
-            if opp["price"] is None:
-                opp["price"] = stock_prices.get(opp["sid"])
-            sc5 = opp.get("score_change_5d")
-            tc5 = opp.get("timing_change_5d")
-            bc5 = opp.get("behavior_change_5d")
-            sc5_str = f"{sc5:+.1f}" if sc5 is not None else "—"
-            tc5_str = f"{tc5:+.1f}" if tc5 is not None else "—"
-            bc5_str = f"{bc5:+.1f}" if bc5 is not None else "—"
-
-            def _badge(label, val, val_str, threshold=5):
-                bg = "#e65100" if val and val >= threshold else "#37474f"
-                arrow = "▲ " if val and val > 0 else ""
-                return f'<span style="background:{bg};color:#fff;border-radius:4px;padding:2px 7px;font-size:0.68rem;font-weight:700">{arrow}{label} {val_str}</span>'
-
-            badges = (
-                _badge("總5D", sc5, sc5_str, 5)
-                + " "
-                + _badge("技術5D", tc5, tc5_str, 8)
-                + " "
-                + _badge("籌碼5D", bc5, bc5_str, 8)
-            )
-            total = opp.get("total_score", opp["scores"].get("total", 0))
-            name = opp.get("name", "") or opp["sid"]
-            sid = opp["sid"]
-            price = opp.get("price")
-            price_str = f"NT$ {price:,.1f}" if price else "—"
-            adv_tags = "".join(
-                f'<span class="tag-good">✓ {a[:18]}</span>'
-                for a in opp.get("advantages", [])[:2]
-            )
-            st.markdown(
-                f"""
-<div style="background:#1a1a2e;border:1px solid #e65100;border-radius:8px;padding:12px 16px;margin-bottom:8px">
-  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-    <div>
-      <span style="font-weight:700;font-size:1rem;color:#f0f6fc">{name}</span>
-      <span style="color:#aaa;font-size:0.75rem;margin-left:8px">{sid} · {price_str}</span>
-    </div>
-    <span style="background:#333;color:#ddd;border-radius:4px;padding:2px 7px;font-size:0.7rem">總分 {total:.0f}</span>
-  </div>
-  <div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">{badges}</div>
-  {f'<div style="margin-top:6px">{adv_tags}</div>' if adv_tags else ''}
-  {f'<div style="color:#ccc;font-size:0.78rem;margin-top:6px">{opp["summary"]}</div>' if opp.get("summary") else ''}
-</div>""",
-                unsafe_allow_html=True,
-            )
-
-    # Watch List — 由 DecisionEngine.select_watchlist() 產生（percentile + min_score + confidence）
-    watch_recs_list = load_watch_recs(selected_date)
-    if watch_recs_list:
-        with st.expander(
-            f"📋 Watch List（{len(watch_recs_list)} 檔，當日相對最強、待觀察）"
-        ):
-            for w in watch_recs_list:
-                sc5 = w.get("score_change_5d")
-                sc5_str = f"（5D {sc5:+.1f}）" if sc5 is not None else ""
-                display_name = (
-                    f"{w['name']}（{w['sid']}）" if w["name"] != w["sid"] else w["sid"]
-                )
-                st.markdown(
-                    f"**{display_name}** — 綜合 {w['total_score']:.0f} | "
-                    f"技術 {w['timing_score']:.0f} | 籌碼 {w['behavior_score']:.0f} | "
-                    f"品質 {w['confidence']:.0f}{sc5_str}"
-                )
+    # ── 進場候選追蹤池 ────────────────────────────────────────
+    _render_candidate_pool(stock_prices)

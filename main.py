@@ -805,6 +805,22 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
         except Exception as e:
             logger.warning(f"[Step 9d] foe_v1 outcomes failed (非致命): {e}")
 
+        # ── Step 9e: 候選追蹤池更新 ──────────────────────────
+        try:
+            from src.services.candidate_pool_service import update_candidate_pool
+            cp_stats = update_candidate_pool(session, trade_date)
+            logger.info(
+                f"[Step 9e] candidate_pool: "
+                f"new={cp_stats['new_entries']} "
+                f"buy={cp_stats['triggered_buy']} "
+                f"failed={cp_stats['thesis_failed']} "
+                f"expired={cp_stats['expired']} "
+                f"updated={cp_stats['updated']}"
+            )
+        except Exception as e:
+            logger.error(f"[Step 9e] candidate_pool failed: {e}")
+            raise  # 候選池失敗必須顯式拋出，不靜默忽略
+
         # ── Step 10: 產生報告 ────────────────────────────────
         logger.info("[Step 10] Generating daily report...")
         watch_list_data = [

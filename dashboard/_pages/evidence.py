@@ -153,27 +153,21 @@ def _resolved_stop_t1(df: pd.DataFrame, suffix: str) -> pd.DataFrame:
 def _section_progress_summary(df: pd.DataFrame):
     """A. 目前驗證進度與白話結論"""
 
-    # Unique signals = unique forward_signal_id (baseline + aware share same signals)
+    # ── 計算關鍵數字 ──────────────────────────────────────────────────────────
     n_unique_signals = df["forward_signal_id"].nunique()
 
-    # Baseline rows = canonical signal reference (one row per signal for baseline path)
     baseline_all = df[df["path_type"] == PATH_BASELINE]
-    n_legacy = int((df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA).sum() // 2
-                   if (df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA).sum() > 0
-                   else 0)
-    # More accurate: count unique signal_ids that are excluded
     n_legacy = df[df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA]["forward_signal_id"].nunique()
+    n_formal = baseline_all["forward_signal_id"].nunique() - n_legacy  # unique signals in formal cohort
 
     formal_baseline = _formal_eligible(baseline_all)
-    n_formal = len(formal_baseline)
-    n_pending = int((formal_baseline["entry_status"] == EXEC_PENDING).sum())
+    n_pending    = int((formal_baseline["entry_status"] == EXEC_PENDING).sum())
     n_matured_20d = int(formal_baseline["horizon_20d_matured_at"].notna().sum())
     n_matured_60d = int(formal_baseline["horizon_60d_matured_at"].notna().sum())
 
-    # Determine overall readiness
     ss = _EVIDENCE_PRESENTER.sample_strength(n_matured_20d)
 
-    # ── 頁面標題 ─────────────────────────────────────────────────────────────
+    # ── 頁面標題 ──────────────────────────────────────────────────────────────
     st.html(f"""
 <div style="margin-bottom:16px">
   <div style="font-size:1.25rem;font-weight:800;color:#1a1a2e;margin-bottom:8px">
@@ -191,63 +185,108 @@ def _section_progress_summary(df: pd.DataFrame):
 
     st.markdown("### A. 目前驗證進度")
 
-    # ── 進度指標 Grid ─────────────────────────────────────────────────────────
+    # ── 進度指標 Grid（2 × 3）────────────────────────────────────────────────
+    # 上排：訊號覆蓋狀態（共幾個訊號 / 已有overnight / 缺overnight）
+    # 下排：執行進度（PENDING / 完成20D / 完成60D）
+    _formal_bg  = "#e8f5e9" if n_formal > 0  else "#f8f9fa"
+    _formal_clr = "#2e7d32" if n_formal > 0  else "#888"
+    _legacy_bg  = "#fff3e0" if n_legacy > 0  else "#f8f9fa"
+    _legacy_clr = "#e65100" if n_legacy > 0  else "#888"
+
     st.html(f"""
 <style>
 @media (max-width: 640px) {{
   .ev-prog-grid {{ grid-template-columns: 1fr 1fr !important; }}
 }}
 </style>
-<div class="ev-prog-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 14px">
-  <div style="background:#f8f9fa;border-radius:10px;padding:14px 16px;text-align:center">
-    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">
-      累積訊號數<br><span style="font-weight:400">（唯一訊號）</span>
+<div class="ev-prog-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:8px 0 14px">
+
+  <!-- 上排：訊號覆蓋 -->
+  <div style="background:#f0f4ff;border-radius:10px;padding:14px 16px;text-align:center">
+    <div style="font-size:0.7rem;color:#667eea;font-weight:600;margin-bottom:4px">
+      📋 累積追蹤訊號<br><span style="font-weight:400">（唯一訊號）</span>
     </div>
     <div style="font-size:1.3rem;font-weight:800;color:#1a1a2e">{n_unique_signals:,}</div>
-    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">
-      每個訊號有兩條評估路徑
-    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">每個訊號有兩條評估路徑</div>
   </div>
+
+  <div style="background:{_formal_bg};border-radius:10px;padding:14px 16px;text-align:center">
+    <div style="font-size:0.7rem;color:{_formal_clr};font-weight:600;margin-bottom:4px">
+      ✅ 已連結 Overnight<br><span style="font-weight:400">（正式評估群組）</span>
+    </div>
+    <div style="font-size:1.3rem;font-weight:800;color:{_formal_clr}">{n_formal:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">具備 overnight_v1 資料</div>
+  </div>
+
+  <div style="background:{_legacy_bg};border-radius:10px;padding:14px 16px;text-align:center">
+    <div style="font-size:0.7rem;color:{_legacy_clr};font-weight:600;margin-bottom:4px">
+      ⚠️ 缺 Overnight 資料<br><span style="font-weight:400">（Legacy，已排除）</span>
+    </div>
+    <div style="font-size:1.3rem;font-weight:800;color:{_legacy_clr}">{n_legacy:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">overnight_v1 上線前的舊訊號</div>
+  </div>
+
+  <!-- 下排：觀察成熟度 -->
   <div style="background:#fff8e1;border-radius:10px;padding:14px 16px;text-align:center">
     <div style="font-size:0.7rem;color:#f57f17;font-weight:600;margin-bottom:4px">
       ⏳ 等待進場<br><span style="font-weight:400">（PENDING）</span>
     </div>
     <div style="font-size:1.3rem;font-weight:800;color:#e65100">{n_pending:,}</div>
-    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">
-      進場窗口（3 交易日）尚未結束
-    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">3 個交易日進場窗口未結束</div>
   </div>
-  <div style="background:#e8f5e9;border-radius:10px;padding:14px 16px;text-align:center">
-    <div style="font-size:0.7rem;color:#2e7d32;font-weight:600;margin-bottom:4px">
-      ✅ 完成 20D 觀察<br><span style="font-weight:400">（成熟樣本）</span>
+
+  <div style="background:#{'e8f5e9' if n_matured_20d >= 10 else 'f8f9fa'};border-radius:10px;padding:14px 16px;text-align:center">
+    <div style="font-size:0.7rem;color:#{'2e7d32' if n_matured_20d >= 10 else '888'};font-weight:600;margin-bottom:4px">
+      📊 完成 20D 觀察<br><span style="font-weight:400">（成熟樣本）</span>
     </div>
-    <div style="font-size:1.3rem;font-weight:800;color:{'#2e7d32' if n_matured_20d >= 10 else '#e65100'}">{n_matured_20d:,}</div>
-    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">
-      可計算 20 個交易日後的報酬
-    </div>
+    <div style="font-size:1.3rem;font-weight:800;color:#{'2e7d32' if n_matured_20d >= 10 else 'e65100'}">{n_matured_20d:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">可計算 20 交易日後報酬</div>
   </div>
-  <div style="background:#e8f5e9;border-radius:10px;padding:14px 16px;text-align:center">
-    <div style="font-size:0.7rem;color:#2e7d32;font-weight:600;margin-bottom:4px">
-      ✅ 完成 60D 觀察<br><span style="font-weight:400">（成熟樣本）</span>
+
+  <div style="background:#{'e8f5e9' if n_matured_60d >= 10 else 'f8f9fa'};border-radius:10px;padding:14px 16px;text-align:center">
+    <div style="font-size:0.7rem;color:#{'2e7d32' if n_matured_60d >= 10 else '888'};font-weight:600;margin-bottom:4px">
+      📊 完成 60D 觀察<br><span style="font-weight:400">（成熟樣本）</span>
     </div>
-    <div style="font-size:1.3rem;font-weight:800;color:{'#2e7d32' if n_matured_60d >= 10 else '#e65100'}">{n_matured_60d:,}</div>
-    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">
-      可計算 60 個交易日後的報酬
-    </div>
+    <div style="font-size:1.3rem;font-weight:800;color:#{'2e7d32' if n_matured_60d >= 10 else 'e65100'}">{n_matured_60d:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">可計算 60 交易日後報酬</div>
   </div>
+
 </div>""")
 
-    # ── 白話結論 ─────────────────────────────────────────────────────────────
-    if n_matured_20d == 0:
+    # ── Overnight 資料缺口警告（獨立區塊，與成熟度結論分開）────────────────
+    if n_legacy > 0 and n_formal == 0:
         st.warning(
-            "⏳ **目前尚無完成觀察期的紀錄。**  \n"
-            "無法判斷策略的實際勝率與超額報酬。"
-            f"累積了 {n_formal} 個有效訊號，但尚無任何一筆在進場後經過完整的 20 個交易日。  \n"
+            f"⚠️ **Overnight 資料缺口：全部 {n_legacy} 個訊號均為 Legacy（缺少隔夜市場資料）。**  \n"
+            "這些訊號在 overnight_v1 Pipeline 上線前產生，當時沒有記錄隔夜風險資料，"
+            "無法納入正式評估群組（Formal Cohort）。  \n"
+            "overnight_v1 Pipeline 已修復（2026-10-31），**新產生的訊號將自動連結 Overnight 資料**。"
+            "現有 Legacy 訊號不會補登，需等新訊號累積後，正式評估群組才會開始成長。"
+        )
+    elif n_legacy > 0:
+        st.info(
+            f"📌 **Overnight 資料缺口提示：** {n_legacy} 個 Legacy 訊號（缺 overnight 資料）已排除於正式評估，"
+            f"{n_formal} 個訊號具備完整資料並納入正式群組。  \n"
+            "Legacy 訊號仍顯示於 D 節供參考，但不計入 B / C 節的績效統計。  \n"
+            "overnight_v1 Pipeline 已修復（2026-10-31），新訊號將不再產生 Legacy 狀態。"
+        )
+
+    # ── 動態白話結論（專注於成熟度狀態）────────────────────────────────────
+    if n_formal == 0 and n_unique_signals > 0:
+        # 全部是 legacy，沒有正式樣本
+        st.warning(
+            "⏳ **正式評估群組尚無資料。**  \n"
+            f"目前累積了 {n_unique_signals} 個訊號，但全部缺少 overnight 資料，無法進入正式評估。  \n"
+            "等待 overnight_v1 Pipeline 產生新訊號後，正式群組才會開始累積。"
+        )
+    elif n_matured_20d == 0:
+        st.warning(
+            "⏳ **正式群組已有資料，但尚無完成觀察期的記錄。**  \n"
+            f"目前 {n_formal} 個正式訊號在追蹤中，尚無任何一筆在進場後經過完整的 20 個交易日。  \n"
             "請繼續每日執行 `run_daily.py`，等待觀察期陸續完成。"
         )
     elif ss.is_insufficient:
         st.warning(
-            f"📊 **初步累積中（{n_matured_20d} 筆已完成 20D 觀察）。**  \n"
+            f"📊 **初步累積中（{n_matured_20d} 筆已完成 20D 觀察，正式群組共 {n_formal} 個訊號）。**  \n"
             "目前樣本太少，任何績效數字都不具統計意義，僅供觀察參考。  \n"
             "**目前不能得出結論：** 無法判定策略是否有效或無效。"
         )
@@ -260,12 +299,6 @@ def _section_progress_summary(df: pd.DataFrame):
         st.success(
             f"✅ **已有 {n_matured_20d} 筆完成 20D 觀察，{n_matured_60d} 筆完成 60D 觀察。**  \n"
             "可開始進行初步統計評估，詳見下方 B 節績效摘要。"
-        )
-
-    if n_legacy > 0:
-        st.caption(
-            f"📌 注意：{n_legacy} 個訊號為 overnight_v1 上線前的舊紀錄（Legacy），"
-            "因缺乏隔夜風險資料已標記排除，不納入正式評估，但仍顯示於 D 節。"
         )
 
 
@@ -564,42 +597,64 @@ def _section_sample_health(df: pd.DataFrame):
         return
 
     baseline_df = df[df["path_type"] == PATH_BASELINE]
-    aware_df = df[df["path_type"] == PATH_AWARE]
+    aware_df    = df[df["path_type"] == PATH_AWARE]
 
-    # PENDING explanation
-    pending_b = int((baseline_df["entry_status"] == EXEC_PENDING).sum())
-    pending_a = int((aware_df["entry_status"] == EXEC_PENDING).sum())
-    no_overnight_signals = df[df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA]["forward_signal_id"].nunique()
-    no_overnight = no_overnight_signals  # unique signals (each has 2 path rows)
+    n_legacy   = df[df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA]["forward_signal_id"].nunique()
+    n_formal_b = len(_formal_eligible(baseline_df))
+    n_formal_a = len(_formal_eligible(aware_df))
+    pending_b  = int((baseline_df["entry_status"] == EXEC_PENDING).sum())
+    pending_a  = int((aware_df["entry_status"] == EXEC_PENDING).sum())
 
+    # ── Formal Cohort vs Legacy 分組摘要 ──────────────────────────────────
     st.html(f"""
-<style>
-@media (max-width: 640px) {{
-  .ev-health-grid {{ grid-template-columns: 1fr !important; }}
-}}
-</style>
-<div class="ev-health-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0 12px">
-  <div style="background:#f8f9fa;border-radius:10px;padding:14px 16px">
-    <div style="font-size:0.72rem;font-weight:700;color:#546e7a;margin-bottom:8px">⏳ PENDING 是什麼？</div>
-    <div style="font-size:0.82rem;color:#37474f;line-height:1.7">
-      Baseline PENDING：<b>{pending_b}</b> 筆<br>
-      Overnight-Aware PENDING：<b>{pending_a}</b> 筆<br>
-      <span style="font-size:0.75rem;color:#78909c">
-        PENDING 表示訊號已建立，但尚在 3 個交易日進場窗口內，
-        系統還沒決定進場或放棄。不計入任何績效數字。
-      </span>
+<div style="margin-bottom:14px">
+  <div style="font-size:0.75rem;font-weight:700;color:#37474f;margin-bottom:8px;
+              letter-spacing:.03em;text-transform:uppercase">群組說明</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+
+    <div style="background:#e8f5e9;border-radius:10px;padding:14px 16px;
+                border-left:4px solid #2e7d32">
+      <div style="font-size:0.72rem;font-weight:700;color:#2e7d32;margin-bottom:6px">
+        ✅ 正式評估群組（Formal Cohort）
+      </div>
+      <div style="font-size:0.82rem;color:#37474f;line-height:1.8">
+        Baseline 路徑：<b>{n_formal_b}</b> 筆<br>
+        Overnight-Aware 路徑：<b>{n_formal_a}</b> 筆
+      </div>
+      <div style="font-size:0.72rem;color:#555;margin-top:6px;line-height:1.6">
+        具備 overnight_v1 資料，納入 B / C 節績效統計。
+        exclusion_reason IS NULL。
+      </div>
     </div>
+
+    <div style="background:#fff3e0;border-radius:10px;padding:14px 16px;
+                border-left:4px solid #e65100">
+      <div style="font-size:0.72rem;font-weight:700;color:#e65100;margin-bottom:6px">
+        ⚠️ Legacy 群組（NO_OVERNIGHT_DATA）
+      </div>
+      <div style="font-size:0.82rem;color:#37474f;line-height:1.8">
+        唯一訊號數：<b>{n_legacy}</b> 個<br>
+        路徑數（×2）：<b>{n_legacy * 2}</b> 筆
+      </div>
+      <div style="font-size:0.72rem;color:#555;margin-top:6px;line-height:1.6">
+        overnight_v1 上線前的舊訊號，缺隔夜風險資料。
+        不納入 B / C 節，僅供觀察。
+      </div>
+    </div>
+
   </div>
-  <div style="background:#f8f9fa;border-radius:10px;padding:14px 16px">
-    <div style="font-size:0.72rem;font-weight:700;color:#546e7a;margin-bottom:8px">📦 Legacy 訊號是什麼？</div>
-    <div style="font-size:0.82rem;color:#37474f;line-height:1.7">
-      Legacy 訊號數：<b>{no_overnight}</b> 個唯一訊號（標記為 NO_OVERNIGHT_DATA）<br>
-      <span style="font-size:0.75rem;color:#78909c">
-        overnight_v1 功能上線前產生的舊訊號，當時沒有隔夜風險資料（overnight_risk_level），
-        無法與新訊號在同一框架下比較，因此不納入 B / C 節的正式評估。
-        統計上存在，但不算作前向驗證的有效樣本。
-      </span>
-    </div>
+</div>""")
+
+    # ── PENDING 說明 ──────────────────────────────────────────────────────
+    st.html(f"""
+<div style="background:#fff8e1;border-radius:10px;padding:14px 16px;margin-bottom:12px">
+  <div style="font-size:0.72rem;font-weight:700;color:#f57f17;margin-bottom:6px">⏳ PENDING 是什麼？</div>
+  <div style="font-size:0.82rem;color:#37474f;line-height:1.7">
+    Baseline PENDING：<b>{pending_b}</b> 筆　Overnight-Aware PENDING：<b>{pending_a}</b> 筆<br>
+    <span style="font-size:0.75rem;color:#78909c">
+      PENDING 表示訊號已建立，但尚在 3 個交易日進場窗口內，
+      系統還沒決定進場或放棄。不計入任何績效數字。
+    </span>
   </div>
 </div>""")
 

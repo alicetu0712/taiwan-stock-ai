@@ -236,6 +236,57 @@ def _build_and_persist(execution_date: date, retry_count: int = 0):
         s.close()
 
 
+def link_overnight_to_forward_signals(execution_date: date, ctx) -> int:
+    """
+    Back-fill overnight_context_id / overnight_rule_version on forward_signals
+    where execution_date matches and overnight_rule_version is still NULL.
+
+    Called by run_overnight.py after ensure_overnight_context() succeeds.
+    Non-destructive: only touches rows that have not been linked yet.
+    Returns count of rows updated.
+    """
+    from src.database import ForwardSignal, get_session
+
+    if ctx is None:
+        logger.warning("link_overnight_to_forward_signals: ctx is None, skipping")
+        return 0
+
+    s = get_session()
+    try:
+        rows = (
+            s.query(ForwardSignal)
+            .filter(
+                ForwardSignal.execution_date == execution_date,
+                ForwardSignal.overnight_rule_version == None,  # noqa: E711
+            )
+            .all()
+        )
+        count = 0
+        for row in rows:
+            row.overnight_rule_version = ctx.overnight_rule_version
+            row.overnight_context_id   = ctx.id
+            count += 1
+        if count:
+            s.commit()
+            logger.info(
+                f"link_overnight: {count} forward_signal(s) linked "
+                f"execution_date={execution_date} ctx_id={ctx.id} "
+                f"rule={ctx.overnight_rule_version}"
+            )
+        else:
+            logger.info(
+                f"link_overnight: 0 unlinked signals for execution_date={execution_date} "
+                f"(already linked or none exist)"
+            )
+        return count
+    except Exception as exc:
+        s.rollback()
+        logger.warning(f"link_overnight_to_forward_signals: {exc}")
+        return 0
+    finally:
+        s.close()
+
+
 def _persist_unknown(execution_date: date, reason: str = "", retry_count: int = 0):
     """Persist an UNKNOWN context when data is completely unavailable."""
     from src.engines.overnight_risk import OVERNIGHT_RULE_VERSION, RISK_UNKNOWN, DQ_UNKNOWN

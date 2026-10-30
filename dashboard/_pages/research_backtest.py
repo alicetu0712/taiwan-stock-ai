@@ -110,27 +110,29 @@ def _load_forward():
         if url.startswith("postgresql"):
             conn = psycopg.connect(url)
             cur = conn.cursor()
+            from src.database import MODEL_VERSION as _MV
             cur.execute("""
                 SELECT trade_date, stock_id, stock_name,
                        pt_score, setup_type, trade_signal,
                        ma20_gap, ma60_gap, ma60_slope, vol_ratio,
                        total_score, rec_level, model_version, locked_at
                 FROM forward_signals
+                WHERE model_version = %s
                 ORDER BY trade_date DESC, stock_id
-            """)
+            """, (_MV,))
             cols = [d[0] for d in cur.description]
             rows = cur.fetchall()
             cur.close()
             conn.close()
             return pd.DataFrame(rows, columns=cols)
         else:
-            from src.database import ForwardSignal, get_session
+            from src.database import ForwardSignal, MODEL_VERSION, get_session
             from sqlalchemy import select
             sess = get_session()
             fs = sess.execute(
-                select(ForwardSignal).order_by(
-                    ForwardSignal.trade_date.desc(), ForwardSignal.stock_id
-                )
+                select(ForwardSignal)
+                .where(ForwardSignal.model_version == MODEL_VERSION)
+                .order_by(ForwardSignal.trade_date.desc(), ForwardSignal.stock_id)
             ).scalars().all()
             sess.close()
             return pd.DataFrame([{

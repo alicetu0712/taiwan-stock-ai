@@ -221,15 +221,16 @@ class TestForwardSignalDiagnosis:
         return sessionmaker(bind=engine)()
 
     def _seed_gates(self, session, trade_date: date, include_0050: bool = True):
-        """Seed DailyPrice rows to satisfy L2a and L3 gates."""
-        from src.database import DailyPrice
-        # Add enough stocks to pass L2a (min_count = 200)
+        """Seed DailyPrice + Stock rows to satisfy L2a and L3 gates.
+
+        L2 now counts DISTINCT analysis-universe stocks (joined to Stock table),
+        so we must add Stock rows alongside DailyPrice rows.
+        """
+        from src.database import DailyPrice, Stock
         for i in range(1, 250):
-            session.add(DailyPrice(
-                stock_id=str(1000 + i),
-                date=trade_date,
-                close=100.0,
-            ))
+            sid = str(1000 + i)
+            session.add(Stock(stock_id=sid, name=f"Seed_{sid}", market="TWSE"))
+            session.add(DailyPrice(stock_id=sid, date=trade_date, close=100.0))
         if include_0050:
             session.add(DailyPrice(stock_id="0050", date=trade_date, close=80.0))
         session.commit()
