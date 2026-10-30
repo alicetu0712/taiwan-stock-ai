@@ -486,6 +486,16 @@ def render_rec_card(
   {_rows}
   {_conclusion_html}
 </div>""")
+            # Vol ratio plain-language note
+            _vr = card.vol_ratio
+            if _vr > 0:
+                if _vr >= 1.5:
+                    _vol_note = f"成交量為近 20 日均量的 {_vr:.1f} 倍，交易活躍；但量能放大不等於突破確認，仍需配合價格突破壓力位置。"
+                elif _vr >= 1.0:
+                    _vol_note = f"成交量為近 20 日均量的 {_vr:.1f} 倍，量能接近均量水準，尚無明顯放量。"
+                else:
+                    _vol_note = f"成交量為近 20 日均量的 {_vr:.1f} 倍（縮量），若要突破確認通常需要放量配合。"
+                st.caption(f"📊 量能說明：{_vol_note}")
 
         # Triggers (WAIT only)
         if not is_buy and triggers:
@@ -624,13 +634,26 @@ def render_rec_card(
                 )
             elif ps and ps.get("lots", 0) > 0:
                 cap_note = "（已達曝險上限）" if ps["capped"] else ""
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    st.metric("建議張數", f"{ps['lots']} 張{cap_note}")
-                with c2:
-                    st.metric("部位金額", f"NT${ps['position_ntd']:,}")
-                with c3:
-                    st.metric("實際風險", f"NT${ps['actual_risk_ntd']:,}")
+                st.html(f"""
+<style>
+@media (max-width: 640px) {{
+  .ps-grid {{ grid-template-columns: 1fr !important; }}
+}}
+</style>
+<div class="ps-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:8px 0">
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.72rem;color:#888;font-weight:600;margin-bottom:4px">建議張數</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e;white-space:normal;word-break:break-word">{ps['lots']} 張{cap_note}</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.72rem;color:#888;font-weight:600;margin-bottom:4px">部位金額</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e;white-space:normal;word-break:break-word">NT${ps['position_ntd']:,}</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.72rem;color:#888;font-weight:600;margin-bottom:4px">實際風險</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#c62828;white-space:normal;word-break:break-word">NT${ps['actual_risk_ntd']:,}</div>
+  </div>
+</div>""")
                 st.caption(f"風控 {max_risk_pct}% ／ 資金 NT${capital:,.0f}")
 
             if portfolio_exposure:

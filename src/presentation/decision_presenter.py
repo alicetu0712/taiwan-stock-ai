@@ -325,7 +325,7 @@ class DecisionPresenter:
         if setup == "near_breakout":
             return [
                 ("🟢", "趨勢", "符合"),
-                ("🟡", "量能", f"目前 {vol_r:.1f}x"),
+                ("🟡", "量能", f"目前 {vol_r:.1f}x（近 20 日均量）"),
                 ("🟡", "突破", "尚未確認"),
             ]
         if setup == "pullback_buy":
@@ -336,13 +336,13 @@ class DecisionPresenter:
                     "支撐",
                     "已確認止穩" if is_buy else "近MA10，待確認",
                 ),
-                ("🟡", "量能", f"目前 {vol_r:.1f}x"),
+                ("🟡", "量能", f"目前 {vol_r:.1f}x（近 20 日均量）"),
             ]
         if setup == "breakout":
             return [
                 ("🟢", "趨勢", "符合"),
                 ("🟢", "突破", "已確認"),
-                ("🟡", "量能", f"目前 {vol_r:.1f}x"),
+                ("🟡", "量能", f"目前 {vol_r:.1f}x（近 20 日均量）"),
             ]
         if setup == "trending":
             has_pressure = any("壓力" in x for x in tech_risk)
