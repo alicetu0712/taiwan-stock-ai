@@ -420,6 +420,48 @@ def render_rec_card(
     else:
         _price_src_label = ""
 
+    # ── MA20 乖離率白話 note ──────────────────────────────────────
+    from config import ENTRY_QUALITY as _EQ
+    _chase_gap = _EQ.get("chase_gap_pct", 5.0)
+    _ma_gap = card.ma20_gap
+    if _ma_gap > _chase_gap:
+        _ma_border = "#ff7043"
+        _ma_gap_color = "#e64a19"
+        _ma_desc = f"目前股價高於月線 {_ma_gap:.1f}%，已偏離均線較遠，留意追高風險。"
+        _chase_html = (
+            '<div style="margin-top:6px;font-size:0.76rem;color:#bf360c;'
+            'background:rgba(255,112,67,0.08);padding:6px 8px;border-radius:4px;line-height:1.6">'
+            '⚠️ <b>什麼是追高？</b> 股票已漲一段，才在相對高位買進，可能剛買就遇到回跌。<br>'
+            '好股票不等於好買點。即使模型顯示強買，也需確認進場價格與停損風險。</div>'
+        ) if is_buy else ""
+    elif _ma_gap > 1.0:
+        _ma_border = "#90a4ae"
+        _ma_gap_color = "#546e7a"
+        _ma_desc = f"目前股價高於月線 {_ma_gap:.1f}%，偏離適中，注意進場節奏。"
+        _chase_html = ""
+    elif _ma_gap >= -1.0:
+        _ma_border = "#b0bec5"
+        _ma_gap_color = "#78909c"
+        _ma_desc = "股價接近月線，目前價格與近期均價差距不大。"
+        _chase_html = ""
+    else:
+        _ma_border = "#7986cb"
+        _ma_gap_color = "#5c6bc0"
+        _ma_desc = f"目前股價低於月線 {abs(_ma_gap):.1f}%，短期走勢可能偏弱，需搭配趨勢與支撐判斷。"
+        _chase_html = ""
+
+    _ma_note_html = f"""
+<div style="border-left:3px solid {_ma_border};background:#f9f9f9;padding:8px 12px;
+            margin:8px 0;border-radius:0 6px 6px 0;line-height:1.55">
+  <div style="font-size:0.68rem;font-weight:700;color:#78909c;letter-spacing:.04em;margin-bottom:3px">
+    📐 MA20 月線乖離率 <span style="color:{_ma_gap_color};font-weight:800">{_ma_gap:+.1f}%</span>
+  </div>
+  <div style="font-size:0.76rem;color:#546e7a;line-height:1.55">
+    MA20 是過去 20 個交易日的平均股價（月線）。{_ma_desc}
+  </div>
+  {_chase_html}
+</div>"""
+
     # ── Level 1: Main card ────────────────────────────────────────
     st.html(f"""
 <div style="border:1px solid #e0e0e0;border-radius:12px;padding:16px 18px;margin-bottom:4px;background:#fff">
@@ -448,6 +490,9 @@ def render_rec_card(
 
   <!-- 交易計畫 -->
   {plan_html}
+
+  <!-- MA20 乖離率 & 追高說明 -->
+  {_ma_note_html}
 
   <!-- 什麼情況代表判斷錯了 -->
   {inv_html}
