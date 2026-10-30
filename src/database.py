@@ -1011,6 +1011,64 @@ def _migrate_position_monitor(engine) -> None:
         logger.warning(f"position_monitor SIGNAL_CLOSE_LEGACY migration: {exc}")
 
 
+def _migrate_position_monitor_nullable(engine) -> None:
+    """Drop NOT NULL from position_monitor.date_entered and entry_price (PostgreSQL only).
+
+    Both columns must accept NULL for pending_open records — the pipeline creates
+    a position on signal_date with no entry price yet; entry_price and date_entered
+    are filled by activate_pending_positions() on the execution date.
+
+    Pre-existing Neon schemas created before the pending_open state machine was
+    introduced may have date_entered DATE NOT NULL, causing NotNullViolation on
+    every pipeline run that generates a new recommendation.
+
+    Idempotent: checks information_schema.columns before issuing each ALTER.
+    SQLite is skipped — the ORM already creates these columns without NOT NULL.
+
+    Raises RuntimeError if an ALTER fails, so init_db() fails-closed rather
+    than letting the pipeline start and crash on first INSERT.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+
+    _cols_must_be_nullable = ("date_entered", "entry_price")
+    try:
+        with engine.begin() as conn:
+            for col in _cols_must_be_nullable:
+                row = conn.execute(
+                    text(
+                        "SELECT is_nullable FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name = 'position_monitor' "
+                        "AND column_name = :col"
+                    ),
+                    {"col": col},
+                ).fetchone()
+                if row is None:
+                    # Column or table not yet created; Base.metadata.create_all
+                    # will create it nullable per the ORM definition.
+                    continue
+                if row[0].upper() == "YES":
+                    logger.debug(f"position_monitor.{col}: already nullable — skip")
+                    continue
+                # Column exists with NOT NULL → drop it
+                conn.execute(
+                    text(f"ALTER TABLE position_monitor ALTER COLUMN {col} DROP NOT NULL")
+                )
+                logger.info(
+                    f"position_monitor: dropped NOT NULL constraint from {col} "
+                    "(pending_open records require NULL until execution)"
+                )
+    except Exception as exc:
+        raise RuntimeError(
+            f"position_monitor nullable migration failed for column(s) "
+            f"{_cols_must_be_nullable}: {exc}. "
+            "Fix manually on Neon: "
+            "ALTER TABLE position_monitor ALTER COLUMN date_entered DROP NOT NULL; "
+            "ALTER TABLE position_monitor ALTER COLUMN entry_price DROP NOT NULL;"
+        ) from exc
+
+
 # ── Post-migration required column registry ───────────────────────────────────
 # Columns that the pipeline reads/writes at runtime.
 # If any are missing after init_db(), _verify_schema_integrity() raises RuntimeError
@@ -1080,6 +1138,7 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     _migrate_overnight_market_contexts(engine)
     _migrate_forward_outcome_evaluations(engine)
     _migrate_position_monitor(engine)
+    _migrate_position_monitor_nullable(engine)
 
     # Fail-closed: raise if required columns are still missing after all migrations.
     _verify_schema_integrity(engine)
