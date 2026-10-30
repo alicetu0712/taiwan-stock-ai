@@ -94,31 +94,37 @@ def _render_trading_reference(
     today = date.today()
     days_old = (today - selected_date).days
     chase_gap = ENTRY_QUALITY.get("chase_gap_pct", 5.0)
-
     td_label = next_td.strftime("%Y/%m/%d") if next_td else "—"
 
     # — freshness note —
     freshness_html = ""
     if days_old > 1:
-        freshness_html = (
-            f'<div style="font-size:0.7rem;color:#ff8c00;margin-top:6px">'
-            f"⚠️ 此訊號已有 {days_old} 天，次日進場窗口可能已過。</div>"
-        )
+        freshness_html = f"""
+<div style="font-size:15px;color:#ffb74d;margin-top:12px;padding:9px 14px;
+            background:rgba(255,183,77,0.12);border-radius:8px;border-left:3px solid #ff8c00;
+            line-height:1.5">
+  ⚠️ 此訊號已有 <strong>{days_old}</strong> 天，次日進場窗口可能已過。
+</div>"""
     elif latest_date and latest_date > selected_date:
-        freshness_html = (
-            f'<div style="font-size:0.7rem;color:#f57f17;margin-top:6px">'
-            f"🔄 資料庫最新分析：{latest_date}（側邊欄可切換日期）</div>"
-        )
+        freshness_html = f"""
+<div style="font-size:15px;color:#80cbc4;margin-top:12px;padding:9px 14px;
+            background:rgba(128,203,196,0.1);border-radius:8px;border-left:3px solid #4db6ac;
+            line-height:1.5">
+  🔄 資料庫最新分析：<strong>{latest_date}</strong>（側邊欄可切換日期）
+</div>"""
 
-    # — signal rows —
+    # — signal processing —
     buy_recs = [r for r in recs if (r.get("trade_signal") or "").lower() in ("buy", "strong_buy")]
     wait_recs = [r for r in recs if (r.get("trade_signal") or "").lower() == "wait"]
 
     sig_html = ""
     if buy_recs:
-        rows_html = ""
+        desktop_rows = ""
+        mobile_cards = ""
+
         for r in buy_recs:
-            name = r.get("name") or r.get("sid", "—")
+            name       = r.get("name") or r.get("sid", "—")
+            sid        = r.get("sid", "")
             entry_low  = r.get("entry_low")
             entry_high = r.get("entry_high")
             stop_p     = r.get("stop_price")
@@ -127,19 +133,20 @@ def _render_trading_reference(
             price      = r.get("price")
             price_date = r.get("price_date")
 
-            chase_warn = ""
+            chase_badge = ""
             if ma20_gap is not None and abs(ma20_gap) > chase_gap:
-                chase_warn = ' <span style="color:#ff6e40;font-size:0.65rem">⚡高乖離</span>'
-
-            price_str = ""
-            if price:
-                src = (
-                    "前收盤"
-                    if (price_date and price_date < selected_date)
-                    else "收盤"
+                chase_badge = (
+                    '<span style="font-size:13px;color:#ff7043;background:rgba(255,112,67,0.2);'
+                    'padding:2px 8px;border-radius:10px;margin-left:8px;white-space:nowrap">'
+                    "⚡ 高乖離</span>"
                 )
-                price_str = (
-                    f' <span style="opacity:0.55;font-size:0.6rem">{src} {price:.1f}</span>'
+
+            price_note = ""
+            if price:
+                src = "前收盤" if (price_date and price_date < selected_date) else "收盤"
+                price_note = (
+                    f'<span style="font-size:13px;opacity:0.55;margin-left:7px;font-weight:400">'
+                    f"{src} {price:.1f}</span>"
                 )
 
             if entry_low and entry_high:
@@ -148,69 +155,134 @@ def _render_trading_reference(
                 entry_str = f"≥{entry_low:.1f}"
             else:
                 entry_str = "—"
-
             stop_str = f"{stop_p:.1f}" if stop_p else "—"
             t1_str   = f"{t1:.1f}"    if t1    else "—"
 
-            rows_html += (
-                f"<tr>"
-                f'<td style="padding:2px 12px 2px 0;font-weight:700">{name}{price_str}</td>'
-                f'<td style="padding:2px 12px 2px 0;color:#00e5ff">{entry_str}</td>'
-                f'<td style="padding:2px 12px 2px 0;color:#ff6e6e">{stop_str}</td>'
-                f'<td style="padding:2px 0;color:#81c784">{t1_str}</td>'
-                f"<td>{chase_warn}</td>"
-                f"</tr>"
-            )
+            # desktop row
+            desktop_rows += f"""
+<tr style="border-bottom:1px solid rgba(255,255,255,0.06)">
+  <td style="padding:12px 24px 12px 0;vertical-align:top;white-space:nowrap">
+    <div style="font-size:19px;font-weight:700;color:#fff;line-height:1.2">
+      {name}{price_note}
+    </div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.42);margin-top:3px">
+      {sid}{chase_badge}
+    </div>
+  </td>
+  <td style="padding:12px 24px 12px 0;vertical-align:top">
+    <div style="font-size:21px;font-weight:700;color:#00e5ff;line-height:1.2">{entry_str}</div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.38);margin-top:3px">NT$</div>
+  </td>
+  <td style="padding:12px 24px 12px 0;vertical-align:top">
+    <div style="font-size:19px;font-weight:600;color:#ef9a9a;line-height:1.2">{stop_str}</div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.38);margin-top:3px">NT$</div>
+  </td>
+  <td style="padding:12px 0;vertical-align:top">
+    <div style="font-size:19px;font-weight:600;color:#a5d6a7;line-height:1.2">{t1_str}</div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.38);margin-top:3px">NT$</div>
+  </td>
+</tr>"""
+
+            # mobile card
+            mobile_cards += f"""
+<div style="background:rgba(255,255,255,0.07);border-radius:10px;padding:16px;margin-bottom:12px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+    <div>
+      <div style="font-size:19px;font-weight:700;color:#fff;line-height:1.2">{name}</div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.45);margin-top:3px">{sid}{price_note}</div>
+    </div>
+    {f'<div style="margin-top:2px">{chase_badge}</div>' if chase_badge else ''}
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+    <div style="background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.25);
+                border-radius:8px;padding:10px;text-align:center">
+      <div style="font-size:12px;color:#80deea;font-weight:600;margin-bottom:5px;letter-spacing:.03em">進場區間</div>
+      <div style="font-size:17px;font-weight:700;color:#00e5ff;line-height:1.2">{entry_str}</div>
+    </div>
+    <div style="background:rgba(239,154,154,0.1);border:1px solid rgba(239,154,154,0.25);
+                border-radius:8px;padding:10px;text-align:center">
+      <div style="font-size:12px;color:#ef9a9a;font-weight:600;margin-bottom:5px;letter-spacing:.03em">停損</div>
+      <div style="font-size:17px;font-weight:600;color:#ef9a9a;line-height:1.2">{stop_str}</div>
+    </div>
+    <div style="background:rgba(165,214,167,0.1);border:1px solid rgba(165,214,167,0.25);
+                border-radius:8px;padding:10px;text-align:center">
+      <div style="font-size:12px;color:#a5d6a7;font-weight:600;margin-bottom:5px;letter-spacing:.03em">目標1</div>
+      <div style="font-size:17px;font-weight:600;color:#a5d6a7;line-height:1.2">{t1_str}</div>
+    </div>
+  </div>
+</div>"""
 
         sig_html = f"""
-<div style="margin-top:10px">
-  <div style="font-size:0.6rem;opacity:0.55;margin-bottom:5px">BUY 訊號（{len(buy_recs)} 檔）</div>
-  <table style="font-size:0.74rem;color:#fff;border-collapse:collapse;width:100%">
-    <tr style="font-size:0.58rem;opacity:0.45">
-      <th style="text-align:left;padding:0 12px 4px 0;font-weight:400">標的</th>
-      <th style="text-align:left;padding:0 12px 4px 0;font-weight:400">進場區間</th>
-      <th style="text-align:left;padding:0 12px 4px 0;font-weight:400">停損</th>
-      <th style="text-align:left;padding:0 0 4px 0;font-weight:400">目標1</th>
-      <th></th>
-    </tr>
-    {rows_html}
-  </table>
+<div style="margin-top:18px">
+  <div style="font-size:16px;font-weight:600;color:rgba(255,255,255,0.65);
+              margin-bottom:14px;letter-spacing:.02em">
+    BUY 訊號 · {len(buy_recs)} 檔
+  </div>
+  <div class="trd-ref-desktop">
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.15)">
+          <th style="text-align:left;padding:0 24px 10px 0;font-size:15px;font-weight:600;
+                     color:rgba(255,255,255,0.5)">標的</th>
+          <th style="text-align:left;padding:0 24px 10px 0;font-size:15px;font-weight:600;
+                     color:rgba(255,255,255,0.5)">進場區間</th>
+          <th style="text-align:left;padding:0 24px 10px 0;font-size:15px;font-weight:600;
+                     color:rgba(255,255,255,0.5)">停損</th>
+          <th style="text-align:left;padding:0 0 10px 0;font-size:15px;font-weight:600;
+                     color:rgba(255,255,255,0.5)">目標1</th>
+        </tr>
+      </thead>
+      <tbody>{desktop_rows}</tbody>
+    </table>
+  </div>
+  <div class="trd-ref-mobile">{mobile_cards}</div>
 </div>"""
+
     elif recs:
         wait_names = "、".join(
             r.get("name") or r.get("sid", "") for r in (wait_recs or recs)[:3]
         )
         sig_html = (
-            f'<div style="margin-top:8px;font-size:0.78rem;color:#b0bec5">'
+            f'<div style="margin-top:16px;font-size:17px;color:rgba(255,255,255,0.6);font-weight:500">'
             f"WAIT — {wait_names}</div>"
         )
     else:
         sig_html = (
-            '<div style="margin-top:8px;font-size:0.78rem;color:#546e7a">'
+            '<div style="margin-top:16px;font-size:17px;color:rgba(255,255,255,0.4)">'
             "今日無推薦標的</div>"
         )
 
-    disclaimer = (
-        '<div style="font-size:0.6rem;color:#546e7a;margin-top:10px;'
-        'border-top:1px solid #263040;padding-top:6px">'
-        "⚠️ 所有報價為前一日收盤，非盤中即時報價。進場前請確認當日市場報價。"
-        "</div>"
-    )
+    disclaimer = """
+<div style="font-size:15px;color:#78909c;margin-top:16px;
+            border-top:1px solid rgba(255,255,255,0.09);padding-top:14px;line-height:1.65">
+  ⚠️ 所有報價為前一日收盤，非盤中即時報價。進場前請確認當日市場報價。
+</div>"""
+
+    responsive_css = """
+<style>
+  .trd-ref-desktop { display: block; }
+  .trd-ref-mobile  { display: none;  }
+  @media (max-width: 640px) {
+    .trd-ref-desktop { display: none;  }
+    .trd-ref-mobile  { display: block; }
+  }
+</style>"""
 
     st.markdown(
-        f"""
-<div style="background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:12px;
-            padding:14px 18px;margin:8px 0 14px;color:white">
-  <div style="font-size:0.6rem;font-weight:700;opacity:0.45;letter-spacing:.1em;
-              text-transform:uppercase;margin-bottom:9px">今日交易參考</div>
-  <div style="display:flex;gap:28px">
+        f"""{responsive_css}
+<div style="background:linear-gradient(140deg,#0d1b2a 0%,#1b263b 100%);border-radius:14px;
+            padding:22px 26px 18px;margin:10px 0 18px;color:white;
+            box-shadow:0 4px 16px rgba(0,0,0,0.3)">
+  <div style="font-size:23px;font-weight:600;letter-spacing:.01em;margin-bottom:16px;
+              line-height:1">今日交易參考</div>
+  <div style="display:flex;gap:36px;flex-wrap:wrap">
     <div>
-      <div style="font-size:0.58rem;opacity:0.5">訊號分析日</div>
-      <div style="font-size:0.9rem;font-weight:700">{selected_date.strftime("%Y/%m/%d")}</div>
+      <div style="font-size:15px;color:rgba(255,255,255,0.5);margin-bottom:5px">訊號分析日</div>
+      <div style="font-size:21px;font-weight:700;color:#fff">{selected_date.strftime("%Y/%m/%d")}</div>
     </div>
     <div>
-      <div style="font-size:0.58rem;opacity:0.5">適用交易日</div>
-      <div style="font-size:0.9rem;font-weight:700;color:#00e5ff">{td_label}</div>
+      <div style="font-size:15px;color:rgba(255,255,255,0.5);margin-bottom:5px">適用交易日</div>
+      <div style="font-size:21px;font-weight:700;color:#00e5ff">{td_label}</div>
     </div>
   </div>
   {sig_html}
