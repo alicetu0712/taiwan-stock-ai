@@ -92,10 +92,14 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
 
     total_recs = len(all_rows)
     buy_rows = [r for r in all_rows if r.trade_signal in ("buy", "strong_buy")]
+    # Core Picks BUY：只計 tier='recommend' 的 BUY 訊號，與 eligible 邏輯一致
+    core_recs = [r for r in all_rows if r.tier == "recommend"]
+    core_buy_rows = [r for r in buy_rows if r.tier == "recommend"]
 
     excl_invalid = excl_non_core = excl_lifecycle = not_yet_executable = 0
     if exec_date is not None and exec_date > today:
-        not_yet_executable = len(buy_rows)
+        # not_yet_executable 只計 Core Picks BUY（eligible 的真實候選數）
+        not_yet_executable = len(core_buy_rows)
     else:
         for r in buy_rows:
             if r.is_valid is False:
@@ -138,11 +142,13 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
         "signal_date": signal_date,
         "exec_date": exec_date,
         "total_recs": total_recs,
-        "buy_count": len(buy_rows),
+        "core_recs_count": len(core_recs),
+        "buy_count": len(buy_rows),           # 全 tier BUY（資訊用）
+        "core_buy_count": len(core_buy_rows), # Core Picks BUY（eligible 邏輯基準）
         "excl_invalid": excl_invalid,
         "excl_non_core": excl_non_core,
         "excl_lifecycle": excl_lifecycle,
-        "not_yet_executable": not_yet_executable,
+        "not_yet_executable": not_yet_executable,  # 現為 core_buy_rows 數量
         "eligible_count": len(eligible),
         "eligible_stocks": [(r.get("sid"), r.get("name")) for r in eligible],
         "overnight_ctx": overnight_ctx,
@@ -193,19 +199,32 @@ def _render_overnight_diagnostics(ctx) -> None:
 
 
 def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) -> None:
-    """預設收合的診斷 expander；BUY > 0 但 eligible = 0 時自動展開並顯示 warning。"""
-    buy_count = diag["buy_count"]
-    eligible  = diag["eligible_count"]
-    warn      = buy_count > 0 and eligible == 0
-    header    = "⚠️ 診斷資訊（BUY 存在但 Eligible = 0）" if warn else "🔍 診斷資訊"
+    """預設收合的診斷 expander；Core Picks BUY > 0 但 eligible = 0 時自動展開。"""
+    core_buy   = diag.get("core_buy_count", diag["buy_count"])
+    all_buy    = diag["buy_count"]
+    eligible   = diag["eligible_count"]
+    # 只有 Core Picks BUY 存在但尚不可執行才顯示 warn
+    warn   = core_buy > 0 and eligible == 0
+    header = "⚠️ 診斷資訊（Core Picks BUY 存在但 Eligible = 0）" if warn else "🔍 診斷資訊"
 
     with st.expander(header, expanded=warn):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown(f"**Execution Date**：{sel_date}")
             st.markdown(f"**Signal Date**：{signal_date}")
-            st.markdown(f"**Recommendations**：{diag['total_recs']}")
-            st.markdown(f"**BUY / BUY★**：{buy_count}")
+            # ── 區分全 tier vs Core Picks ──────────────────────────
+            total = diag["total_recs"]
+            core_cnt = diag.get("core_recs_count", "—")
+            st.markdown(
+                f"**Recommendations**：{total}　"
+                f"<span style='font-size:0.85em;color:#888'>（Core Picks {core_cnt} ／ 其他 tier {total - core_cnt if isinstance(core_cnt,int) else '—'}）</span>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"**BUY / BUY★**：Core Picks {core_buy}　"
+                f"<span style='font-size:0.85em;color:#888'>（全 tier {all_buy}，含 Watch / Opportunity）</span>",
+                unsafe_allow_html=True,
+            )
             st.markdown(f"**Eligible Live Signals**：{eligible}")
         with c2:
             if diag["eligible_stocks"]:
@@ -245,12 +264,14 @@ def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) ->
                 reasons.append(f"{diag['excl_lifecycle']} 個 Expired（停損或 Superseded）")
             if diag["not_yet_executable"]:
                 st.warning(
-                    f"⚠️ {signal_date} 有 {buy_count} 個 BUY，但 execution_date "
-                    f"= {diag['exec_date']} > today（尚未可執行）。"
+                    f"⚠️ {signal_date} 有 **{core_buy} 個 Core Picks BUY**，"
+                    f"但 execution_date = {diag['exec_date']} > today（尚未可執行）。\n\n"
+                    f"另有 {all_buy - core_buy} 個 Watch/Opportunity tier BUY 訊號，"
+                    f"不納入正式 Core Picks 監控。"
                 )
             elif reasons:
                 st.warning(
-                    f"⚠️ {signal_date} 有 {buy_count} 個 BUY，Eligible = 0。\n\n"
+                    f"⚠️ {signal_date} 有 {core_buy} 個 Core Picks BUY，Eligible = 0。\n\n"
                     f"排除原因：{'、'.join(reasons)}"
                 )
 
