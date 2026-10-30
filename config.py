@@ -27,15 +27,26 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 
 # ── 資料庫連線 ────────────────────────────────────────────────
-# 本機 DB 檔存在 → SQLite（本機執行）
-# 本機 DB 檔不存在 + NEON_URL 設定 → 直接用 Neon（Streamlit Cloud）
-# 防止 shell 殘留的舊 DATABASE_URL 污染連線
+# 優先序：
+#   1. USE_NEON=true  且 NEON_URL 有值 → Neon PostgreSQL（正式 Dashboard / 本機連 Neon）
+#   2. 本機 DB 檔存在                  → SQLite（本機開發 / 測試）
+#   3. NEON_URL 有值（無本機 DB）       → Neon PostgreSQL（Streamlit Cloud / GitHub Actions）
+#   4. DATABASE_URL 是 postgres://     → 舊格式相容
+#   5. 其他                            → SQLite fallback
+#
+# 切換方式：
+#   本機連 Neon   → .env 加  USE_NEON=true
+#   本機用 SQLite → .env 移除 USE_NEON（或設 USE_NEON=false）
 _raw_db_url = os.getenv("DATABASE_URL", "")
-_neon_url = os.getenv("NEON_URL", "")
+_neon_url    = os.getenv("NEON_URL", "")
+_use_neon    = os.getenv("USE_NEON", "").strip().lower() in ("1", "true", "yes")
+
 def _normalize_pg_url(url: str) -> str:
     return url.replace("postgres://", "postgresql://", 1)
 
-if DB_PATH.exists():
+if _use_neon and _neon_url:
+    DATABASE_URL = _normalize_pg_url(_neon_url)
+elif DB_PATH.exists():
     DATABASE_URL = f"sqlite:///{DB_PATH}"
 elif _neon_url:
     DATABASE_URL = _normalize_pg_url(_neon_url)
