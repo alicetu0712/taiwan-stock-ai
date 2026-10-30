@@ -153,26 +153,58 @@ def _load_forward():
         return pd.DataFrame()
 
 
+def _credibility_badge(n_dedup: int, p_value, pass_threshold: float = 0.05) -> tuple:
+    """Return (emoji, label, color) based on sample size and significance."""
+    if n_dedup < 20:
+        return "⏳", "樣本不足", "#ff8800"
+    if n_dedup < 50:
+        if p_value is None or p_value >= pass_threshold:
+            return "🟡", "初步", "#ffb300"
+        return "🟡", "初步顯著", "#ffb300"
+    if p_value is None or p_value >= pass_threshold:
+        return "🔵", "樣本足夠，尚不顯著", "#5c6bc0"
+    return "🟢", "顯著", "#2e7d32"
+
+
+def _overall_stats(si: dict | None, key: str = "dedup_20") -> dict:
+    """Extract overall 20D/60D stats from sample_independence[key]."""
+    empty = {"n": 0, "mean": None, "win_rate": None, "p_value": None,
+             "ci_low": None, "ci_high": None, "cohens_d": None,
+             "boot_ci_low": None, "boot_ci_high": None}
+    if not si or key not in si:
+        return {"n": 0, "stats_20d": empty, "stats_60d": empty}
+    return si[key]
+
+
 def page_research_backtest() -> None:
-    st.markdown(
-        '<div class="section-title">🧪 Research Backtest & Forward Validation</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        f"**Research cutoff（固定）：{_CUTOFF_LABEL}**　"
-        "🧪 In-Sample = cutoff 前　🔒 Out-of-Sample = cutoff 後"
-    )
-    st.info(
-        "**研究架構說明**\n\n"
-        "- 🧪 **Research / In-Sample**：以歷史 candidates 回測，用於產生假說（hypothesis generation）\n"
-        "- 🔒 **Forward / Out-of-Sample**：cutoff 後每日凍結 signal，用於驗證假說（hypothesis testing）\n"
-        "- 兩組資料**絕對不混用**。Research 結論不得直接套用至 Forward，反之亦然。\n"
-        "- Forward 樣本未達 20 個 completed observation 前，不產生策略結論。"
-    )
+    # ── 頁面標題與目的說明 ─────────────────────────────────────
+    st.html("""
+<div style="margin-bottom:16px">
+  <div style="font-size:1.25rem;font-weight:800;color:#1a1a2e;margin-bottom:8px">
+    🧪 研究回測 &amp; 前瞻驗證（Research Backtest &amp; Forward Validation）
+  </div>
+  <div style="font-size:0.83rem;color:#37474f;line-height:1.75;background:#f0f4ff;
+              border-left:4px solid #667eea;padding:11px 15px;border-radius:0 8px 8px 0">
+    這個頁面用來回答：<b>系統過去挑出的股票，後來表現如何？是否比 0050 更好？研究結果是否有足夠證據支持？</b><br>
+    頁面分為兩個區塊：
+    <ul style="margin:6px 0 0 0;padding-left:18px">
+      <li><b>歷史研究（Research / In-Sample）</b>：用 2026-10-09 之前的歷史資料，回測候選股票後來的表現，
+          用於形成研究假說。</li>
+      <li><b>未來驗證（Forward / Out-of-Sample）</b>：2026-10-09 之後每日凍結訊號，
+          驗證假說是否在未曾見過的資料上仍然成立。兩組資料絕對不混用。</li>
+    </ul>
+    <span style="font-size:0.78rem;color:#78909c">
+      Alpha = 超額報酬 = 股票報酬 − 0050 同期報酬，正值代表跑贏大盤指數。
+    </span>
+  </div>
+</div>""")
 
-    tab_r, tab_f = st.tabs(["🧪 Research / In-Sample", "🔒 Forward / Out-of-Sample"])
+    tab_r, tab_f = st.tabs([
+        "🧪 歷史研究（Research / In-Sample）",
+        "🔒 未來驗證（Forward / Out-of-Sample）",
+    ])
 
-    # ── 🧪 Research ──────────────────────────────────────────
+    # ── 🧪 歷史研究（Research / In-Sample）──────────────────────
     with tab_r:
         res = _load_research()
         if not res:
@@ -186,174 +218,377 @@ def page_research_backtest() -> None:
 
         n_total    = res.get("n_total_candidates", 0)
         n_usable   = res.get("n_usable", 0)
-        n_dedup_20 = res.get("n_dedup_20", "—")
-        n_dedup_60 = res.get("n_dedup_60", "—")
-        raw_df = res.get("raw_df", pd.DataFrame())
-
-        # 摘要指標
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Candidates（cutoff 前）", f"{n_total:,}")
-        c2.metric("Raw N（有 20D Return）", f"{n_usable:,}",
-                  help="含重疊樣本的原始觀察數；不直接用於分組統計。")
-        c3.metric("20D Dedup N", f"{n_dedup_20:,}" if isinstance(n_dedup_20, int) else n_dedup_20,
-                  help="同股票 20 交易日冷卻後的樣本數；Setup / PT / MA / Regime 20D 統計基於此。")
-        c4.metric("60D Dedup N", f"{n_dedup_60:,}" if isinstance(n_dedup_60, int) else n_dedup_60,
-                  help="同股票 60 交易日冷卻後的樣本數；所有分組的 60D 統計基於此。")
-        if not raw_df.empty:
-            n_dates = raw_df["date"].nunique()
-            date_min = raw_df["date"].min()
-            date_max = raw_df["date"].max()
-            c5.metric("日期數", f"{n_dates}")
-            c6.metric("日期範圍", f"{date_min} ~ {date_max}")
+        n_dedup_20 = res.get("n_dedup_20", 0)
+        n_dedup_60 = res.get("n_dedup_60", 0)
+        raw_df     = res.get("raw_df", pd.DataFrame())
+        si         = res.get("sample_independence") or {}
 
         if raw_df.empty:
-            st.info("無可用資料。")
+            st.info("無可用資料。請確認 cutoff 前有 analysis_results 記錄。")
             return
+
+        date_min = raw_df["date"].min() if not raw_df.empty else None
+        date_max = raw_df["date"].max() if not raw_df.empty else None
+        n_dates  = raw_df["date"].nunique() if not raw_df.empty else 0
+
+        # ── A. 研究目前進度與可信度 ──────────────────────────
+        st.markdown("### A. 研究目前進度與可信度")
+
+        overall = _overall_stats(si, "dedup_20")
+        s20     = overall.get("stats_20d", {})
+        s60     = overall.get("stats_60d", {})
+        p20     = s20.get("p_value")
+        p60     = s60.get("p_value")
+
+        _badge20_icon, _badge20_lbl, _badge20_col = _credibility_badge(n_dedup_20, p20)
+        _badge60_icon, _badge60_lbl, _badge60_col = _credibility_badge(n_dedup_60, p60)
+
+        # Credibility status cards
+        _dedup20_str = f"{n_dedup_20:,}" if isinstance(n_dedup_20, int) else "—"
+        _dedup60_str = f"{n_dedup_60:,}" if isinstance(n_dedup_60, int) else "—"
+        _date_str = (
+            f"{str(date_min)[:10]} ～ {str(date_max)[:10]}"
+            if date_min is not None else "—"
+        )
+        st.html(f"""
+<style>
+@media (max-width: 640px) {{
+  .cred-grid {{ grid-template-columns: 1fr !important; }}
+}}
+</style>
+<div class="cred-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0 16px">
+  <div style="background:#f8f9fa;border-radius:10px;padding:14px 16px;border-left:4px solid #667eea">
+    <div style="font-size:0.7rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:6px">
+      🧪 歷史研究（Research / In-Sample）
+    </div>
+    <div style="font-size:0.83rem;color:#37474f;line-height:1.7">
+      分析日期：<b>{_date_str}</b><br>
+      有效樣本（20D 去重）：<b>{_dedup20_str} 筆</b>
+      <span style="color:{_badge20_col};font-weight:700">{_badge20_icon} {_badge20_lbl}</span><br>
+      有效樣本（60D 去重）：<b>{_dedup60_str} 筆</b>
+      <span style="color:{_badge60_col};font-weight:700">{_badge60_icon} {_badge60_lbl}</span>
+    </div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:10px;padding:14px 16px;border-left:4px solid #b0bec5">
+    <div style="font-size:0.7rem;font-weight:700;color:#78909c;letter-spacing:.05em;margin-bottom:6px">
+      📌 哪些結論目前可以參考？
+    </div>
+    <div style="font-size:0.83rem;color:#37474f;line-height:1.7">
+      {'✅ 20D Alpha 顯著（p &lt; 0.05），可用於形成假說' if (p20 is not None and p20 < 0.05) else '⚠️ 20D Alpha 尚未達統計顯著（p ≥ 0.05）'}<br>
+      {'✅ 60D Alpha 顯著（p &lt; 0.05），可用於形成假說' if (p60 is not None and p60 < 0.05) else '⚠️ 60D Alpha 尚未達統計顯著（p ≥ 0.05）'}<br>
+      <span style="font-size:0.76rem;color:#90a4ae">
+        Research 結論僅用於假說形成，需 Forward 驗證才能確認。
+      </span>
+    </div>
+  </div>
+</div>""")
+
+        # 不能成立的結論警告
+        _insufficient = n_dedup_20 < 30
+        if _insufficient:
+            st.warning(
+                f"⚠️ **目前去重樣本（{n_dedup_20} 筆）偏少，不能判定策略是否有效。**  \n"
+                "候選訊號很多，不代表有同樣多次獨立交易。去重後才是真正可評估策略的樣本。"
+            )
+        elif p20 is None or p20 >= 0.05:
+            st.info(
+                "📊 **樣本足夠，但 20D Alpha 尚不顯著（p ≥ 0.05）。**  \n"
+                "目前證據不足，不能判定策略有效。這不等於策略無效，只是還需要更多資料。"
+            )
 
         st.divider()
 
-        # ── 樣本獨立性診斷 ────────────────────────────────────
-        si = res.get("sample_independence")
-        if si:
-            st.markdown("#### 樣本獨立性診斷")
-            st.caption(
-                "每日相同股票的信號前向報酬高度重疊（例如台積電連續 10 天都出現），"
-                "t-test 會把它們當成獨立樣本，造成 n 虛高、CI 虛窄、p-value 虛美。"
-                "以下對比原始樣本與「去重後」（同股 ≥ N 個交易日才取一次）的整體統計差異。"
-            )
+        # ── B. 策略績效摘要 ──────────────────────────────────
+        st.markdown("### B. 整體策略績效摘要")
+        st.caption(
+            f"基於 20D 去重樣本（{_dedup20_str} 筆）整體計算。"
+            "Alpha = 超額報酬 = 股票報酬 − 0050 同期報酬。去重確保每檔股票每 20 個交易日最多計入一次。"
+        )
 
-            si_rows = []
-            for label, ver in [
-                ("Raw（全部）", "raw"),
-                ("Dedup 20D（同股 ≥ 20 交易日一次）", "dedup_20"),
-                ("Dedup 60D（同股 ≥ 60 交易日一次）", "dedup_60"),
-            ]:
-                v   = si[ver]
-                s20 = v["stats_20d"]
-                s60 = v["stats_60d"]
-                ci20 = (
-                    f"[{s20['ci_low']:+.2f}%, {s20['ci_high']:+.2f}%]"
-                    if s20.get("ci_low") is not None else "—"
-                )
-                ci60 = (
-                    f"[{s60['ci_low']:+.2f}%, {s60['ci_high']:+.2f}%]"
-                    if s60.get("ci_low") is not None else "—"
-                )
-                boot20 = (
-                    f"[{s20['boot_ci_low']:+.2f}%, {s20['boot_ci_high']:+.2f}%]"
-                    if s20.get("boot_ci_low") is not None else "—"
-                )
-                boot60 = (
-                    f"[{s60['boot_ci_low']:+.2f}%, {s60['boot_ci_high']:+.2f}%]"
-                    if s60.get("boot_ci_low") is not None else "—"
-                )
-                si_rows.append({
-                    "版本":          label,
-                    "n":             v["n"],
-                    "20D均Alpha":    _fmt_pct(s20.get("mean")),
-                    "20D p值":       _fmt_p(s20.get("p_value")),
-                    "20D t CI":      ci20,
-                    "20D Boot CI":   boot20,
-                    "20D Cohen'd":   _fmt_d(s20.get("cohens_d")),
-                    "60D均Alpha":    _fmt_pct(s60.get("mean")),
-                    "60D p值":       _fmt_p(s60.get("p_value")),
-                    "60D t CI":      ci60,
-                    "60D Boot CI":   boot60,
-                    "60D Cohen'd":   _fmt_d(s60.get("cohens_d")),
-                })
+        _mean20  = s20.get("mean")
+        _wr20    = s20.get("win_rate")
+        _p20     = s20.get("p_value")
+        _d20     = s20.get("cohens_d")
+        _mean60  = s60.get("mean")
+        _wr60    = s60.get("win_rate")
+        _p60     = s60.get("p_value")
 
-            st.dataframe(
-                pd.DataFrame(si_rows).set_index("版本"),
-                use_container_width=True,
-            )
-            st.caption(
-                "⚠️ 若 p 值在去重後從顯著變為不顯著（例如 0.02 → 0.18），"
-                "表示原始顯著性很可能主要來自重複樣本，**非真實策略優勢**。"
-                "去重後 n 大幅縮水且 CI 跨越 0 則結論應保守。"
-            )
+        def _color_alpha(v):
+            if v is None: return "#888"
+            return "#2e7d32" if v > 0 else "#c62828"
+
+        st.html(f"""
+<style>
+@media (max-width: 640px) {{
+  .perf-grid {{ grid-template-columns: 1fr 1fr !important; }}
+}}
+</style>
+<div class="perf-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 4px">
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px;text-align:center">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">20日超額報酬（Alpha）</div>
+    <div style="font-size:1.1rem;font-weight:800;color:{_color_alpha(_mean20)};white-space:normal;word-break:break-word">
+      {_fmt_pct(_mean20)}
+    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">均值 · 去重 20D</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px;text-align:center">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">20日勝率</div>
+    <div style="font-size:1.1rem;font-weight:800;color:#1a1a2e">
+      {f"{_wr20:.1f}%" if _wr20 is not None else "—"}
+    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">Alpha &gt; 0 的比例</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px;text-align:center">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">60日超額報酬（Alpha）</div>
+    <div style="font-size:1.1rem;font-weight:800;color:{_color_alpha(_mean60)};white-space:normal;word-break:break-word">
+      {_fmt_pct(_mean60)}
+    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">均值 · 去重 60D</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px;text-align:center">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">60日勝率</div>
+    <div style="font-size:1.1rem;font-weight:800;color:#1a1a2e">
+      {f"{_wr60:.1f}%" if _wr60 is not None else "—"}
+    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:3px">Alpha &gt; 0 的比例</div>
+  </div>
+</div>""")
+
+        # 績效白話說明
+        _p_note = ""
+        if _p20 is not None:
+            if _p20 < 0.01:
+                _p_note = f"p={_p20:.3f}（< 0.01），統計上高度顯著。"
+            elif _p20 < 0.05:
+                _p_note = f"p={_p20:.3f}（< 0.05），統計上顯著。"
+            else:
+                _p_note = f"p={_p20:.3f}（≥ 0.05），尚不顯著。"
+        _d_note = f"效應量 Cohen's d = {_fmt_d(_d20)}（S≥0.2 小、M≥0.5 中、L≥0.8 大）。" if _d20 else ""
+        if _p_note or _d_note:
+            st.caption(f"📊 {_p_note} {_d_note}")
+
+        if not _insufficient:
+            _alpha_sign = "正" if (_mean20 is not None and _mean20 > 0) else "負"
+            if _p20 is not None and _p20 < 0.05:
+                st.caption(
+                    f"✅ 這代表什麼？去重後 {n_dedup_20} 個獨立樣本中，"
+                    f"平均超額報酬為 {_fmt_pct(_mean20)}，統計上顯著（{_p_note}）。"
+                    "這是 Research 阶段的假說支持，**仍需 Forward 驗證才算確認**。"
+                )
+            else:
+                st.caption(
+                    f"📊 這代表什麼？去重後 {n_dedup_20} 個獨立樣本，"
+                    f"平均 20D 超額報酬為 {_fmt_pct(_mean20)}，但{_p_note}"
+                    "樣本數或效應量尚不足以得出穩健結論。"
+                )
+
+        st.divider()
+
+        # ── C. 研究資料量 ─────────────────────────────────────
+        st.markdown("### C. 研究資料量")
+
+        _date_min_str = str(date_min)[:10].replace("-", "/") if date_min is not None else "—"
+        _date_max_str = str(date_max)[:10].replace("-", "/") if date_max is not None else "—"
+
+        st.html(f"""
+<style>
+@media (max-width: 640px) {{
+  .data-grid {{ grid-template-columns: 1fr 1fr !important; }}
+}}
+</style>
+<div class="data-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:8px 0">
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">
+      歷史候選訊號<br><span style="font-weight:400">(Candidates)</span>
+    </div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e">{n_total:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">cutoff 前所有出現的股票記錄</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">
+      有後續報酬資料<br><span style="font-weight:400">(Raw N)</span>
+    </div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e">{n_usable:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">含重疊，不可直接用於統計</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">
+      涵蓋交易日數
+    </div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e">{n_dates}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">有候選記錄的不重複日期數</div>
+  </div>
+</div>
+<div class="data-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 4px">
+  <div style="background:#e8f5e9;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#388e3c;font-weight:600;margin-bottom:4px">
+      20日去重樣本<br><span style="font-weight:400">(20D Dedup N)</span>
+    </div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e">{n_dedup_20:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">同股 ≥ 20 交易日才計入一次</div>
+  </div>
+  <div style="background:#e8f5e9;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#388e3c;font-weight:600;margin-bottom:4px">
+      60日去重樣本<br><span style="font-weight:400">(60D Dedup N)</span>
+    </div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e">{n_dedup_60:,}</div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">同股 ≥ 60 交易日才計入一次</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">起始日期</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e;white-space:normal;word-break:break-word">
+      {_date_min_str}
+    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">最早的候選訊號日</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">結束日期</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e;white-space:normal;word-break:break-word">
+      {_date_max_str}
+    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">cutoff 前最後一個候選日</div>
+  </div>
+</div>""")
 
         st.caption(
-            "⬇️ 以下所有分組統計：20D 欄位基於 **20D Dedup 樣本**，60D 欄位基於 **60D Dedup 樣本**。"
-            "各組的 n 為該組在 20D Dedup 樣本中的筆數。Raw N 僅在上方樣本獨立性診斷中呈現。"
+            "💡 這代表什麼？候選訊號很多，不代表有同樣多次獨立交易。"
+            "同一檔股票每天都出現等於重複計入，去重後的樣本才是更真實的獨立觀察次數。"
         )
 
         st.divider()
 
-        # PT Score Coverage
+        # ── D. 進階研究診斷 ──────────────────────────────────
+        st.markdown("### D. 進階研究診斷")
+        st.caption(
+            "以下所有分組統計：20D 欄位基於 **20D 去重樣本（20D Dedup）**，"
+            "60D 欄位基於 **60D 去重樣本（60D Dedup）**。各組的 n 為該組在 20D Dedup 樣本中的筆數。"
+        )
+
+        # 樣本獨立性診斷
+        with st.expander("🔬 樣本獨立性診斷（Sample Independence）", expanded=False):
+            st.caption(
+                "同一檔股票連續多日出現（例如台積電連續 10 天都在名單上），"
+                "未去重時 t-test 會把它們當成獨立樣本，造成 n 虛高、信賴區間虛窄、p 值虛低。"
+                "下表對比三種版本的統計差異。"
+            )
+            if si:
+                si_rows = []
+                for label, ver in [
+                    ("原始（Raw，含重疊）", "raw"),
+                    ("20日去重（Dedup 20D）", "dedup_20"),
+                    ("60日去重（Dedup 60D）", "dedup_60"),
+                ]:
+                    v   = si.get(ver, {})
+                    s20 = v.get("stats_20d", {})
+                    s60 = v.get("stats_60d", {})
+                    ci20 = (
+                        f"[{s20['ci_low']:+.2f}%, {s20['ci_high']:+.2f}%]"
+                        if s20.get("ci_low") is not None else "—"
+                    )
+                    ci60 = (
+                        f"[{s60['ci_low']:+.2f}%, {s60['ci_high']:+.2f}%]"
+                        if s60.get("ci_low") is not None else "—"
+                    )
+                    boot20 = (
+                        f"[{s20['boot_ci_low']:+.2f}%, {s20['boot_ci_high']:+.2f}%]"
+                        if s20.get("boot_ci_low") is not None else "—"
+                    )
+                    boot60 = (
+                        f"[{s60['boot_ci_low']:+.2f}%, {s60['boot_ci_high']:+.2f}%]"
+                        if s60.get("boot_ci_low") is not None else "—"
+                    )
+                    si_rows.append({
+                        "版本":           label,
+                        "n":              v.get("n", 0),
+                        "20D均Alpha":     _fmt_pct(s20.get("mean")),
+                        "20D p值":        _fmt_p(s20.get("p_value")),
+                        "20D t CI":       ci20,
+                        "20D Boot CI":    boot20,
+                        "20D Cohen'd":    _fmt_d(s20.get("cohens_d")),
+                        "60D均Alpha":     _fmt_pct(s60.get("mean")),
+                        "60D p值":        _fmt_p(s60.get("p_value")),
+                        "60D t CI":       ci60,
+                        "60D Boot CI":    boot60,
+                        "60D Cohen'd":    _fmt_d(s60.get("cohens_d")),
+                    })
+                st.dataframe(
+                    pd.DataFrame(si_rows).set_index("版本"),
+                    use_container_width=True,
+                )
+                st.caption(
+                    "⚠️ 若 p 值在去重後從顯著（如 0.02）變為不顯著（如 0.18），"
+                    "表示原始顯著性主要來自重複樣本，**非真實策略優勢**。"
+                    "去重後 n 大幅縮水且信賴區間跨越 0 則結論應保守。"
+                    "Bootstrap CI（2000次重抽樣）與 t-test CI 大幅分歧時以 Bootstrap 為準。"
+                )
+
+        # PT Score 分組
         n_with_pt    = res.get("n_with_pt", 0)
         n_without_pt = res.get("n_without_pt", 0)
         pt_cov       = res.get("pt_coverage_pct", 0.0)
         pt_total     = n_with_pt + n_without_pt
 
-        st.markdown("#### PT Score 分組 — 主要假說")
-        st.info(
-            "**資料完整性說明**\n\n"
-            "歷史 `analysis_results` 建立時尚未保存 Price Trend Score，"
-            "因此部分歷史資料無法進行可靠的 PT bucket 分析。"
-            "本分析**僅使用實際保存的 Price Trend Score**，不使用估算或回填值。"
-            "NULL 值不會被歸入任何 bucket（包含 `<40`）。"
-        )
-
-        pc1, pc2, pc3, pc4 = st.columns(4)
-        pc1.metric("Research 樣本總數", f"{pt_total:,}")
-        pc2.metric("有 PT Score", f"{n_with_pt:,}")
-        pc3.metric("無 PT Score（NULL）", f"{n_without_pt:,}")
-        pc4.metric("PT Coverage", f"{pt_cov:.1f}%")
-
-        if pt_cov < 5.0:
-            st.warning(
-                f"⏳ **PT Score Coverage 過低（{n_with_pt} / {pt_total}，{pt_cov:.1f}%）**\n\n"
-                "目前歷史資料中 Price Trend Score 尚未累積足夠，PT bucket 分析暫時無法提供有效結論。\n"
-                "cutoff（2026-10-09）後每日執行 main.py 可逐步累積真實 PT Score。"
-            )
-        else:
+        with st.expander(f"📊 PT 分數分組 (PT Score Buckets) — 主要假說 · Coverage {pt_cov:.1f}%",
+                         expanded=pt_cov >= 5.0):
             st.caption(
-                f"假說：PT ≥ 60 的股票，未來 20D/60D Alpha 是否顯著優於 PT < 60？"
-                f"（僅含有真實 PT Score 的 {n_with_pt:,} 筆）"
+                "假說：Price Trend Score（PT Score）越高的股票，未來報酬是否越好？  \n"
+                "PT ≥ 60 = 技術型態偏強；PT < 60 = 型態偏弱或無明顯方向。"
             )
-            _render_stats_table(res.get("by_pt_bucket"), "pt_bucket")
+            if pt_cov < 5.0:
+                st.warning(
+                    f"⏳ **PT Score 覆蓋率過低（{n_with_pt} / {pt_total}，{pt_cov:.1f}%）**  \n"
+                    "歷史資料建立時尚未保存 Price Trend Score，PT 分組目前無法提供有效結論。  \n"
+                    "cutoff（2026-10-09）後每日執行可逐步累積真實 PT Score。"
+                )
+            else:
+                st.caption(f"僅含有真實 PT Score 的 {n_with_pt:,} 筆（NULL 不歸入任何 bucket）。")
+                _render_stats_table(res.get("by_pt_bucket"), "pt_bucket")
 
-        st.divider()
+        # Setup Type 分組
+        with st.expander("📐 型態分組（Setup Type）", expanded=False):
+            st.caption(
+                "breakout = 股價突破前 20 日高點；near_breakout = 接近壓力位；"
+                "pullback_buy / pullback_hold = 回踩支撐；trending = 趨勢延伸。  \n"
+                "假說：哪種型態在去重後的 Alpha 最穩定？"
+            )
+            _render_stats_table(res.get("by_setup"), "setup_type")
 
-        # Setup Type
-        st.markdown("#### Setup Type 分組")
-        _render_stats_table(res.get("by_setup"), "setup_type")
+        # MA20 偏離
+        with st.expander("📉 MA20 月線乖離分組（MA20 Deviation）", expanded=False):
+            st.caption(
+                "MA20 gap = (收盤 − MA20) / MA20 × 100%。  \n"
+                "正值 = 股價高於月線（可能追高）；負值 = 低於月線（可能弱勢）。  \n"
+                "假說：乖離程度是否影響後續 Alpha？"
+            )
+            _render_stats_table(res.get("by_ma20"), "ma20_bracket")
 
-        st.divider()
-
-        # MA20 Deviation
-        st.markdown("#### MA20 偏離度分組")
-        _render_stats_table(res.get("by_ma20"), "ma20_bracket")
-
-        st.divider()
-
-        # MA60 Distance
-        st.markdown("#### MA60 距離分組")
-        st.caption("MA60 gap = (close − MA60) / MA60 × 100%，僅含有足夠歷史 MA60 資料者")
-        _render_stats_table(res.get("by_ma60"), "ma60_bracket")
-
-        st.divider()
+        # MA60 距離
+        with st.expander("📉 MA60 季線距離分組（MA60 Distance）", expanded=False):
+            st.caption(
+                "MA60 gap = (close − MA60) / MA60 × 100%，僅含有足夠歷史 MA60 資料者。"
+            )
+            _render_stats_table(res.get("by_ma60"), "ma60_bracket")
 
         # Market Regime
-        st.markdown("#### 市場 Regime 分組")
-        st.caption(
-            "Bull = 0050 > MA60 且 MA60 slope 向上；"
-            "Bear = 0050 < MA60 且 MA60 slope 向下；"
-            "Neutral = 其他（slope flat 或位置與趨勢方向不一致的過渡期）"
-        )
-        _render_stats_table(res.get("by_regime"), "regime")
-
-        st.divider()
+        with st.expander("🌏 市場環境分組（Market Regime）", expanded=False):
+            st.caption(
+                "Bull = 0050 在 MA60 上方且 MA60 斜率向上（多頭市場）；"
+                "Bear = 0050 在 MA60 下方且斜率向下（空頭市場）；"
+                "Neutral = 其他過渡期。  \n"
+                "假說：市場環境是否影響策略表現？"
+            )
+            _render_stats_table(res.get("by_regime"), "regime")
 
         # Monthly
-        st.markdown("#### 月份分組（市場環境切片）")
-        st.caption("樣本集中在少數月份時，月份結論不可靠。")
-        _render_stats_table(res.get("by_month"), "ym")
+        with st.expander("📅 月份分組（Month Slice）", expanded=False):
+            st.caption(
+                "樣本集中在少數月份時，月份結論不可靠。  \n"
+                "用途：確認樣本是否均勻分布在不同時期，防止特定市場環境主導結果。"
+            )
+            _render_stats_table(res.get("by_month"), "ym")
 
-        st.divider()
-
-        # Raw data expander
-        with st.expander("📋 展開原始資料（含所有欄位）"):
+        # Raw data
+        with st.expander("📋 原始資料（含所有欄位）", expanded=False):
             show_cols = [
                 "date", "stock_id", "pt_score", "setup_type", "trade_signal",
                 "ma20_gap", "ma60_gap", "vol_ratio", "total_score",
@@ -365,13 +600,17 @@ def page_research_backtest() -> None:
                 use_container_width=True,
             )
 
-    # ── 🔒 Forward ────────────────────────────────────────────
+    # ── 🔒 未來驗證（Forward / Out-of-Sample）────────────────────
     with tab_f:
-        st.markdown(f"**Out-of-Sample 邊界（固定）：{_CUTOFF_LABEL}**")
-        st.caption(
-            "此頁資料來自 `forward_signals` 表，每日 main.py 結束後自動凍結。"
-            "signal 一旦寫入即不可修改，演算法改版也不回頭重算。"
-        )
+        st.html(f"""
+<div style="background:#f8f9fa;border-left:4px solid #546e7a;padding:11px 15px;
+            border-radius:0 8px 8px 0;margin-bottom:14px;font-size:0.83rem;color:#37474f;line-height:1.7">
+  <b>未來驗證（Forward Validation）</b> 是什麼？<br>
+  在 <b>{_CUTOFF_LABEL}</b> 這個固定時間點之後，每天收盤後系統自動把當天挑出的股票「凍結」記錄下來。
+  這些記錄就是 Forward Signal。<br>
+  等股票出現後 20 天（或 60 天），才可以計算實際報酬，與 0050 比較超額報酬（Alpha）。<br>
+  <span style="color:#90a4ae;font-size:0.78rem">Signal 一旦凍結不可修改，保證驗證結果的客觀性。</span>
+</div>""")
 
         fwd_df = _load_forward()
 
@@ -382,45 +621,71 @@ def page_research_backtest() -> None:
         n_fwd = len(fwd_df)
         n_fwd_dates = fwd_df["trade_date"].nunique() if "trade_date" in fwd_df.columns else 0
 
-        fa, fb, fc = st.columns(3)
-        fa.metric("Forward Signal 總筆數", f"{n_fwd:,}")
-        fb.metric("交易日數", f"{n_fwd_dates}")
-        fc.metric("最新日期", str(fwd_df["trade_date"].max()) if "trade_date" in fwd_df.columns else "—")
-
-        # 判斷是否有足夠成熟的 observation（20 個交易日後才能計算 20D return）
-        from datetime import date, timedelta
-        today = date.today()
+        from datetime import date as _date_cls
+        _today = _date_cls.today()
         mature_dates = (
             fwd_df["trade_date"]
-            .apply(lambda d: (today - d).days >= 28 if hasattr(d, "day") else False)
+            .apply(lambda d: (_today - d).days >= 28 if hasattr(d, "day") else False)
             if "trade_date" in fwd_df.columns
             else pd.Series([], dtype=bool)
         )
         n_mature = int(mature_dates.sum())
 
+        _fwd_date_max = str(fwd_df["trade_date"].max())[:10].replace("-", "/") if "trade_date" in fwd_df.columns else "—"
+        _fwd_date_min = str(fwd_df["trade_date"].min())[:10].replace("-", "/") if "trade_date" in fwd_df.columns else "—"
+
+        st.html(f"""
+<style>
+@media (max-width: 640px) {{
+  .fwd-grid {{ grid-template-columns: 1fr 1fr !important; }}
+}}
+</style>
+<div class="fwd-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 14px">
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">已凍結訊號筆數</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e">{n_fwd:,}</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">涵蓋交易日數</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e">{n_fwd_dates}</div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">最新日期</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#1a1a2e;white-space:normal;word-break:break-word">
+      {_fwd_date_max}
+    </div>
+  </div>
+  <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px">
+    <div style="font-size:0.7rem;color:#888;font-weight:600;margin-bottom:4px">已達 20D 成熟期</div>
+    <div style="font-size:1.05rem;font-weight:800;color:#{'2e7d32' if n_mature >= 20 else 'ff8800'}">
+      {n_mature} 筆
+    </div>
+    <div style="font-size:0.68rem;color:#aaa;margin-top:2px">需 ≥ 20 筆才開始評估</div>
+  </div>
+</div>""")
+
         if n_mature < 20:
             st.warning(
-                f"⏳ **累積中** — 目前有 {n_mature} 筆已達 20D 成熟期（需 ≥ 20 筆才開始評估）。\n\n"
-                "Forward Validation 需要足夠的完整 observation 才能產生有意義的統計結論，"
-                "請繼續執行每日 main.py 自動累積。"
+                f"⏳ **累積中** — 目前有 {n_mature} 筆已達 20D 成熟期（需 ≥ 20 筆）。  \n"
+                "這代表什麼？Forward Validation 需要足夠的已完成觀察，"
+                "才能計算有意義的統計結果。目前尚不能對策略做出驗證結論，請繼續每日執行分析。"
             )
         else:
-            st.success(f"✅ 已有 {n_mature} 筆成熟 observation，可開始計算 Forward Alpha。")
+            st.success(f"✅ 已有 {n_mature} 筆成熟 observation（>= 20D），可開始計算 Forward Alpha。")
             st.caption("Forward 統計計算功能將在此後版本啟用。")
 
         st.divider()
 
-        # 顯示目前已凍結的 signals
-        st.markdown("#### 已凍結 Forward Signals")
-        show_fwd_cols = [
-            "trade_date", "stock_id", "stock_name",
-            "candidate_rank", "rec_level", "confidence",
-            "close_at_signal", "market_regime_at_signal",
-            "pt_score", "setup_type", "trade_signal",
-            "ma20_gap", "ma60_gap", "vol_ratio",
-            "total_score", "industry", "model_version",
-        ]
-        st.dataframe(
-            fwd_df[[c for c in show_fwd_cols if c in fwd_df.columns]],
-            use_container_width=True,
-        )
+        with st.expander("📋 已凍結 Forward Signals 明細", expanded=False):
+            show_fwd_cols = [
+                "trade_date", "stock_id", "stock_name",
+                "candidate_rank", "rec_level", "confidence",
+                "close_at_signal", "market_regime_at_signal",
+                "pt_score", "setup_type", "trade_signal",
+                "ma20_gap", "ma60_gap", "vol_ratio",
+                "total_score", "industry", "model_version",
+            ]
+            st.dataframe(
+                fwd_df[[c for c in show_fwd_cols if c in fwd_df.columns]],
+                use_container_width=True,
+            )
