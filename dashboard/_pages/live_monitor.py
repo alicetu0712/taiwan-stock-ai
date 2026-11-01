@@ -221,7 +221,7 @@ def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) ->
             core_cnt = diag.get("core_recs_count", "—")
             st.markdown(
                 f"**Recommendations**：{total}　"
-                f"<span style='font-size:0.85em;color:#888'>（Core Picks {core_cnt} ／ 其他 tier {total - core_cnt if isinstance(core_cnt,int) else '—'}）</span>",
+                f"<span style='font-size:0.85em;color:#888'>（Core Picks {core_cnt} ／ 其他 tier {total - core_cnt if isinstance(core_cnt, int) else '—'}）</span>",
                 unsafe_allow_html=True,
             )
             st.markdown(

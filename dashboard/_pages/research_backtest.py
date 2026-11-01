@@ -371,7 +371,7 @@ def page_research_backtest() -> None:
         _d20 = s20.get("cohens_d")
         _mean60 = s60.get("mean")
         _wr60 = s60.get("win_rate")
-        _p60 = s60.get("p_value")
+        _p60 = s60.get("p_value")  # noqa: F841
 
         def _color_alpha(v):
             if v is None:
@@ -433,7 +433,9 @@ def page_research_backtest() -> None:
             st.caption(f"📊 {_p_note} {_d_note}")
 
         if not _insufficient:
-            _alpha_sign = "正" if (_mean20 is not None and _mean20 > 0) else "負"
+            _alpha_sign = (  # noqa: F841
+                "正" if (_mean20 is not None and _mean20 > 0) else "負"
+            )
             if _p20 is not None and _p20 < 0.05:
                 st.caption(
                     f"✅ 這代表什麼？去重後 {n_dedup_20} 個獨立樣本中，"
@@ -730,7 +732,7 @@ def page_research_backtest() -> None:
             if "trade_date" in fwd_df.columns
             else "—"
         )
-        _fwd_date_min = (
+        _fwd_date_min = (  # noqa: F841
             str(fwd_df["trade_date"].min())[:10].replace("-", "/")
             if "trade_date" in fwd_df.columns
             else "—"

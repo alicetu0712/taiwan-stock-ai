@@ -400,14 +400,14 @@ def _load_coverage_detail(check_date) -> dict:
         }
 
         delisted, suspended, not_listed, other_missing = [], [], [], []
-        for sid, st in missing_stocks_map.items():
+        for sid, stock_obj in missing_stocks_map.items():
             if (
-                st.delisted_date and st.delisted_date <= check_date
-            ) or st.security_status == "delisted":
+                stock_obj.delisted_date and stock_obj.delisted_date <= check_date
+            ) or stock_obj.security_status == "delisted":
                 delisted.append(sid)
-            elif st.security_status == "suspended":
+            elif stock_obj.security_status == "suspended":
                 suspended.append(sid)
-            elif st.listing_date and st.listing_date > check_date:
+            elif stock_obj.listing_date and stock_obj.listing_date > check_date:
                 not_listed.append(sid)
             else:
                 other_missing.append(sid)

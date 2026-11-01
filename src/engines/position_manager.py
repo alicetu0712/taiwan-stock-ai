@@ -102,8 +102,8 @@ def create_pending_position(
 
     new_pct = _compute_position_pct(rec_level, confidence)
     logger.info(
-        f"[Position] {stock_id} 倉位：{new_pct:.0f}%（base={POSITION_SIZE_MAP.get(rec_level,10):.0f}%"
-        f", conf={confidence:.0f}%, cap={_cfg.POSITION_SIZING.get('max_single_pct',20):.0f}%）"
+        f"[Position] {stock_id} 倉位：{new_pct:.0f}%（base={POSITION_SIZE_MAP.get(rec_level, 10):.0f}%"
+        f", conf={confidence:.0f}%, cap={_cfg.POSITION_SIZING.get('max_single_pct', 20):.0f}%）"
     )
 
     pos = PositionMonitor(

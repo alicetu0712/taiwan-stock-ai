@@ -380,6 +380,23 @@ def _section_performance(df: pd.DataFrame):
             return "—"
         return f"{v:+.2f}{suffix}"
 
+    _suf60 = (
+        "初步數字供參考，尚不具統計意義。"
+        if n60 < 30
+        else "已有一定樣本，但仍需繼續累積。"
+    )
+    _note60 = (
+        '<div style="font-size:0.72rem;color:#78909c;margin-top:8px;'
+        'padding-top:8px;border-top:1px solid #e0e0e0">'
+        + _EVIDENCE_PRESENTER.sample_strength(n60).label
+        + "："
+        + _suf60
+        + "</div>"
+        if n60 > 0
+        else '<div style="font-size:0.72rem;color:#90a4ae;margin-top:8px">'
+        "尚無完成 60D 觀察的記錄。</div>"
+    )
+
     st.html(f"""
 <style>
 @media (max-width: 640px) {{
@@ -443,10 +460,7 @@ def _section_performance(df: pd.DataFrame):
         <div style="font-size:1.1rem;font-weight:800;color:#c62828">{_fmt(p60['avg_mae'])}</div>
       </div>
     </div>
-    {('<div style="font-size:0.72rem;color:#78909c;margin-top:8px;padding-top:8px;border-top:1px solid #e0e0e0">'
-      + _EVIDENCE_PRESENTER.sample_strength(n60).label + '：' +
-      ('初步數字供參考，尚不具統計意義。' if n60 < 30 else '已有一定樣本，但仍需繼續累積。')
-      + '</div>' if n60 > 0 else '<div style="font-size:0.72rem;color:#90a4ae;margin-top:8px">尚無完成 60D 觀察的記錄。</div>')}
+    {_note60}
   </div>
 </div>""")
 
