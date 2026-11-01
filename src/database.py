@@ -1588,6 +1588,19 @@ def init_db(
     return engine
 
 
+def connect_db(engine: Optional[Engine] = None) -> Engine:
+    """Production-safe connection: returns Engine with NO DDL, NO migrations.
+
+    Use this for Daily Pipeline, Dashboard, Forward/Research flows, and
+    any normal business read/write operations.
+
+    Only scripts/init_db.py and scripts/migrate_*.py should call init_db().
+    """
+    if engine is None:
+        engine = get_engine()
+    return engine
+
+
 def get_session(engine=None) -> Session:
     if engine is None:
         engine = get_engine()

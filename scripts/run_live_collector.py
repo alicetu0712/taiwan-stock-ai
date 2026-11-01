@@ -54,10 +54,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from src.database import init_db
+    from src.database import connect_db
     from src.services.live_background_service import run_once
 
-    init_db()   # create live_execution_events if not exists (idempotent)
+    connect_db()  # establish connection; live_execution_events must exist via migration
 
     if args.loop:
         logger.info(f"Live collector loop 啟動 (interval={args.interval}s)")

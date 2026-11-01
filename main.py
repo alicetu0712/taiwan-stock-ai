@@ -88,7 +88,7 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
     from src.engines.decision           import DecisionEngine
     from src.ai.claude_analyst          import ClaudeAnalyst
     from src.reporters.report_generator import ReportGenerator
-    from src.database                   import init_db, get_session
+    from src.database                   import connect_db, get_session
 
     import pandas as pd
 
@@ -103,8 +103,8 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
     analyst     = ClaudeAnalyst()
     reporter    = ReportGenerator()
 
-    # ── 初始化資料庫 ──────────────────────────────────────────
-    engine = init_db()
+    # ── 初始化資料庫連線（純連線，無 DDL） ──────────────────
+    engine = connect_db()
     session = get_session(engine)
 
     n_analyzed   = 0

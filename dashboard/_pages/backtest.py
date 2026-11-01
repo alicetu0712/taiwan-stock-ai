@@ -50,9 +50,9 @@ def load_pipeline_funnels(days: int = 30) -> pd.DataFrame:
 
         from sqlalchemy.orm import Session
 
-        from src.database import PipelineFunnel, init_db
+        from src.database import PipelineFunnel, connect_db
 
-        engine = init_db()
+        engine = connect_db()
         since = date.today() - timedelta(days=days)
         with Session(engine) as s:
             rows = (
@@ -108,9 +108,14 @@ def load_validation_funnel() -> dict:
         from sqlalchemy import func
         from sqlalchemy.orm import Session
 
-        from src.database import MODEL_VERSION, ForwardSignal, Recommendation, init_db
+        from src.database import (
+            MODEL_VERSION,
+            ForwardSignal,
+            Recommendation,
+            connect_db,
+        )
 
-        engine = init_db()
+        engine = connect_db()
         with Session(engine) as s:
             n_raw_rec = (
                 s.query(func.count(Recommendation.id))
@@ -162,9 +167,9 @@ def load_rec_diversity(days: int = 60) -> dict:
 
         from sqlalchemy.orm import Session
 
-        from src.database import Recommendation, init_db
+        from src.database import Recommendation, connect_db
 
-        engine = init_db()
+        engine = connect_db()
         since = date.today() - timedelta(days=days)
         with Session(engine) as s:
             rows = (
