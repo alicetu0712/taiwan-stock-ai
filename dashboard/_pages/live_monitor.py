@@ -284,6 +284,162 @@ def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) ->
                 )
 
 
+def _fetch_forward_signal_ids(signal_date: "date", stock_ids: list) -> dict:
+    """
+    批次查詢 ForwardSignal.id for (signal_date, stock_id)。
+    回傳 {stock_id: fs_id}；查無資料或 is_valid=False 則不含該鍵。
+    只做唯讀查詢，不修改任何 ForwardSignal。
+    """
+    if not stock_ids:
+        return {}
+    try:
+        from src.database import ForwardSignal, get_session
+
+        s = get_session()
+        rows = (
+            s.query(ForwardSignal.stock_id, ForwardSignal.id)
+            .filter(
+                ForwardSignal.trade_date == signal_date,
+                ForwardSignal.stock_id.in_(stock_ids),
+                ForwardSignal.is_valid.is_(True),
+            )
+            .order_by(ForwardSignal.id.desc())
+            .all()
+        )
+        s.close()
+        seen: dict = {}
+        for sid, fid in rows:
+            if sid not in seen:
+                seen[sid] = fid
+        return seen
+    except Exception as exc:
+        logger.debug(f"_fetch_forward_signal_ids: {exc}")
+        return {}
+
+
+def _render_record_buy_form(sid: str, name: str, rec: dict, signal_date, fs_id) -> None:
+    """
+    「📝 記錄實際買進」表單（在 BUY 卡片 expander 內）。
+
+    使用者填寫實際成交資訊後，透過 trade_service 建立 ACTUAL 持倉。
+    不得自動呼叫此函式；只有使用者主動展開 expander 並填表才觸發。
+    """
+    from datetime import date
+    from decimal import Decimal
+
+    from src.database import get_session
+    import src.services.trade_service as svc
+
+    signal_source = "AI_SIGNAL" if fs_id else "MANUAL"
+    target = rec.get("target1")
+    stop = rec.get("stop_price")
+
+    # 原始計畫摘要（唯讀提示）
+    plan_parts = []
+    if rec.get("entry_low") and rec.get("entry_high"):
+        plan_parts.append(f"進場區間 {rec['entry_low']:.1f}–{rec['entry_high']:.1f}")
+    if stop:
+        plan_parts.append(f"停損 {stop:.1f}")
+    if target:
+        plan_parts.append(f"目標 {target:.1f}")
+    if plan_parts:
+        st.caption("原始計畫：" + "　".join(plan_parts))
+
+    if signal_source == "AI_SIGNAL":
+        st.caption(f"✅ 已找到正式 ForwardSignal（id={fs_id}），將連結至 AI 訊號")
+    else:
+        st.caption("ℹ️ 此訊號無對應 ForwardSignal，將以 MANUAL 模式建立持倉")
+
+    form_key = f"record_buy_{sid}_{signal_date}"
+    with st.form(key=form_key, clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        exec_date = c1.date_input(
+            "實際成交日期",
+            value=date.today(),
+            key=f"rb_date_{sid}",
+        )
+        exec_time = c2.text_input(
+            "成交時間（選填，HH:MM）",
+            value="",
+            key=f"rb_time_{sid}",
+        )
+        c3, c4 = st.columns(2)
+        exec_price = c3.number_input(
+            "成交價格",
+            min_value=0.01,
+            step=0.01,
+            format="%.2f",
+            key=f"rb_price_{sid}",
+        )
+        shares = c4.number_input(
+            "成交股數",
+            min_value=1,
+            step=1,
+            key=f"rb_shares_{sid}",
+        )
+        c5, c6 = st.columns(2)
+        actual_fee = c5.number_input(
+            "手續費（元）",
+            min_value=0.0,
+            step=1.0,
+            format="%.0f",
+            key=f"rb_fee_{sid}",
+        )
+        notes = c6.text_input("備註（選填）", key=f"rb_notes_{sid}")
+
+        submitted = st.form_submit_button("✅ 確認記錄買進", type="primary")
+        if submitted:
+            if exec_price <= 0:
+                st.error("請填寫成交價格（> 0）")
+                return
+            if shares <= 0:
+                st.error("請填寫成交股數（> 0）")
+                return
+            try:
+                exec_datetime = None
+                if exec_time.strip():
+                    from datetime import datetime
+
+                    exec_datetime = datetime.strptime(
+                        f"{exec_date} {exec_time.strip()}", "%Y-%m-%d %H:%M"
+                    )
+                session = get_session()
+                pos = svc.create_position(
+                    session,
+                    sid,
+                    name,
+                    signal_source,
+                    exec_date,
+                    target_price=Decimal(str(target)) if target else None,
+                    stop_price=Decimal(str(stop)) if stop else None,
+                    forward_signal_id=fs_id,
+                    notes=notes,
+                )
+                svc.add_execution(
+                    session,
+                    pos.id,
+                    "BUY",
+                    exec_date,
+                    execution_price=Decimal(str(exec_price)),
+                    shares=int(shares),
+                    actual_fee=Decimal(str(actual_fee)),
+                    transaction_tax=Decimal("0"),
+                    execution_datetime=exec_datetime,
+                    notes=notes,
+                )
+                session.commit()
+                session.close()
+                st.success(
+                    f"✅ 已記錄：{name}（{sid}）買進 {int(shares)} 股 @ "
+                    f"{exec_price:.2f}　持倉 #{pos.id}"
+                )
+            except svc.TradeSvcError as e:
+                st.error(f"記錄失敗（業務規則）：{e}")
+            except Exception as e:
+                logger.exception(f"record_buy error: {e}")
+                st.error(f"記錄失敗（系統錯誤）：{e}")
+
+
 def _live_cards(
     recs: list,
     market_map: dict,
@@ -311,6 +467,9 @@ def _live_cards(
 
     stock_ids = [r["sid"] for r in recs]
     quotes = fetch_intraday(stock_ids, market_map=market_map)
+
+    # 批次預取 ForwardSignal IDs（唯讀，不修改任何訊號）
+    fs_id_map = _fetch_forward_signal_ids(signal_date, stock_ids)
 
     # 每個 (stock_id, signal_date) 的最後記錄狀態，跨 fragment 刷新保留
     if "lm_status_map" not in st.session_state:
@@ -446,6 +605,19 @@ def _live_cards(
                     if cur_price and sig_price:
                         diff_pct = (cur_price - sig_price) / sig_price * 100
                         st.caption(f"vs 訊號價：{diff_pct:+.1f}%")
+
+            with st.expander("📝 記錄實際買進", expanded=False):
+                st.caption(
+                    "⚠️ 此處為登記**已完成的成交**，按下確認後才寫入持倉。"
+                    "不代表向券商送單，也不影響 AI 訊號與 PAPER 模擬。"
+                )
+                _render_record_buy_form(
+                    sid=sid,
+                    name=name,
+                    rec=rec,
+                    signal_date=signal_date,
+                    fs_id=fs_id_map.get(sid),
+                )
 
 
 def page_live_monitor(sel_date: date) -> None:
