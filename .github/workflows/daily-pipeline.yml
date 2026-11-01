@@ -245,15 +245,23 @@ jobs:
                   f"history_today={cp_history_today}"
               )
 
-              # Step 9e 執行確認：execution_logs.status='success' 已是充分條件。
-              # 附加提示：若 active > 0 但 checked_today = 0，可能代表日期比較有問題。
+              # Step 9e 資料一致性確認：
+              #   - execution_logs.date = today 已由上方查詢驗證（若不符會 exit(1)）
+              #   - Step 9e 對每個 active candidate 都寫 last_checked_date = check_date
+              #   - 唯一跳過路徑 already_done 跳過的候選當日已處理過，last_checked_date 已是 today
+              #   → cp_active > 0 but cp_checked_today == 0 在正常流程中不可能發生
+              #     若出現，代表 DB 資料不一致（如手動插入），必須人工介入。
               if cp_active > 0 and cp_checked_today == 0:
                   print(
-                      f"WARNING: {cp_active} active candidate(s) exist but none have "
+                      f"ERROR: {cp_active} active candidate(s) in pool but none have "
                       f"last_checked_date={today}. "
-                      "Pipeline ran successfully (status=success) so Step 9e completed — "
-                      "this may indicate a date mismatch. Check logs."
+                      "Step 9e is confirmed to have run (execution_log.status=success + "
+                      "Step 9e raises on failure), yet candidates were not updated for "
+                      "today's date. This indicates a data consistency issue requiring "
+                      "manual inspection.",
+                      file=sys.stderr,
                   )
+                  sys.exit(1)
 
               # FK integrity: candidate_pool_history.candidate_id → candidate_pool.id
               bad_fk_history = conn.execute(text(
