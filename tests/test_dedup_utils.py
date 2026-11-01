@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.dedup_utils import dedup_by_trading_days
 
-
 # ── helpers ───────────────────────────────────────────────────
+
 
 def _mon_fri(start: date, end: date) -> list:
     """Generate Mon-Fri trading dates between start and end inclusive."""
@@ -30,6 +30,7 @@ def _mon_fri(start: date, end: date) -> list:
 
 
 # ── basic behaviour ───────────────────────────────────────────
+
 
 class TestDedupByTradingDaysBasic:
     def test_empty_signals_returns_empty(self):
@@ -80,6 +81,7 @@ class TestDedupByTradingDaysBasic:
 
 # ── market_calendar path ───────────────────────────────────────
 
+
 class TestDedupWithMarketCalendar:
     def setup_method(self):
         # Dense Mon-Fri calendar: Jan–Mar 2024
@@ -107,7 +109,7 @@ class TestDedupWithMarketCalendar:
     def test_weekend_signal_date_handled_gracefully(self):
         # Feb 10 2024 is Saturday — bisect still works (finds position)
         signals = [
-            ("A", date(2024, 2, 5)),   # Mon
+            ("A", date(2024, 2, 5)),  # Mon
             ("A", date(2024, 2, 10)),  # Sat — 4 tdays < 20 → dropped
         ]
         result = dedup_by_trading_days(signals, 20, market_calendar=self.cal)
@@ -121,7 +123,10 @@ class TestDedupWithMarketCalendar:
         # but int(35/1.4) = 25 → same result; use just 29 cal days:
         # Jan 2 → Jan 31: 29 cal / 1.4 = 20 (boundary), Mon-Fri = 21 (kept either way)
         # Distinguishing case: truncated calendar that omits some days
-        sparse_cal = [date(2024, 1, 2), date(2024, 2, 5)]  # only 2 dates → 1 tday between them
+        sparse_cal = [
+            date(2024, 1, 2),
+            date(2024, 2, 5),
+        ]  # only 2 dates → 1 tday between them
         signals = [
             ("A", date(2024, 1, 2)),
             ("A", date(2024, 2, 5)),  # 34 cal / 1.4 = 24 tdays via fallback (kept)
@@ -131,10 +136,11 @@ class TestDedupWithMarketCalendar:
         # With full cal: 24 tdays → kept
         result_full = dedup_by_trading_days(signals, 20, market_calendar=self.cal)
         assert len(result_sparse) == 1  # calendar used → 1 tday → dropped
-        assert len(result_full) == 2    # calendar used → 24 tdays → kept
+        assert len(result_full) == 2  # calendar used → 24 tdays → kept
 
 
 # ── sorted_dates_map path ──────────────────────────────────────
+
 
 class TestDedupWithSortedDatesMap:
     def test_per_stock_dates_take_priority_over_calendar(self):
@@ -146,9 +152,9 @@ class TestDedupWithSortedDatesMap:
             ("A", date(2024, 1, 2)),
             ("A", date(2024, 2, 5)),
         ]
-        result = dedup_by_trading_days(signals, 3,
-                                        sorted_dates_map={"A": stock_a_dates},
-                                        market_calendar=cal)
+        result = dedup_by_trading_days(
+            signals, 3, sorted_dates_map={"A": stock_a_dates}, market_calendar=cal
+        )
         # elements in (Jan2, Feb5] in stock_a_dates = [Jan15, Feb5] = 2 tdays
         assert len(result) == 1  # 2 < 3 → dropped
 
@@ -158,13 +164,14 @@ class TestDedupWithSortedDatesMap:
             ("UNKNOWN", date(2024, 1, 2)),
             ("UNKNOWN", date(2024, 1, 30)),  # 20 tdays via Mon-Fri → kept
         ]
-        result = dedup_by_trading_days(signals, 20,
-                                        sorted_dates_map={},
-                                        market_calendar=cal)
+        result = dedup_by_trading_days(
+            signals, 20, sorted_dates_map={}, market_calendar=cal
+        )
         assert len(result) == 2
 
 
 # ── fail-closed (no calendar) ─────────────────────────────────
+
 
 class TestDedupNoCalendar:
     """When no trading calendar is available, independence cannot be confirmed.
@@ -195,6 +202,7 @@ class TestDedupNoCalendar:
 
     def test_no_calendar_warning_logged(self, caplog):
         import logging
+
         signals = [
             ("A", date(2024, 1, 2)),
             ("A", date(2024, 3, 1)),

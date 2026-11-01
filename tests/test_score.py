@@ -243,15 +243,25 @@ class TestFundamentalScorers:
         assert score_hi > score_lo
 
     def test_gross_margin_excellent(self):
-        score, plus, minus = self.a._score_gross_margin({"gross_margin_avg": 45.0, "gross_margin_trend": "stable"})
+        score, plus, minus = self.a._score_gross_margin(
+            {"gross_margin_avg": 45.0, "gross_margin_trend": "stable"}
+        )
         assert score >= 14.0
 
     def test_gross_margin_low_penalized(self):
-        score_hi, *_ = self.a._score_gross_margin({"gross_margin_avg": 45.0, "gross_margin_trend": "stable"})
-        score_lo, *_ = self.a._score_gross_margin({"gross_margin_avg": 5.0, "gross_margin_trend": "down"})
+        score_hi, *_ = self.a._score_gross_margin(
+            {"gross_margin_avg": 45.0, "gross_margin_trend": "stable"}
+        )
+        score_lo, *_ = self.a._score_gross_margin(
+            {"gross_margin_avg": 5.0, "gross_margin_trend": "down"}
+        )
         assert score_hi > score_lo
 
     def test_revenue_up_beats_down(self):
-        score_up, *_ = self.a._score_revenue({"revenue_trend": "up", "revenue_yoy_avg": 15.0})
-        score_dn, *_ = self.a._score_revenue({"revenue_trend": "down", "revenue_yoy_avg": -20.0})
+        score_up, *_ = self.a._score_revenue(
+            {"revenue_trend": "up", "revenue_yoy_avg": 15.0}
+        )
+        score_dn, *_ = self.a._score_revenue(
+            {"revenue_trend": "down", "revenue_yoy_avg": -20.0}
+        )
         assert score_up > score_dn

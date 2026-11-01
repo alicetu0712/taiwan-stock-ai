@@ -221,8 +221,9 @@ def main() -> None:
     from dashboard._pages.research_backtest import page_research_backtest
 
     if "selected_date" not in st.session_state:
-        from src.core.trading_calendar import effective_trade_date
         from dashboard.loaders import load_latest_completed_date
+        from src.core.trading_calendar import effective_trade_date
+
         try:
             eff = effective_trade_date()
             latest = load_latest_completed_date()

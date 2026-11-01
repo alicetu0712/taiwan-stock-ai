@@ -1,7 +1,5 @@
 """tests/test_evidence_presenter.py — Unit tests for EvidencePresenter."""
 
-import pytest
-
 from src.presentation.evidence_presenter import EvidencePresenter, SampleStrength
 
 
@@ -59,7 +57,7 @@ class TestSampleStrength:
     def test_thresholds_are_pre_registered(self):
         """Verify the four threshold boundaries match foe_v1 §46."""
         ep = EvidencePresenter()
-        assert ep.sample_strength(9).label  == "不足"
+        assert ep.sample_strength(9).label == "不足"
         assert ep.sample_strength(10).label == "初步觀察"
         assert ep.sample_strength(29).label == "初步觀察"
         assert ep.sample_strength(30).label == "有一定參考"

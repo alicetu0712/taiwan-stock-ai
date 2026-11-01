@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 CONCENTRATION_THRESHOLDS = {
-    "high":   50,  # 同產業 >= 50% 總配置 → 警告
+    "high": 50,  # 同產業 >= 50% 總配置 → 警告
     "medium": 35,  # 同產業 >= 35% → 注意
 }
 
@@ -54,7 +54,7 @@ def compute_portfolio_exposure(positions: list, session=None) -> dict:
             s.close()
 
         industry_map = {r.stock_id: (r.industry or "其他") for r in stock_rows}
-        name_map     = {r.stock_id: (r.name or r.stock_id)  for r in stock_rows}
+        name_map = {r.stock_id: (r.name or r.stock_id) for r in stock_rows}
     except Exception as e:
         logger.warning(f"compute_portfolio_exposure DB query failed: {e}")
         industry_map = {}
@@ -69,7 +69,9 @@ def compute_portfolio_exposure(positions: list, session=None) -> dict:
         ind = industry_map.get(p["stock_id"], "其他")
         industry_alloc[ind] = industry_alloc.get(ind, 0) + (p.get("position_pct") or 0)
 
-    industry_weights = {k: round(v / total_alloc * 100, 1) for k, v in industry_alloc.items()}
+    industry_weights = {
+        k: round(v / total_alloc * 100, 1) for k, v in industry_alloc.items()
+    }
 
     top_industry = max(industry_alloc, key=industry_alloc.get)
     top_pct = round(industry_alloc[top_industry] / total_alloc * 100, 1)
@@ -85,16 +87,16 @@ def compute_portfolio_exposure(positions: list, session=None) -> dict:
         level = "low"
 
     return {
-        "industry_weights":   industry_weights,
-        "industry_alloc":     industry_alloc,
-        "top_industry":       top_industry,
-        "top_industry_pct":   top_pct,
-        "max_stock_id":       max_pos["stock_id"],
-        "max_stock_name":     name_map.get(max_pos["stock_id"], max_pos["stock_id"]),
-        "max_stock_pct":      max_stock_pct,
+        "industry_weights": industry_weights,
+        "industry_alloc": industry_alloc,
+        "top_industry": top_industry,
+        "top_industry_pct": top_pct,
+        "max_stock_id": max_pos["stock_id"],
+        "max_stock_name": name_map.get(max_pos["stock_id"], max_pos["stock_id"]),
+        "max_stock_pct": max_stock_pct,
         "concentration_level": level,
-        "total_allocated":    total_alloc,
-        "n_positions":        len(positions),
+        "total_allocated": total_alloc,
+        "n_positions": len(positions),
     }
 
 

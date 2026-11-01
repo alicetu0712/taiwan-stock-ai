@@ -5,6 +5,7 @@ Reads from: position dict (from DB), current price.
 Never re-derives: entry/target/stop prices, position sizing formulas,
                   or any engine-level trading decisions.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,14 +15,14 @@ from dataclasses import dataclass
 class PositionCard:
     """Pre-built display fragments for one position card."""
 
-    pnl: float | None    # numeric PnL % (used for display and close-action write-back)
-    pnl_color: str       # hex colour for PnL text
-    pnl_str: str         # "+1.5%" or "—"
-    pnl_icon: str        # "🟢" or "🔴"
-    price_label: str     # "NT$ 123.45" or "尚無即時報價"
-    price_html: str      # complete HTML block: large price + coloured PnL
-    progress_html: str   # horizontal price-bar HTML
-    summary_caption: str # "倉位 20%　·　B級　·　建倉 2024-01-15"
+    pnl: float | None  # numeric PnL % (used for display and close-action write-back)
+    pnl_color: str  # hex colour for PnL text
+    pnl_str: str  # "+1.5%" or "—"
+    pnl_icon: str  # "🟢" or "🔴"
+    price_label: str  # "NT$ 123.45" or "尚無即時報價"
+    price_html: str  # complete HTML block: large price + coloured PnL
+    progress_html: str  # horizontal price-bar HTML
+    summary_caption: str  # "倉位 20%　·　B級　·　建倉 2024-01-15"
 
 
 class PositionPresenter:
@@ -39,18 +40,18 @@ class PositionPresenter:
             else None
         )
         pnl_positive = (pnl or 0) >= 0
-        pnl_color    = "#00897b" if pnl_positive else "#e53935"
-        pnl_str      = f"{pnl:+.1f}%" if pnl is not None else "—"
-        pnl_icon     = "🟢" if pnl_positive else "🔴"
-        price_label  = f"NT$ {curr:.2f}" if curr else "尚無即時報價"
+        pnl_color = "#00897b" if pnl_positive else "#e53935"
+        pnl_str = f"{pnl:+.1f}%" if pnl is not None else "—"
+        pnl_icon = "🟢" if pnl_positive else "🔴"
+        price_label = f"NT$ {curr:.2f}" if curr else "尚無即時報價"
 
         price_html = (
             f'<div style="margin:2px 0 10px 0">'
             f'<span style="font-size:1.5rem;font-weight:800;color:#222">'
-            f'{price_label}</span>'
+            f"{price_label}</span>"
             f'<span style="font-size:0.95rem;font-weight:700;'
             f'color:{pnl_color};margin-left:10px">{pnl_str}</span>'
-            f'</div>'
+            f"</div>"
         )
 
         progress_html = self._position_progress_html(
@@ -109,7 +110,7 @@ class PositionPresenter:
         else:
             fill = "#e53935"
 
-        fill_left  = min(ep, cp)
+        fill_left = min(ep, cp)
         fill_width = abs(cp - ep)
 
         stop_marker = (
@@ -130,13 +131,13 @@ class PositionPresenter:
         )
         curr_dot = (
             f'<div style="position:absolute;left:{cp:.1f}%;top:-5px;width:16px;height:16px;'
-            f'background:{fill};border:2px solid white;border-radius:50%;'
+            f"background:{fill};border:2px solid white;border-radius:50%;"
             f'transform:translateX(-50%);box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div>'
         )
 
-        stop_lbl   = f"停損 {stop:.1f}" if stop else ""
-        entry_lbl  = f"進場 {entry:.1f}"
-        curr_lbl   = f"現價 {curr:.1f}" if curr else "尚無報價"
+        stop_lbl = f"停損 {stop:.1f}" if stop else ""
+        entry_lbl = f"進場 {entry:.1f}"
+        curr_lbl = f"現價 {curr:.1f}" if curr else "尚無報價"
         target_lbl = f"目標 {target:.1f}" if target else ""
 
         return (
@@ -144,14 +145,14 @@ class PositionPresenter:
             f'<div style="position:relative;height:6px;background:#e8e8e8;border-radius:3px">'
             f'<div style="position:absolute;left:{fill_left:.1f}%;width:{fill_width:.1f}%;'
             f'height:100%;background:{fill}77;border-radius:3px"></div>'
-            f'{stop_marker}{entry_marker}{target_marker}{curr_dot}'
-            f'</div>'
+            f"{stop_marker}{entry_marker}{target_marker}{curr_dot}"
+            f"</div>"
             f'<div style="display:flex;justify-content:space-between;'
             f'font-size:0.63rem;margin-top:9px">'
             f'<span style="color:#e53935">{stop_lbl}</span>'
             f'<span style="color:#1565c0">{entry_lbl}</span>'
             f'<span style="color:{fill};font-weight:700">{curr_lbl}</span>'
             f'<span style="color:#43a047">{target_lbl}</span>'
-            f'</div>'
-            f'</div>'
+            f"</div>"
+            f"</div>"
         )

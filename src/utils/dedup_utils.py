@@ -52,14 +52,20 @@ def dedup_by_trading_days(
         else:
             sdates = sorted_dates_map.get(stock_id, [])
             if sdates:
-                tdays = bisect.bisect_right(sdates, d) - bisect.bisect_right(sdates, prev)
+                tdays = bisect.bisect_right(sdates, d) - bisect.bisect_right(
+                    sdates, prev
+                )
             elif market_calendar:
-                tdays = bisect.bisect_right(market_calendar, d) - bisect.bisect_right(market_calendar, prev)
+                tdays = bisect.bisect_right(market_calendar, d) - bisect.bisect_right(
+                    market_calendar, prev
+                )
             else:
                 logger.warning(
                     "dedup_by_trading_days: no trading calendar for %s at %s "
                     "(prev kept: %s); signal excluded (fail-closed)",
-                    stock_id, d, prev,
+                    stock_id,
+                    d,
+                    prev,
                 )
                 continue  # independence unknown → exclude from independent sample
             if tdays >= n_trading_days:

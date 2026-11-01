@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 class TechnicalResult:
     stock_id: str
     timing_score: float = 0.0
-    ma_trend: str = "neutral"          # bullish / bearish / neutral
+    ma_trend: str = "neutral"  # bullish / bearish / neutral
     volume_signal: str = "neutral"
     rsi: Optional[float] = None
     macd_signal: str = "neutral"
-    kd_signal: str = "neutral"         # 保留相容性
+    kd_signal: str = "neutral"  # 保留相容性
     patterns: List[str] = field(default_factory=list)
     support: Optional[float] = None
     resistance: Optional[float] = None
@@ -47,18 +47,20 @@ class TechnicalResult:
     ma240: Optional[float] = None
     close: Optional[float] = None
     # ── 新增：短線關鍵欄位 ──────────────────────────────────
-    setup_type: str = "none"           # breakout / pullback_buy / pullback_hold / trending / breakdown / none
-    breakout_20d: bool = False         # 近5日是否創20日新高
-    hh_hl_structure: bool = False      # Higher Highs + Higher Lows 結構
-    atr: Optional[float] = None        # 14日 ATR
+    setup_type: str = (
+        "none"  # breakout / pullback_buy / pullback_hold / trending / breakdown / none
+    )
+    breakout_20d: bool = False  # 近5日是否創20日新高
+    hh_hl_structure: bool = False  # Higher Highs + Higher Lows 結構
+    atr: Optional[float] = None  # 14日 ATR
     vol_ratio: Optional[float] = None  # 當日量 / 20日均量
     price_change_5d: Optional[float] = None  # 5日價格變化%
-    near_20d_high: bool = False        # 股價在20日高點的95%以上
+    near_20d_high: bool = False  # 股價在20日高點的95%以上
     price_structure_score: float = 0.0
     ma10: Optional[float] = None
     ma_deviation20: Optional[float] = None  # (Price - MA20) / MA20 * 100%
-    ma_slope: str = "neutral"          # MA20 斜率方向：up / down / neutral
-    momentum_score: float = 0.0        # MACD + RSI 動能分（V2 timing 15%）
+    ma_slope: str = "neutral"  # MA20 斜率方向：up / down / neutral
+    momentum_score: float = 0.0  # MACD + RSI 動能分（V2 timing 15%）
 
 
 class TechnicalAnalyzer:
@@ -140,7 +142,11 @@ class TechnicalAnalyzer:
             risk_signals.append(f"MA20 乖離 {result.ma_deviation20:.1f}%，短線過熱勿追")
         elif result.ma_deviation20 is not None and result.ma_deviation20 >= 10:
             risk_signals.append(f"MA20 乖離 {result.ma_deviation20:.1f}%，留意拉回風險")
-        if result.resistance and result.close and result.close >= result.resistance * 0.98:
+        if (
+            result.resistance
+            and result.close
+            and result.close >= result.resistance * 0.98
+        ):
             risk_signals.append("接近前波壓力區，追高需謹慎")
         if rsi_val and rsi_val > 80:
             risk_signals.append(f"RSI {rsi_val:.0f} 過熱")
@@ -154,7 +160,9 @@ class TechnicalAnalyzer:
 
     # ── 分析子方法 ────────────────────────────────────────────
 
-    def _analyze_ma(self, close: np.ndarray) -> Tuple[float, str, Dict, Optional[float], str]:
+    def _analyze_ma(
+        self, close: np.ndarray
+    ) -> Tuple[float, str, Dict, Optional[float], str]:
         """均線分析（20分）
 
         Sub-components:
@@ -176,7 +184,7 @@ class TechnicalAnalyzer:
                 ma_vals[f"ma{period}"] = float(np.mean(close[-period:]))
 
         cur = float(close[-1])
-        ma5  = ma_vals.get("ma5")
+        ma5 = ma_vals.get("ma5")
         ma10 = ma_vals.get("ma10")
         ma20 = ma_vals.get("ma20")
         ma60 = ma_vals.get("ma60")
@@ -187,7 +195,7 @@ class TechnicalAnalyzer:
         # ── 均線結構（7分）──────────────────────────────────
         if ma5 and ma10 and ma20 and ma60:
             if ma5 > ma10 > ma20 > ma60:
-                score += 7      # 完美多頭排列
+                score += 7  # 完美多頭排列
                 trend = "bullish"
             elif ma5 > ma20 > ma60:
                 score += 5
@@ -196,7 +204,7 @@ class TechnicalAnalyzer:
                 score += 3
                 trend = "bullish_weak"
             elif ma5 < ma10 < ma20 < ma60:
-                score -= 4      # 完美空頭排列
+                score -= 4  # 完美空頭排列
                 trend = "bearish"
             elif ma5 < ma20:
                 score -= 2
@@ -224,7 +232,7 @@ class TechnicalAnalyzer:
         # ── 均線斜率（3分）：MA20 現值 vs 5日前 MA20 ────────
         if n >= 25:
             ma20_prev = float(np.mean(close[-25:-5]))
-            ma20_now  = float(np.mean(close[-20:]))
+            ma20_now = float(np.mean(close[-20:]))
             if ma20_now > ma20_prev * 1.001:
                 score += 2
                 slope_direction = "up"
@@ -233,7 +241,7 @@ class TechnicalAnalyzer:
                 slope_direction = "down"
         if n >= 65 and ma60:
             ma60_prev = float(np.mean(close[-65:-5]))
-            ma60_now  = float(np.mean(close[-60:]))
+            ma60_now = float(np.mean(close[-60:]))
             if ma60_now > ma60_prev * 1.001:
                 score += 1
 
@@ -241,27 +249,27 @@ class TechnicalAnalyzer:
         if ma20 and ma20 > 0:
             deviation = round((cur - ma20) / ma20 * 100, 2)
             if 0 <= deviation < 5:
-                score += 2      # 健康位置，未過熱
+                score += 2  # 健康位置，未過熱
             elif 5 <= deviation < 10:
                 score += 1
             elif deviation >= 15:
-                score -= 2      # 過度乖離，追高風險
+                score -= 2  # 過度乖離，追高風險
             elif deviation >= 10:
                 score -= 1
             # 略低於 MA20（-5% 到 0）：中性，讓 setup 判斷
             elif deviation < -5:
-                score -= 1      # 跌到 MA20 下方一段，偏空
+                score -= 1  # 跌到 MA20 下方一段，偏空
 
         # ── 黃金/死亡交叉（3分）─────────────────────────────
         if ma5 and ma20 and n >= 21:
-            prev_ma5  = float(np.mean(close[-6:-1]))
+            prev_ma5 = float(np.mean(close[-6:-1]))
             prev_ma20 = float(np.mean(close[-21:-1]))
             if prev_ma5 < prev_ma20 and ma5 >= ma20:
-                score += 3      # MA5 黃金交叉 MA20
+                score += 3  # MA5 黃金交叉 MA20
                 if trend not in ("bullish",):
                     trend = "bullish_weak"
             elif prev_ma5 > prev_ma20 and ma5 < ma20:
-                score -= 2      # MA5 死亡交叉 MA20
+                score -= 2  # MA5 死亡交叉 MA20
                 if trend not in ("bearish",):
                     trend = "bearish"
 
@@ -285,7 +293,7 @@ class TechnicalAnalyzer:
         breakout_20d = False
         near_20d_high = False
         if n >= 21:
-            prev_20d_high = float(np.max(high[-21:-1]))   # exclude today
+            prev_20d_high = float(np.max(high[-21:-1]))  # exclude today
             cur_close = float(close[-1])
             if cur_close > prev_20d_high:
                 breakout_20d = True
@@ -316,7 +324,9 @@ class TechnicalAnalyzer:
         # ── 近5日動能（8分）─────────────────────────────────
         price_change_5d = None
         if n >= 6:
-            price_change_5d = round((float(close[-1]) - float(close[-6])) / float(close[-6]) * 100, 2)
+            price_change_5d = round(
+                (float(close[-1]) - float(close[-6])) / float(close[-6]) * 100, 2
+            )
             if price_change_5d >= 5:
                 score += 8
                 patterns.append(f"5日漲幅 {price_change_5d:.1f}%")
@@ -416,7 +426,7 @@ class TechnicalAnalyzer:
         elif 35 <= rsi < 45:
             score = 5.0
         else:
-            score = 6.0   # RSI < 35，超賣反彈機會
+            score = 6.0  # RSI < 35，超賣反彈機會
         return score, risk
 
     def _analyze_macd(self, close: np.ndarray) -> Tuple[float, str]:
@@ -465,8 +475,8 @@ class TechnicalAnalyzer:
         try:
             tr_list = []
             for i in range(1, len(close)):
-                h, l, pc = float(high[i]), float(low[i]), float(close[i - 1])
-                tr = max(h - l, abs(h - pc), abs(l - pc))
+                h, lo, pc = float(high[i]), float(low[i]), float(close[i - 1])
+                tr = max(h - lo, abs(h - pc), abs(lo - pc))
                 tr_list.append(tr)
             if len(tr_list) < period:
                 return None
@@ -482,7 +492,9 @@ class TechnicalAnalyzer:
         if len(close) < 20:
             return None, None
         try:
-            return round(float(np.min(low[-20:])), 2), round(float(np.max(high[-20:])), 2)
+            return round(float(np.min(low[-20:])), 2), round(
+                float(np.max(high[-20:])), 2
+            )
         except Exception:
             return None, None
 
@@ -490,10 +502,10 @@ class TechnicalAnalyzer:
         # setup_type is always "none" here — setup is owned by PriceTrendAnalyzer
         parts = []
         ma_desc = {
-            "bullish":      "均線多頭排列",
+            "bullish": "均線多頭排列",
             "bullish_weak": "短均線在長均線上",
-            "bearish":      "均線空頭排列",
-            "neutral":      "均線方向中性",
+            "bearish": "均線空頭排列",
+            "neutral": "均線方向中性",
         }
         parts.append(ma_desc.get(r.ma_trend, ""))
         if r.ma_deviation20 is not None:
@@ -513,6 +525,7 @@ class TechnicalAnalyzer:
 
 
 # ── 工具函式 ──────────────────────────────────────────────────
+
 
 def _ema(data: np.ndarray, period: int) -> np.ndarray:
     result = np.zeros_like(data, dtype=float)

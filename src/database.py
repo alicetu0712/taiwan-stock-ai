@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 # Out-of-Sample: forward_signals.trade_date >= RESEARCH_CUTOFF_DATE
 RESEARCH_CUTOFF_DATE: _date = _date(2026, 10, 9)
 
-V1_MODEL_VERSION = "v8.0"   # frozen — identifies all existing v8.0 signals
-MODEL_VERSION    = "v8.0"   # current pipeline (equals V1 until V2 is built)
+V1_MODEL_VERSION = "v8.0"  # frozen — identifies all existing v8.0 signals
+MODEL_VERSION = "v8.0"  # current pipeline (equals V1 until V2 is built)
 
 
 class Base(DeclarativeBase):
@@ -54,8 +54,12 @@ class Stock(Base):
     market = Column(String(10))  # TWSE / TPEx
     industry = Column(String(50))
     listing_date = Column(Date)
-    delisted_date = Column(Date)     # None = 仍上市；非 None = 下市日期（供 survivorship bias 修正）
-    security_status = Column(String(20), default="listed")  # listed / delisted / suspended / unknown
+    delisted_date = Column(
+        Date
+    )  # None = 仍上市；非 None = 下市日期（供 survivorship bias 修正）
+    security_status = Column(
+        String(20), default="listed"
+    )  # listed / delisted / suspended / unknown
     capital = Column(Float)  # 資本額（億）
     outstanding_shares = Column(Float)  # 流通股數（千股）
     is_excluded = Column(Boolean, default=False)
@@ -172,14 +176,16 @@ class AnalysisResult(Base):
     # 分數動能（每日填入，供回測 / IC 診斷使用）
     score_change_5d = Column(Float)
     score_change_10d = Column(Float)
-    timing_change_5d = Column(Float)    # timing_score 今日 − 5D 前
+    timing_change_5d = Column(Float)  # timing_score 今日 − 5D 前
     behavior_change_5d = Column(Float)  # behavior_score 今日 − 5D 前
     # V2 新增欄位
-    price_trend_score = Column(Float)   # PriceTrend 0-100（V2: 45%）
-    setup_type = Column(String(20))     # breakout/pullback_buy/pullback_hold/trending/breakdown/none
-    ma20_gap = Column(Float)            # (close−MA20)/MA20 × 100%
-    volume_ratio = Column(Float)        # 當日量 / 20日均量
-    trade_signal = Column(String(20))   # strong_buy/buy/wait/reduce/sell
+    price_trend_score = Column(Float)  # PriceTrend 0-100（V2: 45%）
+    setup_type = Column(
+        String(20)
+    )  # breakout/pullback_buy/pullback_hold/trending/breakdown/none
+    ma20_gap = Column(Float)  # (close−MA20)/MA20 × 100%
+    volume_ratio = Column(Float)  # 當日量 / 20日均量
+    trade_signal = Column(String(20))  # strong_buy/buy/wait/reduce/sell
 
 
 class Recommendation(Base):
@@ -214,32 +220,42 @@ class Recommendation(Base):
     price_trend_score = Column(Float)
     setup_type = Column(String(20))
     ma20_gap = Column(Float)
-    trade_signal = Column(String(20))   # strong_buy/buy/wait/reduce/sell
+    trade_signal = Column(String(20))  # strong_buy/buy/wait/reduce/sell
     created_at = Column(DateTime, default=datetime.utcnow)
     # Decision Center 欄位（ATR-based entry/exit，由 DecisionEngine 計算）
-    entry_low   = Column(Float)
-    entry_high  = Column(Float)
-    stop_price  = Column(Float)
-    target1     = Column(Float)
-    target2     = Column(Float)
-    atr         = Column(Float)
-    vol_ratio   = Column(Float)
-    ma60_gap    = Column(Float)           # (close − MA60) / MA60 × 100%, frozen at signal time
+    entry_low = Column(Float)
+    entry_high = Column(Float)
+    stop_price = Column(Float)
+    target1 = Column(Float)
+    target2 = Column(Float)
+    atr = Column(Float)
+    vol_ratio = Column(Float)
+    ma60_gap = Column(Float)  # (close − MA60) / MA60 × 100%, frozen at signal time
     # Decision Center snapshot
-    decision_code          = Column(String(20))   # final code after DC override (e.g. wait_pullback ≠ trade_signal)
-    decision_label_version = Column(String(20))   # DECISION_CENTER_VERSION at signal time
-    rr_ratio               = Column(Float)        # (target1 − close) / (close − stop_price)
-    market_regime          = Column(String(10))   # bull / neutral / bear at signal time
+    decision_code = Column(
+        String(20)
+    )  # final code after DC override (e.g. wait_pullback ≠ trade_signal)
+    decision_label_version = Column(
+        String(20)
+    )  # DECISION_CENTER_VERSION at signal time
+    rr_ratio = Column(Float)  # (target1 − close) / (close − stop_price)
+    market_regime = Column(String(10))  # bull / neutral / bear at signal time
     # Stock-level data quality (JSON: price/ma60/volume/pt_score/institution/financial + confidence)
     data_quality_json = Column(Text)
     # Data Integrity — validity gate
-    is_valid          = Column(Boolean, default=True)    # False = 此紀錄不得參與任何績效統計
-    invalid_reason    = Column(String(60))               # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH / etc.
-    source_price_date = Column(Date)                     # 實際股價資料日期（vs date 欄位）
+    is_valid = Column(Boolean, default=True)  # False = 此紀錄不得參與任何績效統計
+    invalid_reason = Column(
+        String(60)
+    )  # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH / etc.
+    source_price_date = Column(Date)  # 實際股價資料日期（vs date 欄位）
     # Scoring data completeness — tracks which factor dimensions had real data
-    missing_data_factors = Column(String(40))            # comma-separated: e.g. "quality,behavior"; NULL = complete
+    missing_data_factors = Column(
+        String(40)
+    )  # comma-separated: e.g. "quality,behavior"; NULL = complete
     # Signal Lifecycle — managed by live_background_service
-    lifecycle_status = Column(String(20), default='active')  # active / invalidated / superseded
+    lifecycle_status = Column(
+        String(20), default="active"
+    )  # active / invalidated / superseded
 
 
 class DecisionJournal(Base):
@@ -402,36 +418,36 @@ class LiveExecutionEvent(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # Signal context
-    stock_id     = Column(String(10), nullable=False, index=True)
-    signal_date  = Column(Date, nullable=False, index=True)   # BUY 訊號日期
-    signal_price = Column(Float)                              # 訊號日收盤價
+    stock_id = Column(String(10), nullable=False, index=True)
+    signal_date = Column(Date, nullable=False, index=True)  # BUY 訊號日期
+    signal_price = Column(Float)  # 訊號日收盤價
 
     # Observation context
-    observed_at   = Column(DateTime, nullable=False, default=datetime.utcnow)
-    current_price = Column(Float)   # 觀察當下即時成交
-    intraday_low  = Column(Float)   # 今日截至觀察時最低點
+    observed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    current_price = Column(Float)  # 觀察當下即時成交
+    intraday_low = Column(Float)  # 今日截至觀察時最低點
 
     # State transition
-    prev_status = Column(String(30))    # 前一狀態（None = 首次觀察）
+    prev_status = Column(String(30))  # 前一狀態（None = 首次觀察）
     live_status = Column(String(30), nullable=False)
 
     # Metrics at observation time
-    drop_pct          = Column(Float)   # 低點 vs 訊號價跌幅（%）
-    bounce_pct        = Column(Float)   # 現價 vs 低點反彈幅度（%）
-    rr_at_observation = Column(Float)   # 以現價計算的 R/R
+    drop_pct = Column(Float)  # 低點 vs 訊號價跌幅（%）
+    bounce_pct = Column(Float)  # 現價 vs 低點反彈幅度（%）
+    rr_at_observation = Column(Float)  # 以現價計算的 R/R
 
     # Signal plan frozen at signal_date (from Recommendation)
-    entry_low   = Column(Float)
-    entry_high  = Column(Float)
-    stop_price  = Column(Float)
-    target1     = Column(Float)
+    entry_low = Column(Float)
+    entry_high = Column(Float)
+    stop_price = Column(Float)
+    target1 = Column(Float)
 
     # Data quality at observation time
-    quote_trade_date = Column(String(8))    # YYYYMMDD（報價來源日期）
-    quote_quality    = Column(String(10))   # valid / stale / unknown
+    quote_trade_date = Column(String(8))  # YYYYMMDD（報價來源日期）
+    quote_quality = Column(String(10))  # valid / stale / unknown
 
     # Version tracking — enables comparing rule versions in future research
-    strategy_version  = Column(String(20))
+    strategy_version = Column(String(20))
     live_rule_version = Column(String(20))
 
 
@@ -462,7 +478,9 @@ class ForwardSignal(Base):
     __tablename__ = "forward_signals"
     __table_args__ = (
         # model_version added in Phase 0 so V1 and V2 can coexist on same date+stock
-        UniqueConstraint("trade_date", "stock_id", "model_version", name="uq_fs_date_stock_version"),
+        UniqueConstraint(
+            "trade_date", "stock_id", "model_version", name="uq_fs_date_stock_version"
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -471,12 +489,12 @@ class ForwardSignal(Base):
     stock_name = Column(String(50))
 
     # ── 凍結的 feature snapshot ─────────────────────────────
-    pt_score = Column(Float)           # price_trend_score
+    pt_score = Column(Float)  # price_trend_score
     setup_type = Column(String(20))
     trade_signal = Column(String(20))
     ma20_gap = Column(Float)
-    ma60_gap = Column(Float)           # (close − MA60) / MA60 × 100
-    ma60_slope = Column(String(10))    # "up" / "down" / "flat"
+    ma60_gap = Column(Float)  # (close − MA60) / MA60 × 100
+    ma60_slope = Column(String(10))  # "up" / "down" / "flat"
     vol_ratio = Column(Float)
     total_score = Column(Float)
     timing_score = Column(Float)
@@ -485,46 +503,54 @@ class ForwardSignal(Base):
     model_version = Column(String(20), default=MODEL_VERSION)
 
     # ── v2 追加欄位（signal 當下凍結，事後不可補）────────────────
-    confidence              = Column(Float)        # 信心分數（%）
-    industry                = Column(String(50))   # 產業分類
-    market_regime_at_signal = Column(String(10))   # bull / neutral / bear
-    close_at_signal         = Column(Float)        # signal_date 收盤價（legacy 相容欄，非進場價）
-    candidate_rank          = Column(Integer)      # 當日 candidates 中的排名（1=最高分）
+    confidence = Column(Float)  # 信心分數（%）
+    industry = Column(String(50))  # 產業分類
+    market_regime_at_signal = Column(String(10))  # bull / neutral / bear
+    close_at_signal = Column(Float)  # signal_date 收盤價（legacy 相容欄，非進場價）
+    candidate_rank = Column(Integer)  # 當日 candidates 中的排名（1=最高分）
 
     # ── 執行時機修正（Execution Timing Bias fix）─────────────────
-    signal_close            = Column(Float)        # signal_date 收盤價（明確語意，同 close_at_signal）
-    execution_date          = Column(Date)         # 實際執行日（signal_date 後首個交易日）
-    execution_price         = Column(Float)        # 執行日開盤進場價（NEXT_OPEN）
-    execution_price_type    = Column(String(20))   # "NEXT_OPEN" | "SIGNAL_CLOSE_LEGACY"
+    signal_close = Column(Float)  # signal_date 收盤價（明確語意，同 close_at_signal）
+    execution_date = Column(Date)  # 實際執行日（signal_date 後首個交易日）
+    execution_price = Column(Float)  # 執行日開盤進場價（NEXT_OPEN）
+    execution_price_type = Column(String(20))  # "NEXT_OPEN" | "SIGNAL_CLOSE_LEGACY"
 
     # ── 決策快照（Recommendation ATR plan 凍結，表示當時網站說什麼）──
-    entry_low      = Column(Float)        # 建議進場區間下緣
-    entry_high     = Column(Float)        # 建議進場區間上緣
-    stop_price     = Column(Float)        # 停損價（凍結值）
-    target1        = Column(Float)        # 目標價 T1
-    target2        = Column(Float)        # 目標價 T2
-    decision_label = Column(String(30))   # stable code: strong_buy/buy/wait_pullback/wait/reduce/sell
+    entry_low = Column(Float)  # 建議進場區間下緣
+    entry_high = Column(Float)  # 建議進場區間上緣
+    stop_price = Column(Float)  # 停損價（凍結值）
+    target1 = Column(Float)  # 目標價 T1
+    target2 = Column(Float)  # 目標價 T2
+    decision_label = Column(
+        String(30)
+    )  # stable code: strong_buy/buy/wait_pullback/wait/reduce/sell
 
     # ── 隔夜市場風險連結（盤前 pipeline 回填）────────────────────
-    overnight_rule_version = Column(String(20))   # overnight_v1 or NULL (legacy/unlinked)
-    overnight_context_id   = Column(Integer)       # FK → overnight_market_contexts.id
+    overnight_rule_version = Column(
+        String(20)
+    )  # overnight_v1 or NULL (legacy/unlinked)
+    overnight_context_id = Column(Integer)  # FK → overnight_market_contexts.id
 
     locked_at = Column(DateTime, default=datetime.utcnow)
 
     # ── 事後填入的績效結果（signal 成熟後逐步回填）─────────────────
-    fwd_return_20d       = Column(Float)    # 20 交易日後報酬率（%）
-    alpha_20d            = Column(Float)    # 超額報酬 vs 0050（%），20 交易日
-    fwd_return_60d       = Column(Float)    # 60 交易日後報酬率（%）
-    alpha_60d            = Column(Float)    # 超額報酬 vs 0050（%），60 交易日
-    stop_triggered_day   = Column(Integer)  # 第幾個交易日收盤跌破停損（NULL = 未觸發）
-    t1_hit_day           = Column(Integer)  # 第幾個交易日收盤首次達到 T1
-    outcome_note          = Column(String(20))  # T1_HIT / STOP_TRIGGERED / EXPIRED / null
-    outcome_price_quality = Column(String(10))  # OHLC / CLOSE_ONLY — whether stop/T1 scan used intraday H/L or close fallback
-    outcomes_computed_at  = Column(DateTime)
+    fwd_return_20d = Column(Float)  # 20 交易日後報酬率（%）
+    alpha_20d = Column(Float)  # 超額報酬 vs 0050（%），20 交易日
+    fwd_return_60d = Column(Float)  # 60 交易日後報酬率（%）
+    alpha_60d = Column(Float)  # 超額報酬 vs 0050（%），60 交易日
+    stop_triggered_day = Column(Integer)  # 第幾個交易日收盤跌破停損（NULL = 未觸發）
+    t1_hit_day = Column(Integer)  # 第幾個交易日收盤首次達到 T1
+    outcome_note = Column(String(20))  # T1_HIT / STOP_TRIGGERED / EXPIRED / null
+    outcome_price_quality = Column(
+        String(10)
+    )  # OHLC / CLOSE_ONLY — whether stop/T1 scan used intraday H/L or close fallback
+    outcomes_computed_at = Column(DateTime)
     # Data Integrity — validity gate
-    is_valid          = Column(Boolean, default=True)    # False = 此紀錄不得參與任何績效統計
-    invalid_reason    = Column(String(60))               # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH
-    source_price_date = Column(Date)                     # 實際股價資料日期（vs trade_date 欄位）
+    is_valid = Column(Boolean, default=True)  # False = 此紀錄不得參與任何績效統計
+    invalid_reason = Column(
+        String(60)
+    )  # NON_TRADING_DAY_DATE_MISMATCH / PRICE_DATE_MISMATCH
+    source_price_date = Column(Date)  # 實際股價資料日期（vs trade_date 欄位）
 
 
 class OvernightMarketContext(Base):
@@ -552,7 +578,8 @@ class OvernightMarketContext(Base):
     __tablename__ = "overnight_market_contexts"
     __table_args__ = (
         UniqueConstraint(
-            "execution_date", "overnight_rule_version",
+            "execution_date",
+            "overnight_rule_version",
             name="uq_omc_exec_date_version",
         ),
     )
@@ -561,33 +588,35 @@ class OvernightMarketContext(Base):
 
     # Date mapping
     execution_date = Column(Date, nullable=False, index=True)
-    us_market_date = Column(Date)                           # prev US trading day
+    us_market_date = Column(Date)  # prev US trading day
 
     # US market returns (1-day return vs prior session close, %)
-    sp500_return_pct    = Column(Float)    # ^GSPC
-    nasdaq_return_pct   = Column(Float)    # ^IXIC
-    sox_return_pct      = Column(Float)    # ^SOX
+    sp500_return_pct = Column(Float)  # ^GSPC
+    nasdaq_return_pct = Column(Float)  # ^IXIC
+    sox_return_pct = Column(Float)  # ^SOX
 
     # VIX
-    vix_close           = Column(Float)    # absolute level
-    vix_change_pct      = Column(Float)    # % change from prior session
+    vix_close = Column(Float)  # absolute level
+    vix_change_pct = Column(Float)  # % change from prior session
 
     # Taiwan futures overnight (NULL in v1 — no reliable free source)
     taiex_futures_overnight_return_pct = Column(Float)
 
     # Risk assessment
-    risk_level          = Column(String(10), nullable=False)  # GREEN/YELLOW/RED/UNKNOWN
-    risk_score          = Column(Float)                       # nullable in v1
-    risk_reasons_json   = Column(Text)                        # JSON list of reason dicts
+    risk_level = Column(String(10), nullable=False)  # GREEN/YELLOW/RED/UNKNOWN
+    risk_score = Column(Float)  # nullable in v1
+    risk_reasons_json = Column(Text)  # JSON list of reason dicts
 
     # Data quality
-    data_quality        = Column(String(10), nullable=False)  # COMPLETE/PARTIAL/STALE/UNKNOWN
+    data_quality = Column(String(10), nullable=False)  # COMPLETE/PARTIAL/STALE/UNKNOWN
 
     # Source provenance — Yahoo timestamp and our availability calculation are separate
-    source_name         = Column(String(50))
-    source_timestamp    = Column(DateTime)    # raw timestamp from Yahoo (UTC-naive stored as UTC)
-    available_at        = Column(DateTime)    # us_market_date 16:00 ET as UTC (DST-correct)
-    fetched_at          = Column(DateTime, default=datetime.utcnow)
+    source_name = Column(String(50))
+    source_timestamp = Column(
+        DateTime
+    )  # raw timestamp from Yahoo (UTC-naive stored as UTC)
+    available_at = Column(DateTime)  # us_market_date 16:00 ET as UTC (DST-correct)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
 
     # Version — bump only when threshold semantics or classification logic changes
     overnight_rule_version = Column(String(20), nullable=False)
@@ -619,7 +648,9 @@ class ForwardOutcomeEvaluation(Base):
     __tablename__ = "forward_outcome_evaluations"
     __table_args__ = (
         UniqueConstraint(
-            "forward_signal_id", "path_type", "outcome_protocol_version",
+            "forward_signal_id",
+            "path_type",
+            "outcome_protocol_version",
             name="uq_foe_signal_path_version",
         ),
     )
@@ -627,68 +658,84 @@ class ForwardOutcomeEvaluation(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # Identity
-    forward_signal_id    = Column(Integer, nullable=False, index=True)   # FK → forward_signals.id
-    signal_evaluation_id = Column(String(60))   # "{stock_id}_{signal_date}" — human-readable
-    stock_id             = Column(String(10), nullable=False, index=True)
-    signal_date          = Column(Date, nullable=False, index=True)
+    forward_signal_id = Column(
+        Integer, nullable=False, index=True
+    )  # FK → forward_signals.id
+    signal_evaluation_id = Column(
+        String(60)
+    )  # "{stock_id}_{signal_date}" — human-readable
+    stock_id = Column(String(10), nullable=False, index=True)
+    signal_date = Column(Date, nullable=False, index=True)
 
     # Path and protocol versions
-    path_type                  = Column(String(40), nullable=False)   # BASELINE_NEXT_OPEN / OVERNIGHT_AWARE_RECONFIRMED
-    outcome_protocol_version   = Column(String(20), nullable=False)   # foe_v1
-    overnight_rule_version     = Column(String(20))   # overnight_v1 or NULL (legacy)
-    overnight_risk_level       = Column(String(10))   # GREEN/YELLOW/RED/UNKNOWN or NULL
-    overnight_context_id       = Column(Integer)       # FK → overnight_market_contexts.id
-    live_rule_version          = Column(String(20))
+    path_type = Column(
+        String(40), nullable=False
+    )  # BASELINE_NEXT_OPEN / OVERNIGHT_AWARE_RECONFIRMED
+    outcome_protocol_version = Column(String(20), nullable=False)  # foe_v1
+    overnight_rule_version = Column(String(20))  # overnight_v1 or NULL (legacy)
+    overnight_risk_level = Column(String(10))  # GREEN/YELLOW/RED/UNKNOWN or NULL
+    overnight_context_id = Column(Integer)  # FK → overnight_market_contexts.id
+    live_rule_version = Column(String(20))
 
     # Execution status and entry
-    entry_status               = Column(String(30))   # EXECUTED / EXPIRED_BEFORE_ENTRY / INVALIDATED_BEFORE_ENTRY / PENDING / DATA_INSUFFICIENT / NOT_APPLICABLE
-    entry_date                 = Column(Date)
-    entry_timestamp            = Column(DateTime)     # Aware path: ENTRY_RECONFIRMED observed_at
-    entry_price                = Column(Float)
-    entry_price_type           = Column(String(40))   # BASELINE_NEXT_OPEN / LIVE_ENTRY_RECONFIRMED_QUOTE
-    entry_quote_quality        = Column(String(10))   # Aware path only
+    entry_status = Column(
+        String(30)
+    )  # EXECUTED / EXPIRED_BEFORE_ENTRY / INVALIDATED_BEFORE_ENTRY / PENDING / DATA_INSUFFICIENT / NOT_APPLICABLE
+    entry_date = Column(Date)
+    entry_timestamp = Column(DateTime)  # Aware path: ENTRY_RECONFIRMED observed_at
+    entry_price = Column(Float)
+    entry_price_type = Column(
+        String(40)
+    )  # BASELINE_NEXT_OPEN / LIVE_ENTRY_RECONFIRMED_QUOTE
+    entry_quote_quality = Column(String(10))  # Aware path only
 
     # MAE/MFE scan window metadata
-    mae_mfe_start_date         = Column(Date)         # entry_date (Baseline) or next_td (Aware)
-    entry_day_excursion_excluded = Column(Boolean)    # False (Baseline) / True (Aware)
+    mae_mfe_start_date = Column(Date)  # entry_date (Baseline) or next_td (Aware)
+    entry_day_excursion_excluded = Column(Boolean)  # False (Baseline) / True (Aware)
 
     # Benchmark
-    benchmark_entry_date         = Column(Date)
-    benchmark_entry_price        = Column(Float)
-    benchmark_entry_price_type   = Column(String(20))   # "0050_DAILY_OPEN"
-    benchmark_timing_approximation = Column(Boolean)   # False (Baseline) / True (Aware)
+    benchmark_entry_date = Column(Date)
+    benchmark_entry_price = Column(Float)
+    benchmark_entry_price_type = Column(String(20))  # "0050_DAILY_OPEN"
+    benchmark_timing_approximation = Column(Boolean)  # False (Baseline) / True (Aware)
 
     # Transaction cost assumption (snapshot at computation time)
-    transaction_cost_assumption  = Column(Float)       # e.g. 0.585
+    transaction_cost_assumption = Column(Float)  # e.g. 0.585
 
     # ── 20D FINALIZATION BUNDLE (immutable after horizon_20d_matured_at is set) ──
-    return_20d               = Column(Float)
-    alpha_20d                = Column(Float)
-    mae_20d                  = Column(Float)
-    mfe_20d                  = Column(Float)
-    target_stop_outcome_20d  = Column(String(25))   # T1_FIRST / STOP_FIRST / SAME_DAY_AMBIGUOUS / NEITHER
-    target_hit_date_20d      = Column(Date)
-    stop_hit_date_20d        = Column(Date)
+    return_20d = Column(Float)
+    alpha_20d = Column(Float)
+    mae_20d = Column(Float)
+    mfe_20d = Column(Float)
+    target_stop_outcome_20d = Column(
+        String(25)
+    )  # T1_FIRST / STOP_FIRST / SAME_DAY_AMBIGUOUS / NEITHER
+    target_hit_date_20d = Column(Date)
+    stop_hit_date_20d = Column(Date)
     outcome_data_quality_20d = Column(String(25))
-    horizon_20d_matured_at   = Column(DateTime)     # set once; guards 20D bundle immutability
+    horizon_20d_matured_at = Column(
+        DateTime
+    )  # set once; guards 20D bundle immutability
 
     # ── 60D FINALIZATION BUNDLE (immutable after horizon_60d_matured_at is set) ──
-    return_60d               = Column(Float)
-    alpha_60d                = Column(Float)
-    mae_60d                  = Column(Float)
-    mfe_60d                  = Column(Float)
-    target_stop_outcome_60d  = Column(String(25))
-    target_hit_date_60d      = Column(Date)
-    stop_hit_date_60d        = Column(Date)
+    return_60d = Column(Float)
+    alpha_60d = Column(Float)
+    mae_60d = Column(Float)
+    mfe_60d = Column(Float)
+    target_stop_outcome_60d = Column(String(25))
+    target_hit_date_60d = Column(Date)
+    stop_hit_date_60d = Column(Date)
     outcome_data_quality_60d = Column(String(25))
-    horizon_60d_matured_at   = Column(DateTime)
+    horizon_60d_matured_at = Column(DateTime)
 
     # Exclusion (formal overnight cohort eligibility)
-    exclusion_reason         = Column(String(50))   # NO_OVERNIGHT_DATA / MISSING_VALID_NEXT_OPEN_ENTRY / …
+    exclusion_reason = Column(
+        String(50)
+    )  # NO_OVERNIGHT_DATA / MISSING_VALID_NEXT_OPEN_ENTRY / …
 
     # Audit
-    created_at  = Column(DateTime, default=datetime.utcnow)
-    updated_at  = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class PipelineFunnel(Base):
@@ -701,13 +748,13 @@ class PipelineFunnel(Base):
     date = Column(Date, nullable=False)
 
     # 各 stage 的股票數（由上到下遞減）
-    universe = Column(Integer, default=0)          # 全市場取得股價的股票數
-    with_price = Column(Integer, default=0)        # 篩選至有歷史資料後
+    universe = Column(Integer, default=0)  # 全市場取得股價的股票數
+    with_price = Column(Integer, default=0)  # 篩選至有歷史資料後
     hard_filter_pass = Column(Integer, default=0)  # 通過 Hard Filter
-    deep_analyzed = Column(Integer, default=0)     # 完成深度分析（=hard_filter_pass）
-    scored_55plus = Column(Integer, default=0)     # total_score ≥ 55
-    scored_65plus = Column(Integer, default=0)     # total_score ≥ 65
-    recommended = Column(Integer, default=0)       # 實際推薦
+    deep_analyzed = Column(Integer, default=0)  # 完成深度分析（=hard_filter_pass）
+    scored_55plus = Column(Integer, default=0)  # total_score ≥ 55
+    scored_65plus = Column(Integer, default=0)  # total_score ≥ 65
+    recommended = Column(Integer, default=0)  # 實際推薦
 
     # Hard Filter 失敗原因 Top 3（次數最多）
     fail_top1_reason = Column(String(120), default="")
@@ -733,8 +780,12 @@ class CandidatePool(Base):
 
     __tablename__ = "candidate_pool"
     __table_args__ = (
-        UniqueConstraint("stock_id", "first_seen_date", "pool_version",
-                         name="uq_cp_stock_firstdate_ver"),
+        UniqueConstraint(
+            "stock_id",
+            "first_seen_date",
+            "pool_version",
+            name="uq_cp_stock_firstdate_ver",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -766,7 +817,7 @@ class CandidatePool(Base):
 
     # ── 正式 BUY 連結 ──────────────────────────────────────────
     triggered_buy_date = Column(Date)
-    forward_signal_id = Column(Integer)     # FK → forward_signals.id（nullable）
+    forward_signal_id = Column(Integer)  # FK → forward_signals.id（nullable）
 
     # ── 退出資訊 ──────────────────────────────────────────────
     exit_date = Column(Date)
@@ -839,15 +890,18 @@ def _safe_add_cols(engine, table: str, new_cols: list) -> None:
         if col_name in existing:
             continue
         if is_pg:
-            pg_type = (col_type
-                       .replace("DATETIME", "TIMESTAMP")
-                       .replace("DEFAULT 1", "DEFAULT TRUE")
-                       .replace("DEFAULT 0", "DEFAULT FALSE"))
+            pg_type = (
+                col_type.replace("DATETIME", "TIMESTAMP")
+                .replace("DEFAULT 1", "DEFAULT TRUE")
+                .replace("DEFAULT 0", "DEFAULT FALSE")
+            )
         else:
             pg_type = col_type
         with engine.begin() as conn:
             try:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {pg_type}"))
+                conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN {col_name} {pg_type}")
+                )
                 logger.info(f"{table}: added column {col_name}")
             except Exception as exc:
                 logger.error(f"{table} migration {col_name} FAILED: {exc}")
@@ -858,7 +912,7 @@ def _migrate_stocks(engine) -> None:
     from sqlalchemy import inspect, text
 
     new_cols = [
-        ("delisted_date",   "DATE"),
+        ("delisted_date", "DATE"),
         ("security_status", "VARCHAR(20) DEFAULT 'listed'"),
     ]
     try:
@@ -869,9 +923,9 @@ def _migrate_stocks(engine) -> None:
         for col_name, col_type in new_cols:
             if col_name not in existing:
                 try:
-                    conn.execute(text(
-                        f"ALTER TABLE stocks ADD COLUMN {col_name} {col_type}"
-                    ))
+                    conn.execute(
+                        text(f"ALTER TABLE stocks ADD COLUMN {col_name} {col_type}")
+                    )
                     logger.info(f"stocks: added column {col_name}")
                 except Exception as exc:
                     logger.warning(f"stocks migration {col_name}: {exc}")
@@ -879,82 +933,80 @@ def _migrate_stocks(engine) -> None:
 
 def _migrate_forward_signals(engine) -> None:
     """forward_signals に新カラムを追加（既存 DB の自動マイグレーション）。"""
-    from sqlalchemy import inspect, text
 
     new_cols = [
-        ("confidence",              "FLOAT"),
-        ("industry",                "VARCHAR(50)"),
+        ("confidence", "FLOAT"),
+        ("industry", "VARCHAR(50)"),
         ("market_regime_at_signal", "VARCHAR(10)"),
-        ("close_at_signal",         "FLOAT"),
-        ("candidate_rank",          "INTEGER"),
+        ("close_at_signal", "FLOAT"),
+        ("candidate_rank", "INTEGER"),
         # 決策快照（Audit Trail — 凍結）
-        ("entry_low",               "FLOAT"),
-        ("entry_high",              "FLOAT"),
-        ("stop_price",              "FLOAT"),
-        ("target1",                 "FLOAT"),
-        ("target2",                 "FLOAT"),
-        ("decision_label",          "VARCHAR(30)"),
+        ("entry_low", "FLOAT"),
+        ("entry_high", "FLOAT"),
+        ("stop_price", "FLOAT"),
+        ("target1", "FLOAT"),
+        ("target2", "FLOAT"),
+        ("decision_label", "VARCHAR(30)"),
         # 績效結果（事後回填）
-        ("fwd_return_20d",          "FLOAT"),
-        ("alpha_20d",               "FLOAT"),
-        ("fwd_return_60d",          "FLOAT"),
-        ("alpha_60d",               "FLOAT"),
-        ("stop_triggered_day",      "INTEGER"),
-        ("t1_hit_day",              "INTEGER"),
-        ("outcome_note",            "VARCHAR(20)"),
-        ("outcome_price_quality",   "VARCHAR(10)"),
-        ("outcomes_computed_at",    "DATETIME"),
+        ("fwd_return_20d", "FLOAT"),
+        ("alpha_20d", "FLOAT"),
+        ("fwd_return_60d", "FLOAT"),
+        ("alpha_60d", "FLOAT"),
+        ("stop_triggered_day", "INTEGER"),
+        ("t1_hit_day", "INTEGER"),
+        ("outcome_note", "VARCHAR(20)"),
+        ("outcome_price_quality", "VARCHAR(10)"),
+        ("outcomes_computed_at", "DATETIME"),
         # Data Integrity validity gate
-        ("is_valid",                "BOOLEAN DEFAULT 1"),
-        ("invalid_reason",          "VARCHAR(60)"),
-        ("source_price_date",       "DATE"),
+        ("is_valid", "BOOLEAN DEFAULT 1"),
+        ("invalid_reason", "VARCHAR(60)"),
+        ("source_price_date", "DATE"),
         # Execution Timing Bias fix
-        ("signal_close",            "FLOAT"),
-        ("execution_date",          "DATE"),
-        ("execution_price",         "FLOAT"),
-        ("execution_price_type",    "VARCHAR(20)"),
+        ("signal_close", "FLOAT"),
+        ("execution_date", "DATE"),
+        ("execution_price", "FLOAT"),
+        ("execution_price_type", "VARCHAR(20)"),
         # Overnight context link (populated by pre-market pipeline)
-        ("overnight_rule_version",  "VARCHAR(20)"),
-        ("overnight_context_id",    "INTEGER"),
+        ("overnight_rule_version", "VARCHAR(20)"),
+        ("overnight_context_id", "INTEGER"),
     ]
     _safe_add_cols(engine, "forward_signals", new_cols)
 
 
 def _migrate_recommendations(engine) -> None:
     """recommendations に新カラムを追加（自動マイグレーション）。"""
-    from sqlalchemy import inspect, text
 
     new_cols = [
-        ("entry_low",         "FLOAT"),
-        ("entry_high",        "FLOAT"),
-        ("stop_price",        "FLOAT"),
-        ("target1",           "FLOAT"),
-        ("target2",           "FLOAT"),
-        ("atr",               "FLOAT"),
-        ("vol_ratio",         "FLOAT"),
-        ("ma60_gap",          "FLOAT"),
+        ("entry_low", "FLOAT"),
+        ("entry_high", "FLOAT"),
+        ("stop_price", "FLOAT"),
+        ("target1", "FLOAT"),
+        ("target2", "FLOAT"),
+        ("atr", "FLOAT"),
+        ("vol_ratio", "FLOAT"),
+        ("ma60_gap", "FLOAT"),
         # Decision Center snapshot
-        ("decision_code",          "VARCHAR(20)"),
+        ("decision_code", "VARCHAR(20)"),
         ("decision_label_version", "VARCHAR(20)"),
-        ("rr_ratio",               "FLOAT"),
-        ("market_regime",          "VARCHAR(10)"),
+        ("rr_ratio", "FLOAT"),
+        ("market_regime", "VARCHAR(10)"),
         # Stock-level data quality
         ("data_quality_json", "TEXT"),
         # Data Integrity validity gate
-        ("is_valid",          "BOOLEAN DEFAULT 1"),
-        ("invalid_reason",    "VARCHAR(60)"),
+        ("is_valid", "BOOLEAN DEFAULT 1"),
+        ("invalid_reason", "VARCHAR(60)"),
         ("source_price_date", "DATE"),
         # Scoring data completeness
         ("missing_data_factors", "VARCHAR(40)"),
         # Signal Lifecycle
         ("lifecycle_status", "VARCHAR(20) DEFAULT 'active'"),
         # Scoring fields added in v7+
-        ("tier",             "VARCHAR(20)"),
-        ("stock_name",       "VARCHAR(60)"),
-        ("behavior_score",   "FLOAT"),
-        ("timing_score",     "FLOAT"),
-        ("total_score",      "FLOAT"),
-        ("score_change_5d",  "FLOAT"),
+        ("tier", "VARCHAR(20)"),
+        ("stock_name", "VARCHAR(60)"),
+        ("behavior_score", "FLOAT"),
+        ("timing_score", "FLOAT"),
+        ("total_score", "FLOAT"),
+        ("score_change_5d", "FLOAT"),
         ("score_change_10d", "FLOAT"),
         ("timing_change_5d", "FLOAT"),
         ("behavior_change_5d", "FLOAT"),
@@ -964,12 +1016,11 @@ def _migrate_recommendations(engine) -> None:
 
 def _migrate_analysis_results(engine) -> None:
     """analysis_results に新カラムを追加（自動マイグレーション）。"""
-    from sqlalchemy import inspect, text
 
     new_cols = [
-        ("score_change_5d",    "FLOAT"),
-        ("score_change_10d",   "FLOAT"),
-        ("timing_change_5d",   "FLOAT"),
+        ("score_change_5d", "FLOAT"),
+        ("score_change_10d", "FLOAT"),
+        ("timing_change_5d", "FLOAT"),
         ("behavior_change_5d", "FLOAT"),
     ]
     _safe_add_cols(engine, "analysis_results", new_cols)
@@ -977,53 +1028,52 @@ def _migrate_analysis_results(engine) -> None:
 
 def _migrate_forward_outcome_evaluations(engine) -> None:
     """forward_outcome_evaluations に新カラムを追加（自動マイグレーション）。"""
-    from sqlalchemy import inspect, text
 
     new_cols = [
-        ("forward_signal_id",           "INTEGER NOT NULL DEFAULT 0"),
-        ("signal_evaluation_id",         "VARCHAR(60)"),
-        ("stock_id",                     "VARCHAR(10) NOT NULL DEFAULT ''"),
-        ("signal_date",                  "DATE NOT NULL DEFAULT '1970-01-01'"),
-        ("path_type",                    "VARCHAR(40) NOT NULL DEFAULT ''"),
-        ("outcome_protocol_version",     "VARCHAR(20) NOT NULL DEFAULT 'foe_v1'"),
-        ("overnight_rule_version",       "VARCHAR(20)"),
-        ("overnight_risk_level",         "VARCHAR(10)"),
-        ("overnight_context_id",         "INTEGER"),
-        ("live_rule_version",            "VARCHAR(20)"),
-        ("entry_status",                 "VARCHAR(30)"),
-        ("entry_date",                   "DATE"),
-        ("entry_timestamp",              "DATETIME"),
-        ("entry_price",                  "FLOAT"),
-        ("entry_price_type",             "VARCHAR(40)"),
-        ("entry_quote_quality",          "VARCHAR(10)"),
-        ("mae_mfe_start_date",           "DATE"),
+        ("forward_signal_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("signal_evaluation_id", "VARCHAR(60)"),
+        ("stock_id", "VARCHAR(10) NOT NULL DEFAULT ''"),
+        ("signal_date", "DATE NOT NULL DEFAULT '1970-01-01'"),
+        ("path_type", "VARCHAR(40) NOT NULL DEFAULT ''"),
+        ("outcome_protocol_version", "VARCHAR(20) NOT NULL DEFAULT 'foe_v1'"),
+        ("overnight_rule_version", "VARCHAR(20)"),
+        ("overnight_risk_level", "VARCHAR(10)"),
+        ("overnight_context_id", "INTEGER"),
+        ("live_rule_version", "VARCHAR(20)"),
+        ("entry_status", "VARCHAR(30)"),
+        ("entry_date", "DATE"),
+        ("entry_timestamp", "DATETIME"),
+        ("entry_price", "FLOAT"),
+        ("entry_price_type", "VARCHAR(40)"),
+        ("entry_quote_quality", "VARCHAR(10)"),
+        ("mae_mfe_start_date", "DATE"),
         ("entry_day_excursion_excluded", "BOOLEAN"),
-        ("benchmark_entry_date",         "DATE"),
-        ("benchmark_entry_price",        "FLOAT"),
-        ("benchmark_entry_price_type",   "VARCHAR(20)"),
+        ("benchmark_entry_date", "DATE"),
+        ("benchmark_entry_price", "FLOAT"),
+        ("benchmark_entry_price_type", "VARCHAR(20)"),
         ("benchmark_timing_approximation", "BOOLEAN"),
-        ("transaction_cost_assumption",  "FLOAT"),
-        ("return_20d",                   "FLOAT"),
-        ("alpha_20d",                    "FLOAT"),
-        ("mae_20d",                      "FLOAT"),
-        ("mfe_20d",                      "FLOAT"),
-        ("target_stop_outcome_20d",      "VARCHAR(25)"),
-        ("target_hit_date_20d",          "DATE"),
-        ("stop_hit_date_20d",            "DATE"),
-        ("outcome_data_quality_20d",     "VARCHAR(25)"),
-        ("horizon_20d_matured_at",       "DATETIME"),
-        ("return_60d",                   "FLOAT"),
-        ("alpha_60d",                    "FLOAT"),
-        ("mae_60d",                      "FLOAT"),
-        ("mfe_60d",                      "FLOAT"),
-        ("target_stop_outcome_60d",      "VARCHAR(25)"),
-        ("target_hit_date_60d",          "DATE"),
-        ("stop_hit_date_60d",            "DATE"),
-        ("outcome_data_quality_60d",     "VARCHAR(25)"),
-        ("horizon_60d_matured_at",       "DATETIME"),
-        ("exclusion_reason",             "VARCHAR(50)"),
-        ("created_at",                   "DATETIME"),
-        ("updated_at",                   "DATETIME"),
+        ("transaction_cost_assumption", "FLOAT"),
+        ("return_20d", "FLOAT"),
+        ("alpha_20d", "FLOAT"),
+        ("mae_20d", "FLOAT"),
+        ("mfe_20d", "FLOAT"),
+        ("target_stop_outcome_20d", "VARCHAR(25)"),
+        ("target_hit_date_20d", "DATE"),
+        ("stop_hit_date_20d", "DATE"),
+        ("outcome_data_quality_20d", "VARCHAR(25)"),
+        ("horizon_20d_matured_at", "DATETIME"),
+        ("return_60d", "FLOAT"),
+        ("alpha_60d", "FLOAT"),
+        ("mae_60d", "FLOAT"),
+        ("mfe_60d", "FLOAT"),
+        ("target_stop_outcome_60d", "VARCHAR(25)"),
+        ("target_hit_date_60d", "DATE"),
+        ("stop_hit_date_60d", "DATE"),
+        ("outcome_data_quality_60d", "VARCHAR(25)"),
+        ("horizon_60d_matured_at", "DATETIME"),
+        ("exclusion_reason", "VARCHAR(50)"),
+        ("created_at", "DATETIME"),
+        ("updated_at", "DATETIME"),
     ]
     _safe_add_cols(engine, "forward_outcome_evaluations", new_cols)
 
@@ -1036,35 +1086,46 @@ def _migrate_overnight_market_contexts(engine) -> None:
         ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
     ]
     try:
-        existing = {c["name"] for c in inspect(engine).get_columns("overnight_market_contexts")}
+        existing = {
+            c["name"] for c in inspect(engine).get_columns("overnight_market_contexts")
+        }
     except Exception:
-        return   # table doesn't exist yet; create_all will handle it
+        return  # table doesn't exist yet; create_all will handle it
     with engine.begin() as conn:
         for col_name, col_type in new_cols:
             if col_name not in existing:
                 try:
-                    conn.execute(text(
-                        f"ALTER TABLE overnight_market_contexts ADD COLUMN {col_name} {col_type}"
-                    ))
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE overnight_market_contexts ADD COLUMN {col_name} {col_type}"
+                        )
+                    )
                     logger.info(f"overnight_market_contexts: added column {col_name}")
                 except Exception as exc:
-                    logger.warning(f"overnight_market_contexts migration {col_name}: {exc}")
+                    logger.warning(
+                        f"overnight_market_contexts migration {col_name}: {exc}"
+                    )
 
 
 def _migrate_decision_label_to_codes(engine) -> None:
     """One-time data migration: forward_signals.decision_label display strings → stable codes."""
     from sqlalchemy import text
+
     from src.core.decision_codes import _LEGACY_DISPLAY_TO_CODE
 
     with engine.begin() as conn:
         for display, code in _LEGACY_DISPLAY_TO_CODE.items():
             try:
                 result = conn.execute(
-                    text("UPDATE forward_signals SET decision_label = :code WHERE decision_label = :display"),
+                    text(
+                        "UPDATE forward_signals SET decision_label = :code WHERE decision_label = :display"
+                    ),
                     {"code": code, "display": display},
                 )
                 if result.rowcount:
-                    logger.info(f"Migrated decision_label: {repr(display)} → {repr(code)} ({result.rowcount} rows)")
+                    logger.info(
+                        f"Migrated decision_label: {repr(display)} → {repr(code)} ({result.rowcount} rows)"
+                    )
             except Exception as exc:
                 logger.warning(f"decision_label migration {display!r}: {exc}")
 
@@ -1076,25 +1137,29 @@ def _migrate_position_monitor(engine) -> None:
     from sqlalchemy import inspect, text
 
     new_cols = [
-        ("signal_date",              "DATE"),
-        ("expected_execution_date",  "DATE"),
-        ("entry_source",             "VARCHAR(30)"),
-        ("shadow_trading_type",      "VARCHAR(30)"),
-        ("execution_recorded_at",    "DATETIME"),  # _safe_add_cols converts to TIMESTAMP on PG
+        ("signal_date", "DATE"),
+        ("expected_execution_date", "DATE"),
+        ("entry_source", "VARCHAR(30)"),
+        ("shadow_trading_type", "VARCHAR(30)"),
+        (
+            "execution_recorded_at",
+            "DATETIME",
+        ),  # _safe_add_cols converts to TIMESTAMP on PG
     ]
     _safe_add_cols(engine, "position_monitor", new_cols)
     # 將所有 entry_source IS NULL 的 active/closed 記錄標記為 SIGNAL_CLOSE_LEGACY
-    from sqlalchemy import inspect, text
     try:
         existing = {c["name"] for c in inspect(engine).get_columns("position_monitor")}
         if "entry_source" in existing:
             with engine.begin() as conn:
-                result = conn.execute(text(
-                    "UPDATE position_monitor "
-                    "SET entry_source = 'SIGNAL_CLOSE_LEGACY' "
-                    "WHERE entry_source IS NULL AND status IN "
-                    "('active','closed_profit','closed_loss','closed_manual','closed_signal')"
-                ))
+                result = conn.execute(
+                    text(
+                        "UPDATE position_monitor "
+                        "SET entry_source = 'SIGNAL_CLOSE_LEGACY' "
+                        "WHERE entry_source IS NULL AND status IN "
+                        "('active','closed_profit','closed_loss','closed_manual','closed_signal')"
+                    )
+                )
                 if result.rowcount:
                     logger.info(
                         f"position_monitor: marked {result.rowcount} pre-fix records "
@@ -1146,7 +1211,9 @@ def _migrate_position_monitor_nullable(engine) -> None:
                     continue
                 # Column exists with NOT NULL → drop it
                 conn.execute(
-                    text(f"ALTER TABLE position_monitor ALTER COLUMN {col} DROP NOT NULL")
+                    text(
+                        f"ALTER TABLE position_monitor ALTER COLUMN {col} DROP NOT NULL"
+                    )
                 )
                 logger.info(
                     f"position_monitor: dropped NOT NULL constraint from {col} "
@@ -1167,29 +1234,60 @@ def _migrate_position_monitor_nullable(engine) -> None:
 # If any are missing after init_db(), _verify_schema_integrity() raises RuntimeError
 # to fail-closed rather than silently producing wrong results.
 _SCHEMA_REQUIRED_COLS: dict = {
-    "forward_signals": frozenset({
-        "trade_date", "stock_id", "is_valid",
-        "execution_price_type", "execution_date", "execution_price",
-    }),
-    "recommendations": frozenset({
-        "stock_id", "date", "is_valid",
-    }),
-    "position_monitor": frozenset({
-        "stock_id", "status", "entry_source",
-    }),
-    "analysis_results": frozenset({
-        "stock_id", "date", "total_score",
-    }),
-    "execution_logs": frozenset({
-        "date", "status",
-    }),
-    "candidate_pool": frozenset({
-        "stock_id", "model_version", "pool_version",
-        "first_seen_date", "last_checked_date", "status",
-    }),
-    "candidate_pool_history": frozenset({
-        "candidate_id", "check_date", "status",
-    }),
+    "forward_signals": frozenset(
+        {
+            "trade_date",
+            "stock_id",
+            "is_valid",
+            "execution_price_type",
+            "execution_date",
+            "execution_price",
+        }
+    ),
+    "recommendations": frozenset(
+        {
+            "stock_id",
+            "date",
+            "is_valid",
+        }
+    ),
+    "position_monitor": frozenset(
+        {
+            "stock_id",
+            "status",
+            "entry_source",
+        }
+    ),
+    "analysis_results": frozenset(
+        {
+            "stock_id",
+            "date",
+            "total_score",
+        }
+    ),
+    "execution_logs": frozenset(
+        {
+            "date",
+            "status",
+        }
+    ),
+    "candidate_pool": frozenset(
+        {
+            "stock_id",
+            "model_version",
+            "pool_version",
+            "first_seen_date",
+            "last_checked_date",
+            "status",
+        }
+    ),
+    "candidate_pool_history": frozenset(
+        {
+            "candidate_id",
+            "check_date",
+            "status",
+        }
+    ),
 }
 
 
@@ -1297,6 +1395,7 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     _verify_schema_integrity(engine)
 
     from config import DATABASE_URL
+
     logger.info(f"Database initialized: {DATABASE_URL[:40]}...")
     return engine
 

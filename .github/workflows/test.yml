@@ -37,7 +37,8 @@ jobs:
             --cov=src/collectors/financial_collector \
             --cov=src/collectors/price_collector \
             --cov=dashboard/loaders \
-            --cov=dashboard/pages/backtest \
+            --cov=dashboard/_pages/backtest \
+            --cov-config=pyproject.toml \
             --cov-report=term-missing \
             --cov-fail-under=75
 

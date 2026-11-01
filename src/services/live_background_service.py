@@ -33,24 +33,23 @@ live_background_service.py — 盤中背景 Live Execution Collector
 import logging
 import zoneinfo
 from datetime import date, datetime, time
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _TZ = zoneinfo.ZoneInfo("Asia/Taipei")
 
 # 盤中收集時間窗口（含收盤後緩衝，盤後仍可跑一次記錄收盤狀態）
-_MARKET_OPEN  = time(9, 0)
-_MARKET_CLOSE = time(13, 45)   # 13:30 收盤 + 15 分鐘緩衝
+_MARKET_OPEN = time(9, 0)
+_MARKET_CLOSE = time(13, 45)  # 13:30 收盤 + 15 分鐘緩衝
 
 # 訊號有效監控天數：往回找幾個 signal_date
 # 設 3 = 本週三開盤時，同時監控週二、週一、上週五的 BUY Signal（若未失效）
 SIGNAL_ACTIVE_DAYS = 3
 
 # Signal Lifecycle 狀態常數
-LIFECYCLE_ACTIVE      = "active"
-LIFECYCLE_INVALIDATED = "invalidated"   # 停損觸發（CANCEL）→ 訊號失效
-LIFECYCLE_SUPERSEDED  = "superseded"    # 同股票出現更新的 BUY Signal
+LIFECYCLE_ACTIVE = "active"
+LIFECYCLE_INVALIDATED = "invalidated"  # 停損觸發（CANCEL）→ 訊號失效
+LIFECYCLE_SUPERSEDED = "superseded"  # 同股票出現更新的 BUY Signal
 
 
 def _is_market_window() -> bool:
@@ -70,7 +69,7 @@ def _active_signal_dates(today: date) -> list[date]:
       signal 10/12 → exec 10/13 ≤ 10/14 ✓
       signal 10/09 → exec 10/12 ≤ 10/14 ✓  ← 3 個，停止
     """
-    from src.core.trading_calendar import prev_trading_day, next_trading_day
+    from src.core.trading_calendar import next_trading_day, prev_trading_day
 
     result: list[date] = []
     d = today
@@ -97,7 +96,8 @@ def _get_active_buy_signals(today: date) -> list[dict]:
         return []
 
     from sqlalchemy import or_
-    from src.database import get_session, Recommendation, DailyPrice
+
+    from src.database import DailyPrice, Recommendation, get_session
 
     session = get_session()
     try:
@@ -120,7 +120,7 @@ def _get_active_buy_signals(today: date) -> list[dict]:
 
         # 訊號價 = signal_date 的收盤價（DailyPrice）
         all_dates = list({r.date for r in rows})
-        all_sids  = list({r.stock_id for r in rows})
+        all_sids = list({r.stock_id for r in rows})
         price_rows = (
             session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.close)
             .filter(
@@ -133,17 +133,19 @@ def _get_active_buy_signals(today: date) -> list[dict]:
 
         result = []
         for r in rows:
-            result.append({
-                "sid":           r.stock_id,
-                "name":          r.stock_name or r.stock_id,
-                "trade_signal":  r.trade_signal,
-                "price":         price_map.get((r.stock_id, r.date)),
-                "entry_low":     r.entry_low,
-                "entry_high":    r.entry_high,
-                "stop_price":    r.stop_price,
-                "target1":       r.target1,
-                "signal_date":   r.date,       # ← 關鍵：訊號產生日，非 execution_date
-            })
+            result.append(
+                {
+                    "sid": r.stock_id,
+                    "name": r.stock_name or r.stock_id,
+                    "trade_signal": r.trade_signal,
+                    "price": price_map.get((r.stock_id, r.date)),
+                    "entry_low": r.entry_low,
+                    "entry_high": r.entry_high,
+                    "stop_price": r.stop_price,
+                    "target1": r.target1,
+                    "signal_date": r.date,  # ← 關鍵：訊號產生日，非 execution_date
+                }
+            )
         return result
 
     finally:
@@ -152,7 +154,7 @@ def _get_active_buy_signals(today: date) -> list[dict]:
 
 def _get_market_map(stock_ids: list[str]) -> dict[str, str]:
     """取得各股掛牌市場（TWSE / TPEx），用於 fetch_intraday。"""
-    from src.database import get_session, Stock
+    from src.database import Stock, get_session
 
     session = get_session()
     try:
@@ -168,7 +170,7 @@ def _get_market_map(stock_ids: list[str]) -> dict[str, str]:
 
 def _mark_lifecycle_status(stock_id: str, signal_date, new_status: str) -> None:
     """將 Recommendation.lifecycle_status 更新為 new_status（idempotent）。"""
-    from src.database import get_session, Recommendation
+    from src.database import Recommendation, get_session
 
     session = get_session()
     try:
@@ -235,7 +237,7 @@ def run_once(force: bool = False) -> dict:
           errors:         number of per-stock errors
           signal_dates:   list of signal_dates that were active today
     """
-    from src.core.trading_calendar import market_status, MarketStatus
+    from src.core.trading_calendar import MarketStatus, market_status
 
     today = datetime.now(_TZ).date()
 
@@ -251,6 +253,7 @@ def run_once(force: bool = False) -> dict:
     # 確保今日 OvernightMarketContext 已建立（idempotent；失敗 graceful degradation）
     try:
         from src.services.overnight_service import ensure_overnight_context
+
         ensure_overnight_context(execution_date=today)
     except Exception as exc:
         logger.warning(f"overnight_context build failed (non-fatal): {exc}")
@@ -259,46 +262,55 @@ def run_once(force: bool = False) -> dict:
     recs = _get_active_buy_signals(today)
     if not recs:
         return {
-            "skipped": False, "candidates": 0,
-            "events_written": 0, "errors": 0, "signal_dates": [],
+            "skipped": False,
+            "candidates": 0,
+            "events_written": 0,
+            "errors": 0,
+            "signal_dates": [],
         }
 
     # 同股票多 Signal → 保留最新，舊的標記 SUPERSEDED
     recs = _deduplicate_by_supersede(recs)
 
-    stock_ids  = [r["sid"] for r in recs]
+    stock_ids = [r["sid"] for r in recs]
     market_map = _get_market_map(stock_ids)
 
     # 批次取即時報價
-    from src.collectors.intraday_collector import fetch_intraday, best_price, quote_date_status
+    from src.collectors.intraday_collector import (
+        best_price,
+        fetch_intraday,
+        quote_date_status,
+    )
+
     quotes = fetch_intraday(stock_ids, market_map=market_map)
 
     # 評估 + 記錄
-    from src.engines.live_decision import evaluate_entry_status, LiveStatus
+    from src.engines.live_decision import LiveStatus, evaluate_entry_status
     from src.services.live_execution_service import record_if_transition
 
     events_written = 0
     errors = 0
 
     for rec in recs:
-        sid         = rec["sid"]
-        signal_date = rec["signal_date"]   # ← signal_date，不是 today
+        sid = rec["sid"]
+        signal_date = rec["signal_date"]  # ← signal_date，不是 today
         try:
-            quote       = quotes.get(sid)
-            cur_price   = best_price(quote) if quote else None
-            iday_low    = quote.low if quote else None
+            quote = quotes.get(sid)
+            cur_price = best_price(quote) if quote else None
+            iday_low = quote.low if quote else None
             date_status = quote_date_status(quote) if quote else "unknown"
-            date_known  = (date_status == "valid")
+            date_known = date_status == "valid"
 
             ld = evaluate_entry_status(
-                cur_price, rec,
+                cur_price,
+                rec,
                 intraday_low=iday_low,
                 date_known=date_known,
             )
 
             written = record_if_transition(
                 stock_id=sid,
-                signal_date=signal_date,   # ← 正確的訊號日期
+                signal_date=signal_date,  # ← 正確的訊號日期
                 ld=ld,
                 rec=rec,
                 quote_trade_date=quote.trade_date if quote else None,
@@ -317,9 +329,9 @@ def run_once(force: bool = False) -> dict:
 
     signal_dates_used = sorted({r["signal_date"] for r in recs})
     return {
-        "skipped":        False,
-        "candidates":     len(recs),
+        "skipped": False,
+        "candidates": len(recs),
         "events_written": events_written,
-        "errors":         errors,
-        "signal_dates":   signal_dates_used,
+        "errors": errors,
+        "signal_dates": signal_dates_used,
     }

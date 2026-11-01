@@ -4,7 +4,6 @@ import pytest
 
 from src.presentation.position_presenter import PositionCard, PositionPresenter
 
-
 _POS = {
     "stock_id": "2330",
     "name": "台積電",

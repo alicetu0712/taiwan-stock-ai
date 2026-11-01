@@ -29,17 +29,17 @@ def _dt(d: date, hour: int, minute: int) -> datetime:
 
 
 # Known trading days in 2026 calendar
-_MON_OCT_26 = date(2026, 10, 26)   # Monday — trading day
-_TUE_OCT_27 = date(2026, 10, 27)   # Tuesday — trading day
-_WED_OCT_28 = date(2026, 10, 28)   # Wednesday — trading day
-_THU_OCT_29 = date(2026, 10, 29)   # Thursday — TRADING DAY (exact failure scenario)
-_FRI_OCT_30 = date(2026, 10, 30)   # Friday — trading day
-_SAT_OCT_31 = date(2026, 10, 31)   # Saturday — weekend
-_SUN_NOV_1  = date(2026, 11,  1)   # Sunday — weekend
+_MON_OCT_26 = date(2026, 10, 26)  # Monday — trading day
+_TUE_OCT_27 = date(2026, 10, 27)  # Tuesday — trading day
+_WED_OCT_28 = date(2026, 10, 28)  # Wednesday — trading day
+_THU_OCT_29 = date(2026, 10, 29)  # Thursday — TRADING DAY (exact failure scenario)
+_FRI_OCT_30 = date(2026, 10, 30)  # Friday — trading day
+_SAT_OCT_31 = date(2026, 10, 31)  # Saturday — weekend
+_SUN_NOV_1 = date(2026, 11, 1)  # Sunday — weekend
 
 # 2026-10-09 = Friday holiday (國慶補假), 10-08 Thursday = last trading day before
-_HOLIDAY     = date(2026, 10,  9)   # 國慶日補假（Friday, closed）
-_BEFORE_HOLI = date(2026, 10,  8)   # Thursday before holiday — trading day
+_HOLIDAY = date(2026, 10, 9)  # 國慶日補假（Friday, closed）
+_BEFORE_HOLI = date(2026, 10, 8)  # Thursday before holiday — trading day
 
 
 class TestEffectiveTradeDateCore:
@@ -74,9 +74,9 @@ class TestEffectiveTradeDateCore:
 
         now = _dt(_FRI_OCT_30, hour=15, minute=55)
         result = effective_trade_date(now_taipei=now)
-        assert result == _FRI_OCT_30, (
-            f"At 15:55 on {_FRI_OCT_30} (trading day, data ready), expected today, got {result}"
-        )
+        assert (
+            result == _FRI_OCT_30
+        ), f"At 15:55 on {_FRI_OCT_30} (trading day, data ready), expected today, got {result}"
 
     def test_ET4_saturday_early_morning(self):
         """ET-4: 週六凌晨 → prev_trading_day = Friday."""
@@ -84,7 +84,9 @@ class TestEffectiveTradeDateCore:
 
         now = _dt(_SAT_OCT_31, hour=2, minute=0)
         result = effective_trade_date(now_taipei=now)
-        assert result == _FRI_OCT_30, f"Saturday early morning should return Friday, got {result}"
+        assert (
+            result == _FRI_OCT_30
+        ), f"Saturday early morning should return Friday, got {result}"
 
     def test_ET5_sunday_1555(self):
         """ET-5: 週日 15:55 → prev_trading_day = Friday (data_ready but weekend)."""
@@ -101,9 +103,9 @@ class TestEffectiveTradeDateCore:
         # 2026-10-09 is a Friday holiday; at 15:55 market closed → prev = Thu 2026-10-08
         now = _dt(_HOLIDAY, hour=15, minute=55)
         result = effective_trade_date(now_taipei=now)
-        assert result == _BEFORE_HOLI, (
-            f"Holiday {_HOLIDAY} at 15:55 should return {_BEFORE_HOLI}, got {result}"
-        )
+        assert (
+            result == _BEFORE_HOLI
+        ), f"Holiday {_HOLIDAY} at 15:55 should return {_BEFORE_HOLI}, got {result}"
 
     def test_ET8_utc_cross_day_exact_failure_scenario(self):
         """ET-8: UTC 跨日 — 2026-10-29 18:55 UTC = 2026-10-30 02:55 Taipei.
@@ -160,7 +162,9 @@ class TestEffectiveTradeDateEdgeCases:
 
         now = _dt(mon, hour=2, minute=0)
         result = effective_trade_date(now_taipei=now)
-        assert result == fri, f"Monday early morning should return previous Friday {fri}, got {result}"
+        assert (
+            result == fri
+        ), f"Monday early morning should return previous Friday {fri}, got {result}"
 
     def test_monday_1555_returns_monday(self):
         """週一 15:55 → 回傳當天（週一是交易日且資料已可用）。"""
@@ -182,9 +186,9 @@ class TestEffectiveTradeDateEdgeCases:
 
         now = _dt(cny_day, hour=9, minute=0)
         result = effective_trade_date(now_taipei=now)
-        assert result == expected, (
-            f"During CNY {cny_day} at 09:00, expected last trading day {expected}, got {result}"
-        )
+        assert (
+            result == expected
+        ), f"During CNY {cny_day} at 09:00, expected last trading day {expected}, got {result}"
 
     def test_no_args_returns_a_date(self):
         """呼叫不傳 now_taipei 時，回傳 date 物件（不應拋出例外）。"""
@@ -199,16 +203,19 @@ class TestEffectiveTradeDateEdgeCases:
 
         # 2027 is not in _COVERED_YEARS; any 2027 weekday → CALENDAR_UNKNOWN → not trading.
         # effective_trade_date should fall back to last known trading day in 2026.
-        jan2027 = date(2027, 1, 6)  # Wednesday — would be trading if calendar was covered
+        jan2027 = date(
+            2027, 1, 6
+        )  # Wednesday — would be trading if calendar was covered
         now = _dt(jan2027, hour=15, minute=55)
         result = effective_trade_date(now_taipei=now)
 
         # Should be a date in 2026 (last known calendar year)
-        assert result.year == 2026, (
-            f"2027 CALENDAR_UNKNOWN at 15:55: expected 2026 fallback, got {result}"
-        )
+        assert (
+            result.year == 2026
+        ), f"2027 CALENDAR_UNKNOWN at 15:55: expected 2026 fallback, got {result}"
         # Must be a known trading day
         from src.core.trading_calendar import is_trading_day
+
         assert is_trading_day(result), f"{result} must be a trading day"
 
 
@@ -227,6 +234,7 @@ class TestRunDailyDateResolution:
         # We verify by checking that run_daily source does not call date.today()
         # directly in the 'no --date' branch.
         import pathlib
+
         src = pathlib.Path("scripts/run_daily.py").read_text()
 
         # The 'no explicit date' branch must not use date.today() raw
@@ -236,7 +244,9 @@ class TestRunDailyDateResolution:
             if "effective_trade_date" in line:
                 break
         else:
-            pytest.fail("run_daily.py must call effective_trade_date() for auto date resolution")
+            pytest.fail(
+                "run_daily.py must call effective_trade_date() for auto date resolution"
+            )
 
         # Confirm date.today() is NOT called in the else branch for trade_date assignment
         else_branch_lines = []
@@ -249,7 +259,7 @@ class TestRunDailyDateResolution:
                 if len(else_branch_lines) > 3:
                     break
 
-        raw_today_call = any("date.today()" in l for l in else_branch_lines)
-        assert not raw_today_call, (
-            "run_daily.py auto-date branch must not call date.today() directly"
-        )
+        raw_today_call = any("date.today()" in line for line in else_branch_lines)
+        assert (
+            not raw_today_call
+        ), "run_daily.py auto-date branch must not call date.today() directly"

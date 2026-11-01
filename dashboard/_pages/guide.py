@@ -31,7 +31,9 @@ def _run_analysis(dry_run: bool) -> None:
 
 def page_guide() -> None:
     st.markdown('<div class="section-title">📖 平台說明</div>', unsafe_allow_html=True)
-    st.caption("Antigravity v6 — AI 台股短線波段研究平台。本頁說明各頁面的設計邏輯與資料解讀方式。")
+    st.caption(
+        "Antigravity v6 — AI 台股短線波段研究平台。本頁說明各頁面的設計邏輯與資料解讀方式。"
+    )
 
     # ── Overview ──────────────────────────────────────────────────────────────
     st.markdown("---")
@@ -294,8 +296,11 @@ def page_settings(selected_date: date) -> None:
 
     st.divider()
     st.markdown('<div class="section-title">部位試算設定</div>', unsafe_allow_html=True)
-    st.caption("設定你的資金與風控參數，Decision Center 的「部位試算」區塊將依此計算建議張數。此設定暫存於瀏覽器 session，重新開啟頁面後回到預設值。")
+    st.caption(
+        "設定你的資金與風控參數，Decision Center 的「部位試算」區塊將依此計算建議張數。此設定暫存於瀏覽器 session，重新開啟頁面後回到預設值。"
+    )
     from config import POSITION_SIZING
+
     _PS_DEFAULTS = POSITION_SIZING.copy()
     ps_col1, ps_col2 = st.columns(2)
     with ps_col1:
@@ -313,7 +318,9 @@ def page_settings(selected_date: date) -> None:
             "單筆最大風險（%）",
             min_value=0.5,
             max_value=3.0,
-            value=float(st.session_state.get("ps_max_risk_pct", _PS_DEFAULTS["max_risk_pct"])),
+            value=float(
+                st.session_state.get("ps_max_risk_pct", _PS_DEFAULTS["max_risk_pct"])
+            ),
             step=0.5,
         )
         st.session_state["ps_max_risk_pct"] = risk

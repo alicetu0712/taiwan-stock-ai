@@ -136,7 +136,8 @@ class TestRoundTripCost:
     def test_cost_matches_expected_value(self):
         """Conservative assumed round-trip cost locked at 0.585%.
         Derivation: standard broker fee (buy+sell) ~0.285% + securities tax 0.3%.
-        Actual costs vary; this is a fixed conservative assumption, not a precise fee."""
+        Actual costs vary; this is a fixed conservative assumption, not a precise fee.
+        """
         assert ROUND_TRIP_COST == pytest.approx(0.585, abs=0.001)
 
     def test_cost_reduces_gross_return(self):
@@ -188,8 +189,8 @@ class TestComputeSignalQuality:
     def _run_with_mock(self, ar_rows, price_rows):
         """注入 mock 資料，繞過 DB，直接測試計算核心。"""
         from collections import defaultdict
+
         from src.services.backtest_service import (
-            BacktestService,
             _FACTOR_COLS,
             _ret_at,
         )
@@ -268,6 +269,7 @@ class TestComputeSignalQuality:
 
     def test_factor_cols_present_in_records(self):
         from datetime import date
+
         from src.services.backtest_service import _FACTOR_COLS
 
         prices = self._make_price_series("2330", "2025-01-01", [100] * 65)
@@ -284,8 +286,10 @@ class TestComputeSignalQuality:
     def test_returns_empty_dict_on_db_error(self, monkeypatch):
         import src.services.backtest_service as svc
 
-        monkeypatch.setattr("src.services.backtest_service.BacktestService.compute_signal_quality",
-                            lambda min_obs=10: {})
+        monkeypatch.setattr(
+            "src.services.backtest_service.BacktestService.compute_signal_quality",
+            lambda min_obs=10: {},
+        )
         result = svc.BacktestService.compute_signal_quality()
         assert result == {}
 
@@ -302,6 +306,7 @@ class TestV1V2ComparisonRegression:
 
     def test_method_exists_on_backtest_service(self):
         from src.services.backtest_service import BacktestService
+
         assert hasattr(BacktestService, "compute_v1_v2_comparison"), (
             "compute_v1_v2_comparison 已從 BacktestService 消失！"
             "請確認是否被誤刪或 rename。"
@@ -309,17 +314,19 @@ class TestV1V2ComparisonRegression:
 
     def test_method_is_callable(self):
         from src.services.backtest_service import BacktestService
+
         assert callable(BacktestService.compute_v1_v2_comparison)
 
     def test_method_is_static(self):
         """應為 @staticmethod，可直接用 Class.method() 呼叫，不需要 instance。"""
+
         from src.services.backtest_service import BacktestService
-        import inspect
+
         # staticmethod 在 class.__dict__ 裡是 staticmethod 物件
         raw = BacktestService.__dict__.get("compute_v1_v2_comparison")
-        assert isinstance(raw, staticmethod), (
-            "compute_v1_v2_comparison 應為 @staticmethod"
-        )
+        assert isinstance(
+            raw, staticmethod
+        ), "compute_v1_v2_comparison 應為 @staticmethod"
 
     def test_returns_dict_on_db_error(self, monkeypatch):
         """DB 不可用時必須回傳 {} 而非拋出例外。"""
@@ -331,17 +338,20 @@ class TestV1V2ComparisonRegression:
 
         monkeypatch.setattr(db_mod, "get_session", _raise)
         from src.services.backtest_service import BacktestService
+
         result = BacktestService.compute_v1_v2_comparison()
         assert isinstance(result, dict), "DB 失敗時應回傳 dict（可為空）"
 
     def test_dashboard_wrapper_exists_and_callable(self):
         """dashboard/_pages/backtest.py 的 compute_v1_v2() 必須存在且可呼叫。"""
         from dashboard._pages.backtest import compute_v1_v2
+
         assert callable(compute_v1_v2)
 
     def test_dashboard_wrapper_calls_backtest_service(self, monkeypatch):
         """compute_v1_v2() 必須委託給 BacktestService.compute_v1_v2_comparison。"""
         from src.services import backtest_service as svc_mod
+
         called = []
 
         def _mock():
@@ -351,6 +361,7 @@ class TestV1V2ComparisonRegression:
         monkeypatch.setattr(svc_mod.BacktestService, "compute_v1_v2_comparison", _mock)
         # 繞過 st.cache_data 直接呼叫底層函數
         from dashboard._pages import backtest as bt_mod
+
         # 找到被 cache 包裝的原始函數
         raw_fn = bt_mod.compute_v1_v2.__wrapped__
         raw_fn()
@@ -359,6 +370,7 @@ class TestV1V2ComparisonRegression:
     def test_no_other_service_has_same_method(self):
         """ResearchBacktestService 不應有 compute_v1_v2_comparison（防止 coupling）。"""
         from src.services.research_backtest_service import ResearchBacktestService
-        assert not hasattr(ResearchBacktestService, "compute_v1_v2_comparison"), (
-            "compute_v1_v2_comparison 不應存在於 ResearchBacktestService"
-        )
+
+        assert not hasattr(
+            ResearchBacktestService, "compute_v1_v2_comparison"
+        ), "compute_v1_v2_comparison 不應存在於 ResearchBacktestService"

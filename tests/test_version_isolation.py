@@ -21,11 +21,8 @@ Verifies:
 15. Unique constraint migration function exists and is called from init_db
 """
 
-import ast
-import re
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -35,61 +32,69 @@ SRC = ROOT / "src"
 
 # ── 1. Constants ─────────────────────────────────────────────────────────────
 
+
 def test_v1_model_version_constant():
     from src.database import V1_MODEL_VERSION
+
     assert V1_MODEL_VERSION == "v8.0"
 
 
 def test_model_version_constant():
     from src.database import MODEL_VERSION
+
     assert MODEL_VERSION == "v8.0"
 
 
 def test_model_version_equals_v1_model_version():
     """While V2 does not exist both constants must stay in sync."""
     from src.database import MODEL_VERSION, V1_MODEL_VERSION
+
     assert MODEL_VERSION == V1_MODEL_VERSION
 
 
 # ── 2. UniqueConstraint includes model_version ────────────────────────────────
 
+
 def test_forward_signal_unique_constraint_includes_model_version():
-    from src.database import ForwardSignal
     from sqlalchemy import UniqueConstraint
 
+    from src.database import ForwardSignal
+
     constraints = [
-        c for c in ForwardSignal.__table_args__
-        if isinstance(c, UniqueConstraint)
+        c for c in ForwardSignal.__table_args__ if isinstance(c, UniqueConstraint)
     ]
     assert constraints, "ForwardSignal has no UniqueConstraint"
     uc = constraints[0]
     col_names = {c.name for c in uc.columns}
-    assert "model_version" in col_names, (
-        f"UniqueConstraint must include model_version; got {col_names}"
-    )
+    assert (
+        "model_version" in col_names
+    ), f"UniqueConstraint must include model_version; got {col_names}"
     assert "trade_date" in col_names
     assert "stock_id" in col_names
 
 
 def test_forward_signal_unique_constraint_name():
-    from src.database import ForwardSignal
     from sqlalchemy import UniqueConstraint
 
+    from src.database import ForwardSignal
+
     constraints = [
-        c for c in ForwardSignal.__table_args__
-        if isinstance(c, UniqueConstraint)
+        c for c in ForwardSignal.__table_args__ if isinstance(c, UniqueConstraint)
     ]
     uc = constraints[0]
-    assert uc.name == "uq_fs_date_stock_version", (
-        f"Expected uq_fs_date_stock_version, got {uc.name}"
-    )
+    assert (
+        uc.name == "uq_fs_date_stock_version"
+    ), f"Expected uq_fs_date_stock_version, got {uc.name}"
 
 
 # ── 3. V1 + V2 coexistence in SQLite DB ──────────────────────────────────────
 
+
 def _make_sqlite_engine():
     from sqlalchemy import create_engine
-    from src.database import Base, init_db
+
+    from src.database import init_db
+
     engine = create_engine("sqlite:///:memory:")
     init_db(engine)
     return engine
@@ -102,22 +107,28 @@ def test_v1_v2_same_date_stock_can_coexist():
     engine = _make_sqlite_engine()
     s = get_session(engine)
     try:
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            model_version="v8.0",
-            trade_signal="buy",
-        ))
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            model_version="v9.0",
-            trade_signal="buy",
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                model_version="v8.0",
+                trade_signal="buy",
+            )
+        )
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                model_version="v9.0",
+                trade_signal="buy",
+            )
+        )
         s.commit()
-        count = s.query(ForwardSignal).filter_by(
-            trade_date=date(2026, 10, 9), stock_id="2330"
-        ).count()
+        count = (
+            s.query(ForwardSignal)
+            .filter_by(trade_date=date(2026, 10, 9), stock_id="2330")
+            .count()
+        )
         assert count == 2
     finally:
         s.close()
@@ -126,24 +137,29 @@ def test_v1_v2_same_date_stock_can_coexist():
 def test_same_version_same_date_stock_raises():
     """Two rows with the same (trade_date, stock_id, model_version) must violate unique."""
     from sqlalchemy.exc import IntegrityError
+
     from src.database import ForwardSignal, get_session
 
     engine = _make_sqlite_engine()
     s = get_session(engine)
     try:
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            model_version="v8.0",
-            trade_signal="buy",
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                model_version="v8.0",
+                trade_signal="buy",
+            )
+        )
         s.commit()
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            model_version="v8.0",
-            trade_signal="strong_buy",
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                model_version="v8.0",
+                trade_signal="strong_buy",
+            )
+        )
         with pytest.raises(IntegrityError):
             s.commit()
     finally:
@@ -152,6 +168,7 @@ def test_same_version_same_date_stock_raises():
 
 
 # ── 4. write_forward_signals dedup check scoped to model_version ──────────────
+
 
 def test_write_forward_signals_dedup_uses_model_version():
     """
@@ -165,13 +182,15 @@ def test_write_forward_signals_dedup_uses_model_version():
     s = get_session(engine)
     try:
         # Pre-seed a v9.0 signal for 2330 on 2026-10-09
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            model_version="v9.0",
-            trade_signal="buy",
-            execution_price_type="NEXT_OPEN",
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                model_version="v9.0",
+                trade_signal="buy",
+                execution_price_type="NEXT_OPEN",
+            )
+        )
         s.commit()
 
         # The dedup check scoped to "v8.0" must NOT see the v9.0 row
@@ -184,9 +203,7 @@ def test_write_forward_signals_dedup_uses_model_version():
             )
             .all()
         }
-        assert "2330" not in existing, (
-            "v9.0 row must not block v8.0 dedup check"
-        )
+        assert "2330" not in existing, "v9.0 row must not block v8.0 dedup check"
 
         # v9.0 scoped check should see it
         existing_v9 = {
@@ -205,6 +222,7 @@ def test_write_forward_signals_dedup_uses_model_version():
 
 # ── 5-7. Query filters in service layer (AST / source inspection) ─────────────
 
+
 def _source(file_rel: str) -> str:
     return (ROOT / file_rel).read_text()
 
@@ -220,9 +238,9 @@ def test_compute_signal_outcomes_has_model_version_filter():
     # Both functions must contain model_version filter in their scopes;
     # simplest check: at least two occurrences of the filter pattern
     occurrences = src.count("model_version == MODEL_VERSION")
-    assert occurrences >= 2, (
-        f"Expected ≥2 model_version == MODEL_VERSION filters, found {occurrences}"
-    )
+    assert (
+        occurrences >= 2
+    ), f"Expected ≥2 model_version == MODEL_VERSION filters, found {occurrences}"
 
 
 def test_compute_foe_outcomes_has_model_version_filter():
@@ -236,6 +254,7 @@ def test_evidence_service_has_model_version_filter():
 
 
 # ── 8. Dashboard / loader filters ─────────────────────────────────────────────
+
 
 def test_loaders_scorecard_has_model_version_filter():
     src = _source("dashboard/loaders.py")
@@ -264,11 +283,13 @@ def test_research_backtest_sqlalchemy_path_has_model_version_filter():
 
 # ── 9. Migration function exists and is registered ────────────────────────────
 
+
 def test_migrate_unique_constraint_function_exists():
     import src.database as db
-    assert hasattr(db, "_migrate_forward_signals_unique_constraint"), (
-        "_migrate_forward_signals_unique_constraint must be defined in src/database.py"
-    )
+
+    assert hasattr(
+        db, "_migrate_forward_signals_unique_constraint"
+    ), "_migrate_forward_signals_unique_constraint must be defined in src/database.py"
 
 
 def test_migrate_unique_constraint_called_from_init_db():
@@ -280,6 +301,7 @@ def test_migrate_unique_constraint_called_from_init_db():
 def test_migrate_unique_constraint_noop_on_sqlite():
     """The migration function must not raise on SQLite."""
     import src.database as db
+
     engine = _make_sqlite_engine()
     # Should not raise
     db._migrate_forward_signals_unique_constraint(engine)
@@ -288,12 +310,14 @@ def test_migrate_unique_constraint_noop_on_sqlite():
 def test_migrate_unique_constraint_idempotent_on_sqlite():
     """Calling migration twice on SQLite must not raise."""
     import src.database as db
+
     engine = _make_sqlite_engine()
     db._migrate_forward_signals_unique_constraint(engine)
     db._migrate_forward_signals_unique_constraint(engine)
 
 
 # ── 10. V1_MODEL_VERSION is exported ─────────────────────────────────────────
+
 
 def test_v1_model_version_exported_from_database():
     """V1_MODEL_VERSION must be importable from src.database."""
@@ -302,9 +326,11 @@ def test_v1_model_version_exported_from_database():
 
 # ── 11. ForwardSignal.model_version default equals MODEL_VERSION ──────────────
 
+
 def test_forward_signal_model_version_default():
-    from src.database import ForwardSignal, MODEL_VERSION
-    fs = ForwardSignal()
+    from src.database import MODEL_VERSION, ForwardSignal
+
+    fs = ForwardSignal()  # noqa: F841
     # Column default; SQLAlchemy may not apply it until flush, but the column
     # definition carries it. Check via column default rather than instance attr.
     col = ForwardSignal.__table__.c["model_version"]

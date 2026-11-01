@@ -17,33 +17,93 @@ from typing import Optional
 
 
 class LiveStatus(str, Enum):
-    IN_RANGE           = "in_range"           # 🟢 位於理想進場區（無急跌）
-    ABOVE_RANGE        = "above_range"        # 🟡 超出進場區，不追價
-    CHASING            = "chasing"            # 🟠 明顯追高，等回測
-    BELOW_RANGE        = "below_range"        # ⚪ 低於進場區，等止穩
-    RAPID_DROP         = "rapid_drop"         # 🟡 急跌暫緩，等待止跌確認
-    WATCHING_LOW       = "watching_low"       # 🔵 急跌後反彈，觀察低點守穩
-    ENTRY_RECONFIRMED  = "entry_reconfirmed"  # 🔄 急跌後回復進場區，轉強觀察訊號
-    STOP_WARNING       = "stop_warning"       # 🔴 接近停損（距停損 < 2%）
-    CANCEL             = "cancel"             # ❌ 跌破停損，訊號失效
-    NO_RANGE           = "no_range"           # ⬜ 缺進場區間資料
-    DATE_UNKNOWN       = "date_unknown"       # ⚪ 報價日期未確認，不提供進場判斷
-    NON_BUY            = "non_buy"            # — 非 BUY 訊號，不適用
+    IN_RANGE = "in_range"  # 🟢 位於理想進場區（無急跌）
+    ABOVE_RANGE = "above_range"  # 🟡 超出進場區，不追價
+    CHASING = "chasing"  # 🟠 明顯追高，等回測
+    BELOW_RANGE = "below_range"  # ⚪ 低於進場區，等止穩
+    RAPID_DROP = "rapid_drop"  # 🟡 急跌暫緩，等待止跌確認
+    WATCHING_LOW = "watching_low"  # 🔵 急跌後反彈，觀察低點守穩
+    ENTRY_RECONFIRMED = "entry_reconfirmed"  # 🔄 急跌後回復進場區，轉強觀察訊號
+    STOP_WARNING = "stop_warning"  # 🔴 接近停損（距停損 < 2%）
+    CANCEL = "cancel"  # ❌ 跌破停損，訊號失效
+    NO_RANGE = "no_range"  # ⬜ 缺進場區間資料
+    DATE_UNKNOWN = "date_unknown"  # ⚪ 報價日期未確認，不提供進場判斷
+    NON_BUY = "non_buy"  # — 非 BUY 訊號，不適用
 
 
 _STATUS_META = {
-    LiveStatus.IN_RANGE:          {"icon": "🟢", "label": "可進場",       "color": "#00897b", "bg": "#e0f2f1"},
-    LiveStatus.ABOVE_RANGE:       {"icon": "🟡", "label": "不追價",       "color": "#f57f17", "bg": "#fff8e1"},
-    LiveStatus.CHASING:           {"icon": "🟠", "label": "明顯追高",     "color": "#e65100", "bg": "#fff3e0"},
-    LiveStatus.BELOW_RANGE:       {"icon": "⚪", "label": "等止穩",       "color": "#78909c", "bg": "#eceff1"},
-    LiveStatus.RAPID_DROP:        {"icon": "🟡", "label": "等待止跌確認", "color": "#f57f17", "bg": "#fff8e1"},
-    LiveStatus.WATCHING_LOW:      {"icon": "🔵", "label": "觀察低點守穩", "color": "#1565c0", "bg": "#e3f2fd"},
-    LiveStatus.ENTRY_RECONFIRMED: {"icon": "🔄", "label": "轉強觀察訊號", "color": "#558b2f", "bg": "#f1f8e9"},
-    LiveStatus.STOP_WARNING:      {"icon": "🔴", "label": "接近停損",     "color": "#c62828", "bg": "#ffebee"},
-    LiveStatus.CANCEL:            {"icon": "❌", "label": "訊號失效",     "color": "#b71c1c", "bg": "#ffcdd2"},
-    LiveStatus.NO_RANGE:          {"icon": "⬜", "label": "無區間",       "color": "#9e9e9e", "bg": "#f5f5f5"},
-    LiveStatus.DATE_UNKNOWN:      {"icon": "⚪", "label": "日期未確認",   "color": "#78909c", "bg": "#eceff1"},
-    LiveStatus.NON_BUY:           {"icon": "—",  "label": "不適用",       "color": "#bdbdbd", "bg": "#fafafa"},
+    LiveStatus.IN_RANGE: {
+        "icon": "🟢",
+        "label": "可進場",
+        "color": "#00897b",
+        "bg": "#e0f2f1",
+    },
+    LiveStatus.ABOVE_RANGE: {
+        "icon": "🟡",
+        "label": "不追價",
+        "color": "#f57f17",
+        "bg": "#fff8e1",
+    },
+    LiveStatus.CHASING: {
+        "icon": "🟠",
+        "label": "明顯追高",
+        "color": "#e65100",
+        "bg": "#fff3e0",
+    },
+    LiveStatus.BELOW_RANGE: {
+        "icon": "⚪",
+        "label": "等止穩",
+        "color": "#78909c",
+        "bg": "#eceff1",
+    },
+    LiveStatus.RAPID_DROP: {
+        "icon": "🟡",
+        "label": "等待止跌確認",
+        "color": "#f57f17",
+        "bg": "#fff8e1",
+    },
+    LiveStatus.WATCHING_LOW: {
+        "icon": "🔵",
+        "label": "觀察低點守穩",
+        "color": "#1565c0",
+        "bg": "#e3f2fd",
+    },
+    LiveStatus.ENTRY_RECONFIRMED: {
+        "icon": "🔄",
+        "label": "轉強觀察訊號",
+        "color": "#558b2f",
+        "bg": "#f1f8e9",
+    },
+    LiveStatus.STOP_WARNING: {
+        "icon": "🔴",
+        "label": "接近停損",
+        "color": "#c62828",
+        "bg": "#ffebee",
+    },
+    LiveStatus.CANCEL: {
+        "icon": "❌",
+        "label": "訊號失效",
+        "color": "#b71c1c",
+        "bg": "#ffcdd2",
+    },
+    LiveStatus.NO_RANGE: {
+        "icon": "⬜",
+        "label": "無區間",
+        "color": "#9e9e9e",
+        "bg": "#f5f5f5",
+    },
+    LiveStatus.DATE_UNKNOWN: {
+        "icon": "⚪",
+        "label": "日期未確認",
+        "color": "#78909c",
+        "bg": "#eceff1",
+    },
+    LiveStatus.NON_BUY: {
+        "icon": "—",
+        "label": "不適用",
+        "color": "#bdbdbd",
+        "bg": "#fafafa",
+    },
 }
 
 # Live 規則版本：記錄於 LiveExecutionEvent，用於日後門檻最佳化研究
@@ -52,48 +112,52 @@ LIVE_RULE_VERSION = "v1.0"  # drop=-2.5%, bounce=+0.8%, reconfirm=+3.0%
 
 # 以今日盤中低點（quote.low）偵測急跌：低點較訊號價跌幅超過此值
 # 用低點而非現價判斷，避免正常震盪誤觸（e.g. 現價在進場區但低點確實急跌過）
-_INTRADAY_DROP_PCT  = -2.5
+_INTRADAY_DROP_PCT = -2.5
 # 無低點資料時的 fallback：使用相同標準，缺資料不能放寬保護
-_FALLBACK_DROP_PCT  = -2.5
+_FALLBACK_DROP_PCT = -2.5
 # 急跌後反彈：較今日低點回升超過此值，視為止跌觀察（Stage 2）
-_BOUNCE_CONFIRM_PCT  = 0.8
+_BOUNCE_CONFIRM_PCT = 0.8
 # 急跌後轉強：反彈超過此值 + 回到進場區，升為轉強觀察訊號（Stage 3）
 _RECONFIRM_BOUNCE_PCT = 3.0
 # 距停損多少 % 內觸發警示
-_STOP_WARN_PCT      = 2.0
+_STOP_WARN_PCT = 2.0
 # 超出進場上限多少 % 視為明顯追高
-_CHASE_PCT          = 3.0
+_CHASE_PCT = 3.0
 
 
 @dataclass
 class LiveDecision:
-    status:           LiveStatus
-    icon:             str
-    label:            str
-    color:            str
-    bg:               str
-    reason:           str
-    current_price:    Optional[float]
-    signal_price:     Optional[float]   # 訊號時的參考收盤價
-    pct_from_signal:  Optional[float]   # 距訊號價的漲跌幅 %
-    pct_from_entry:   Optional[float]   # 距進場中點的漲跌幅 %
-    entry_low:        Optional[float]
-    entry_high:       Optional[float]
-    stop_price:       Optional[float]
-    target1:          Optional[float]
+    status: LiveStatus
+    icon: str
+    label: str
+    color: str
+    bg: str
+    reason: str
+    current_price: Optional[float]
+    signal_price: Optional[float]  # 訊號時的參考收盤價
+    pct_from_signal: Optional[float]  # 距訊號價的漲跌幅 %
+    pct_from_entry: Optional[float]  # 距進場中點的漲跌幅 %
+    entry_low: Optional[float]
+    entry_high: Optional[float]
+    stop_price: Optional[float]
+    target1: Optional[float]
     # 盤中動態欄位（急跌情境專用）
-    intraday_low:     Optional[float] = field(default=None)   # 今日盤中觀察低點
-    rr_current:       Optional[float] = field(default=None)   # 以現價計算的 R/R
-    drop_pct:         Optional[float] = field(default=None)   # 現價 vs 訊號價 %（同 pct_from_signal，方便語意）
-    bounce_pct:       Optional[float] = field(default=None)   # 現價 vs 今日低點 %
-    plain_text:       str             = field(default="")     # 白話情境解釋
+    intraday_low: Optional[float] = field(default=None)  # 今日盤中觀察低點
+    rr_current: Optional[float] = field(default=None)  # 以現價計算的 R/R
+    drop_pct: Optional[float] = field(
+        default=None
+    )  # 現價 vs 訊號價 %（同 pct_from_signal，方便語意）
+    bounce_pct: Optional[float] = field(default=None)  # 現價 vs 今日低點 %
+    plain_text: str = field(default="")  # 白話情境解釋
 
 
 # 報價日期未確認時，不允許顯示這些正向進場訊號（fail-closed）
-_POSITIVE_ENTRY_STATUSES = frozenset({
-    LiveStatus.IN_RANGE,
-    LiveStatus.ENTRY_RECONFIRMED,
-})
+_POSITIVE_ENTRY_STATUSES = frozenset(
+    {
+        LiveStatus.IN_RANGE,
+        LiveStatus.ENTRY_RECONFIRMED,
+    }
+)
 
 
 def evaluate_entry_status(
@@ -116,10 +180,10 @@ def evaluate_entry_status(
     """
     trade_signal = rec.get("trade_signal") or "wait"
     signal_price = rec.get("price")
-    entry_low    = rec.get("entry_low")
-    entry_high   = rec.get("entry_high")
-    stop_price   = rec.get("stop_price")
-    target1      = rec.get("target1")
+    entry_low = rec.get("entry_low")
+    entry_high = rec.get("entry_high")
+    stop_price = rec.get("stop_price")
+    target1 = rec.get("target1")
 
     # ── 預計算動態指標 ────────────────────────────────────────────
     drop_pct: Optional[float] = None
@@ -132,7 +196,12 @@ def evaluate_entry_status(
         intraday_drop_pct = round((intraday_low - signal_price) / signal_price * 100, 2)
 
     bounce_pct: Optional[float] = None
-    if current_price and intraday_low and intraday_low > 0 and current_price >= intraday_low:
+    if (
+        current_price
+        and intraday_low
+        and intraday_low > 0
+        and current_price >= intraday_low
+    ):
         bounce_pct = round((current_price - intraday_low) / intraday_low * 100, 2)
 
     rr_current: Optional[float] = None
@@ -141,8 +210,11 @@ def evaluate_entry_status(
 
     # 判斷今天是否發生過急跌：優先用低點，無低點才 fallback 到現價
     _rapid_drop_triggered = (
-        (intraday_drop_pct is not None and intraday_drop_pct <= _INTRADAY_DROP_PCT)
-        or (intraday_drop_pct is None and drop_pct is not None and drop_pct <= _FALLBACK_DROP_PCT)
+        intraday_drop_pct is not None and intraday_drop_pct <= _INTRADAY_DROP_PCT
+    ) or (
+        intraday_drop_pct is None
+        and drop_pct is not None
+        and drop_pct <= _FALLBACK_DROP_PCT
     )
 
     def _make(status: LiveStatus, reason: str, plain_text: str = "") -> LiveDecision:
@@ -150,22 +222,35 @@ def evaluate_entry_status(
         # 報價日期無法確認時，不允許輸出正向進場訊號。
         # 急跌警示（RAPID_DROP/WATCHING_LOW）保留，因保守方向不會誤導。
         if not date_known and status in _POSITIVE_ENTRY_STATUSES:
-            status     = LiveStatus.DATE_UNKNOWN
-            reason     = "報價日期無法確認，暫不提供進場判斷（資料品質 fail-closed）"
+            status = LiveStatus.DATE_UNKNOWN
+            reason = "報價日期無法確認，暫不提供進場判斷（資料品質 fail-closed）"
             plain_text = ""
-        meta      = _STATUS_META[status]
-        entry_mid = ((entry_low or 0) + (entry_high or 0)) / 2 if entry_low and entry_high else None
+        meta = _STATUS_META[status]
+        entry_mid = (
+            ((entry_low or 0) + (entry_high or 0)) / 2
+            if entry_low and entry_high
+            else None
+        )
         pct_entry = (
             round((current_price - entry_mid) / entry_mid * 100, 2)
-            if current_price and entry_mid and entry_mid > 0 else None
+            if current_price and entry_mid and entry_mid > 0
+            else None
         )
         return LiveDecision(
-            status=status, icon=meta["icon"], label=meta["label"],
-            color=meta["color"], bg=meta["bg"], reason=reason,
-            current_price=current_price, signal_price=signal_price,
-            pct_from_signal=drop_pct, pct_from_entry=pct_entry,
-            entry_low=entry_low, entry_high=entry_high,
-            stop_price=stop_price, target1=target1,
+            status=status,
+            icon=meta["icon"],
+            label=meta["label"],
+            color=meta["color"],
+            bg=meta["bg"],
+            reason=reason,
+            current_price=current_price,
+            signal_price=signal_price,
+            pct_from_signal=drop_pct,
+            pct_from_entry=pct_entry,
+            entry_low=entry_low,
+            entry_high=entry_high,
+            stop_price=stop_price,
+            target1=target1,
             intraday_low=intraday_low,
             rr_current=rr_current,
             drop_pct=drop_pct,
@@ -180,32 +265,47 @@ def evaluate_entry_status(
     if current_price is None:
         # 即使沒有現價，只要低點顯示急跌就要警示
         if _rapid_drop_triggered:
-            ilow_str  = f"{intraday_low:.1f}" if intraday_low else "未知"
+            ilow_str = f"{intraday_low:.1f}" if intraday_low else "未知"
             show_drop = abs(intraday_drop_pct) if intraday_drop_pct is not None else 0
-            return _make(LiveStatus.RAPID_DROP,
-                         f"無即時成交，但盤中低點 {ilow_str} 顯示急跌約 {show_drop:.1f}%，暫緩進場")
+            return _make(
+                LiveStatus.RAPID_DROP,
+                f"無即時成交，但盤中低點 {ilow_str} 顯示急跌約 {show_drop:.1f}%，暫緩進場",
+            )
         return _make(LiveStatus.NO_RANGE, "目前無即時成交報價，無法判斷")
 
     # ── 停損觸發（最高優先） ──────────────────────────────────────
     if stop_price and current_price <= stop_price:
-        return _make(LiveStatus.CANCEL,
-                     f"跌破停損 {stop_price:.1f}，AI 訊號失效，建議取消進場計畫")
+        return _make(
+            LiveStatus.CANCEL,
+            f"跌破停損 {stop_price:.1f}，AI 訊號失效，建議取消進場計畫",
+        )
 
     # ── 接近停損警示 ──────────────────────────────────────────────
     if stop_price and stop_price > 0:
         dist_pct = (current_price - stop_price) / stop_price * 100
         if dist_pct < _STOP_WARN_PCT:
-            return _make(LiveStatus.STOP_WARNING,
-                         f"距停損 {stop_price:.1f} 僅剩 {dist_pct:.1f}%，風險偏高")
+            return _make(
+                LiveStatus.STOP_WARNING,
+                f"距停損 {stop_price:.1f} 僅剩 {dist_pct:.1f}%，風險偏高",
+            )
 
     # ── 急跌情境偵測（優先於區間邏輯） ───────────────────────────
     if _rapid_drop_triggered:
-        ilow_str    = f"{intraday_low:.1f}" if intraday_low else "今日低點"
-        sig_str     = f"{signal_price:.1f}" if signal_price else "訊號價"
+        ilow_str = f"{intraday_low:.1f}" if intraday_low else "今日低點"
+        sig_str = f"{signal_price:.1f}" if signal_price else "訊號價"
         # 顯示的跌幅：優先用低點跌幅，次用現價跌幅
-        show_drop   = abs(intraday_drop_pct) if intraday_drop_pct is not None else (abs(drop_pct) if drop_pct is not None else 0)
+        show_drop = (
+            abs(intraday_drop_pct)
+            if intraday_drop_pct is not None
+            else (abs(drop_pct) if drop_pct is not None else 0)
+        )
 
-        if bounce_pct is not None and bounce_pct >= _RECONFIRM_BOUNCE_PCT and entry_low and current_price >= entry_low:
+        if (
+            bounce_pct is not None
+            and bounce_pct >= _RECONFIRM_BOUNCE_PCT
+            and entry_low
+            and current_price >= entry_low
+        ):
             # Stage 3：反彈幅度足夠 + 回到進場區 → 轉強觀察訊號
             # 這是「觀察訊號」，不是直接進場確認；歷史驗證完成前不作為正式 BUY 依據
             plain = (
@@ -250,43 +350,55 @@ def evaluate_entry_status(
 
     # ── 正常區間邏輯 ──────────────────────────────────────────────
     if entry_low <= current_price <= entry_high:
-        return _make(LiveStatus.IN_RANGE,
-                     f"位於理想進場區 {entry_low:.1f}–{entry_high:.1f}，可依計畫進場")
+        return _make(
+            LiveStatus.IN_RANGE,
+            f"位於理想進場區 {entry_low:.1f}–{entry_high:.1f}，可依計畫進場",
+        )
 
     if current_price > entry_high:
         pct_above = (current_price - entry_high) / entry_high * 100
         if pct_above >= _CHASE_PCT:
-            return _make(LiveStatus.CHASING,
-                         f"超出進場上限 {pct_above:.1f}%（>{_CHASE_PCT:.0f}%），明顯追高，等回測")
-        return _make(LiveStatus.ABOVE_RANGE,
-                     f"略超進場區上限 {entry_high:.1f}（{pct_above:.1f}%），不追價")
+            return _make(
+                LiveStatus.CHASING,
+                f"超出進場上限 {pct_above:.1f}%（>{_CHASE_PCT:.0f}%），明顯追高，等回測",
+            )
+        return _make(
+            LiveStatus.ABOVE_RANGE,
+            f"略超進場區上限 {entry_high:.1f}（{pct_above:.1f}%），不追價",
+        )
 
     pct_below = (entry_low - current_price) / entry_low * 100
-    return _make(LiveStatus.BELOW_RANGE,
-                 f"低於進場下限 {entry_low:.1f}（{pct_below:.1f}%），等待止穩確認")
+    return _make(
+        LiveStatus.BELOW_RANGE,
+        f"低於進場下限 {entry_low:.1f}（{pct_below:.1f}%），等待止穩確認",
+    )
 
 
 def is_market_open() -> bool:
     """判斷台股是否在盤中（09:00–13:30 台灣時間，週一至週五）。"""
-    from datetime import datetime
     import zoneinfo
-    tz  = zoneinfo.ZoneInfo("Asia/Taipei")
+    from datetime import datetime
+
+    tz = zoneinfo.ZoneInfo("Asia/Taipei")
     now = datetime.now(tz)
     if now.weekday() >= 5:
         return False
     t = now.time()
     from datetime import time as _t
+
     return _t(9, 0) <= t <= _t(13, 30)
 
 
 def market_session_label() -> str:
-    from datetime import datetime
     import zoneinfo
-    tz  = zoneinfo.ZoneInfo("Asia/Taipei")
+    from datetime import datetime
+
+    tz = zoneinfo.ZoneInfo("Asia/Taipei")
     now = datetime.now(tz)
     if now.weekday() >= 5:
         return "休市（週末）"
     from datetime import time as _t
+
     t = now.time()
     if t < _t(9, 0):
         return "盤前"

@@ -27,17 +27,18 @@ from src.engines.live_decision import LiveStatus, evaluate_entry_status
 # ── 共用測試 rec（以晶技 3042 真實數值為基礎） ─────────────────
 _REC = {
     "trade_signal": "buy",
-    "price":        204.5,   # 訊號價
-    "entry_low":    193.9,
-    "entry_high":   204.1,
-    "stop_price":   165.1,
-    "target1":      241.4,
+    "price": 204.5,  # 訊號價
+    "entry_low": 193.9,
+    "entry_high": 204.1,
+    "stop_price": 165.1,
+    "target1": 241.4,
 }
 
 
 # ─────────────────────────────────────────────────────────────────
 # 正常情境：無急跌
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_in_range_normal():
     """股價在進場區，低點正常（無急跌）→ IN_RANGE。"""
@@ -80,6 +81,7 @@ def test_no_price():
 # ─────────────────────────────────────────────────────────────────
 # 急跌情境：有盤中低點資料
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_rapid_drop_with_low_no_bounce():
     """急跌，低點確認，尚未反彈 → RAPID_DROP。"""
@@ -130,6 +132,7 @@ def test_entry_reconfirmed_not_triggered_below_entry():
 # 關鍵回歸：無盤中低點時 fallback 閾值
 # ─────────────────────────────────────────────────────────────────
 
+
 def test_bug_regression_no_low_drop_3pct_should_not_be_in_range():
     """
     回歸測試：修正前（fallback=-4.0%），197.5（-3.4%）被誤判為 IN_RANGE。
@@ -160,6 +163,7 @@ def test_no_low_large_drop_triggers_rapid():
 # 無即時成交但有低點
 # ─────────────────────────────────────────────────────────────────
 
+
 def test_no_current_price_with_drop_low():
     """無即時成交（best_price=None）但低點顯示急跌 → RAPID_DROP 警示。"""
     ld = evaluate_entry_status(None, _REC, intraday_low=195.0)
@@ -177,6 +181,7 @@ def test_no_current_price_normal_low():
 # ─────────────────────────────────────────────────────────────────
 # 停損 / 接近停損
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_cancel_at_stop():
     ld = evaluate_entry_status(165.1, _REC, intraday_low=164.0)
@@ -205,12 +210,14 @@ def test_stop_warning_takes_priority_over_rapid_drop():
 # R/R 計算
 # ─────────────────────────────────────────────────────────────────
 
+
 def test_rr_none_when_price_at_stop():
-    ld = evaluate_entry_status(165.5, _REC)
+    ld = evaluate_entry_status(165.5, _REC)  # noqa: F841
     # 接近停損，R/R 可能很小但仍能計算
     # 但若 current <= stop，status=CANCEL，rr_current 計算前就返回
     ld2 = evaluate_entry_status(165.0, _REC)
     assert ld2.status == LiveStatus.CANCEL
+
 
 def test_rr_computed_correctly_in_range():
     ld = evaluate_entry_status(200.0, _REC, intraday_low=201.0)
@@ -222,6 +229,7 @@ def test_rr_computed_correctly_in_range():
 # ─────────────────────────────────────────────────────────────────
 # plain_text 生成
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_plain_text_exists_for_drop_states():
     for price, low, expected_status in [
@@ -242,6 +250,7 @@ def test_plain_text_empty_for_normal():
 # ─────────────────────────────────────────────────────────────────
 # Data Quality：date_known=False（fail-closed）
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_date_unknown_suppresses_in_range():
     """date_known=False 時，IN_RANGE → DATE_UNKNOWN（不允許正向進場訊號）。"""

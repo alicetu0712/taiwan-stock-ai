@@ -32,15 +32,15 @@ from config import HTTP_HEADERS
 
 logger = logging.getLogger(__name__)
 
-ET  = ZoneInfo("America/New_York")
+ET = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
 
 # Tickers for Phase 1
 _US_INDEX_TICKERS = {
-    "sp500":  "^GSPC",
+    "sp500": "^GSPC",
     "nasdaq": "^IXIC",
-    "sox":    "^SOX",
-    "vix":    "^VIX",
+    "sox": "^SOX",
+    "vix": "^VIX",
 }
 
 # Fetch a 14-calendar-day window to cover weekends and holidays
@@ -50,26 +50,30 @@ _FETCH_WINDOW_DAYS = 14
 @dataclass
 class IndexSessionResult:
     """Single ticker result for one session date."""
-    ticker:           str
-    us_date:          Optional[date]      # actual session date found in Yahoo response
-    close:            Optional[float]
-    prev_close:       Optional[float]     # prior session close (for return calculation)
-    return_pct:       Optional[float]     # (close - prev_close) / prev_close * 100
-    ok:               bool                # True = exact session match and data valid
-    reason:           str                 # "ok" | "missing" | "stale" | "fetch_error"
-    source_timestamp: Optional[datetime] = None  # UTC datetime of the matched Yahoo row (ok=True only)
+
+    ticker: str
+    us_date: Optional[date]  # actual session date found in Yahoo response
+    close: Optional[float]
+    prev_close: Optional[float]  # prior session close (for return calculation)
+    return_pct: Optional[float]  # (close - prev_close) / prev_close * 100
+    ok: bool  # True = exact session match and data valid
+    reason: str  # "ok" | "missing" | "stale" | "fetch_error"
+    source_timestamp: Optional[datetime] = (
+        None  # UTC datetime of the matched Yahoo row (ok=True only)
+    )
 
 
 @dataclass
 class OvernightFetchResult:
     """Aggregated fetch result for one execution_date."""
-    us_market_date:  Optional[date]
-    sp500:           IndexSessionResult
-    nasdaq:          IndexSessionResult
-    sox:             IndexSessionResult
-    vix:             IndexSessionResult
-    source_name:     str = "yahoo_finance_v8"
-    fetched_at:      datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    us_market_date: Optional[date]
+    sp500: IndexSessionResult
+    nasdaq: IndexSessionResult
+    sox: IndexSessionResult
+    vix: IndexSessionResult
+    source_name: str = "yahoo_finance_v8"
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def _fetch_index_history(ticker: str, target_date: date) -> list[dict]:
@@ -84,10 +88,16 @@ def _fetch_index_history(ticker: str, target_date: date) -> list[dict]:
     # Add 2 days buffer past target to capture any after-hours adjustments
     window_end = target_date + timedelta(days=2)
 
-    period1 = int(datetime(window_start.year, window_start.month, window_start.day,
-                           0, 0, 0, tzinfo=UTC).timestamp())
-    period2 = int(datetime(window_end.year, window_end.month, window_end.day,
-                           23, 59, 59, tzinfo=UTC).timestamp())
+    period1 = int(
+        datetime(
+            window_start.year, window_start.month, window_start.day, 0, 0, 0, tzinfo=UTC
+        ).timestamp()
+    )
+    period2 = int(
+        datetime(
+            window_end.year, window_end.month, window_end.day, 23, 59, 59, tzinfo=UTC
+        ).timestamp()
+    )
 
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
@@ -141,9 +151,15 @@ def _extract_session(
       - No nearest-date fallback.
     """
     if not rows:
-        return IndexSessionResult(ticker=ticker, us_date=None, close=None,
-                                  prev_close=None, return_pct=None,
-                                  ok=False, reason="fetch_error")
+        return IndexSessionResult(
+            ticker=ticker,
+            us_date=None,
+            close=None,
+            prev_close=None,
+            return_pct=None,
+            ok=False,
+            reason="fetch_error",
+        )
 
     # Find exact target row and its predecessor
     target_row = None
@@ -158,9 +174,15 @@ def _extract_session(
         # Check if the most recent row is older than target → stale
         last_date = rows[-1]["date"] if rows else None
         reason = "stale" if (last_date and last_date < target_date) else "missing"
-        return IndexSessionResult(ticker=ticker, us_date=last_date, close=None,
-                                  prev_close=None, return_pct=None,
-                                  ok=False, reason=reason)
+        return IndexSessionResult(
+            ticker=ticker,
+            us_date=last_date,
+            close=None,
+            prev_close=None,
+            return_pct=None,
+            ok=False,
+            reason=reason,
+        )
 
     close = target_row["close"]
     prev_close = prev_row["close"] if prev_row else None

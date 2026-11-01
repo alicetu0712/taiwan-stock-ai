@@ -180,9 +180,10 @@ def _load_health_metrics() -> dict:
         }
 
         # ── Forward Signal 完整性 ─────────────────────────────
-        from src.database import ForwardSignal, RESEARCH_CUTOFF_DATE
+        from src.database import RESEARCH_CUTOFF_DATE, ForwardSignal
+
         fs_latest = s.query(func.max(ForwardSignal.trade_date)).scalar()
-        fs_total  = s.query(func.count(ForwardSignal.id)).scalar() or 0
+        fs_total = s.query(func.count(ForwardSignal.id)).scalar() or 0
 
         # AR 在 cutoff 後有資料的每日筆數（最近 60 天）
         ar_cutoff_rows = (
@@ -195,8 +196,8 @@ def _load_health_metrics() -> dict:
         )
         # cutoff 後已有 forward_signals 的日期集合
         fs_dates_set = {
-            d for (d,) in
-            s.query(func.distinct(ForwardSignal.trade_date))
+            d
+            for (d,) in s.query(func.distinct(ForwardSignal.trade_date))
             .filter(ForwardSignal.trade_date >= RESEARCH_CUTOFF_DATE)
             .all()
         }
@@ -207,15 +208,16 @@ def _load_health_metrics() -> dict:
             if d not in fs_dates_set
         ]
         metrics["forward_signal"] = {
-            "latest":       fs_latest,
-            "total":        fs_total,
-            "cutoff":       RESEARCH_CUTOFF_DATE,
+            "latest": fs_latest,
+            "total": fs_total,
+            "cutoff": RESEARCH_CUTOFF_DATE,
             "missing_dates": missing_fs_dates,
         }
 
         # ── Pipeline 健康度 ─────────────────────────────────
-        from src.database import ForwardOutcomeEvaluation
         from datetime import timedelta as _td
+
+        from src.database import ForwardOutcomeEvaluation
 
         # 有 execution_date 在昨天或更早但 execution_price 仍 NULL → pipeline 曾跳過該天
         yesterday = date.today() - timedelta(days=1)
@@ -243,14 +245,14 @@ def _load_health_metrics() -> dict:
         ) or 0
 
         foe_total = s.query(func.count(ForwardOutcomeEvaluation.id)).scalar() or 0
-        foe_latest_matured = (
-            s.query(func.max(ForwardOutcomeEvaluation.horizon_20d_matured_at)).scalar()
-        )
+        foe_latest_matured = s.query(
+            func.max(ForwardOutcomeEvaluation.horizon_20d_matured_at)
+        ).scalar()
         metrics["pipeline_health"] = {
-            "fs_unfilled_past":    fs_unfilled_past,
+            "fs_unfilled_past": fs_unfilled_past,
             "fs_outcomes_pending": fs_outcomes_pending,
-            "foe_total":           foe_total,
-            "foe_latest_matured":  foe_latest_matured,
+            "foe_total": foe_total,
+            "foe_latest_matured": foe_latest_matured,
         }
 
         # ── 最近執行記錄（最新 5 筆）────────────────────────
@@ -315,6 +317,7 @@ def _load_coverage_history(n_days: int = 20) -> dict:
     """
     try:
         from sqlalchemy import func
+
         s = get_session()
         expected = (
             s.query(func.count(Stock.stock_id))
@@ -355,14 +358,16 @@ def _load_coverage_history(n_days: int = 20) -> dict:
             ratio = cnt / expected if expected > 0 else None
             # Flag if raw count suggests non-universe data (>5% above expected)
             anomaly = raw_count > int(expected * 1.05) if expected > 0 else False
-            rows.append({
-                "date": d,
-                "count": cnt,           # analysis-universe scoped
-                "raw_count": raw_count, # all DailyPrice rows
-                "expected": expected,
-                "ratio": ratio,
-                "anomaly": anomaly,
-            })
+            rows.append(
+                {
+                    "date": d,
+                    "count": cnt,  # analysis-universe scoped
+                    "raw_count": raw_count,  # all DailyPrice rows
+                    "expected": expected,
+                    "ratio": ratio,
+                    "anomaly": anomaly,
+                }
+            )
         s.close()
         return {"expected": expected, "rows": rows}
     except Exception as e:
@@ -376,14 +381,9 @@ def _load_coverage_detail(check_date) -> dict:
     指定交易日的缺漏股票分析：分析宇宙中哪些股票缺少收盤價，原因為何。
     """
     try:
-        from sqlalchemy import func
         s = get_session()
 
-        universe_stocks = (
-            s.query(Stock)
-            .filter(Stock.is_excluded.isnot(True))
-            .all()
-        )
+        universe_stocks = s.query(Stock).filter(Stock.is_excluded.isnot(True)).all()
         universe_ids = {st.stock_id for st in universe_stocks}
 
         priced_ids = {
@@ -395,11 +395,15 @@ def _load_coverage_detail(check_date) -> dict:
         priced_universe = universe_ids & priced_ids
         missing_ids = universe_ids - priced_ids
 
-        missing_stocks_map = {st.stock_id: st for st in universe_stocks if st.stock_id in missing_ids}
+        missing_stocks_map = {
+            st.stock_id: st for st in universe_stocks if st.stock_id in missing_ids
+        }
 
         delisted, suspended, not_listed, other_missing = [], [], [], []
         for sid, st in missing_stocks_map.items():
-            if (st.delisted_date and st.delisted_date <= check_date) or st.security_status == "delisted":
+            if (
+                st.delisted_date and st.delisted_date <= check_date
+            ) or st.security_status == "delisted":
                 delisted.append(sid)
             elif st.security_status == "suspended":
                 suspended.append(sid)
@@ -572,7 +576,8 @@ def page_data_health() -> None:
     fs_missing = fs_m.get("missing_dates", [])
     fs_detail = f"總計 {fs_m.get('total', 0):,} 筆"
     fs_extra = (
-        f"🔴 {len(fs_missing)} 個缺失日期" if fs_missing
+        f"🔴 {len(fs_missing)} 個缺失日期"
+        if fs_missing
         else ("✅ 無缺失" if fs_m.get("total", 0) > 0 else "尚未開始累積")
     )
     _render_source_row(
@@ -597,8 +602,8 @@ def page_data_health() -> None:
             f'border:2px solid {c}20;background:{c}10">'
             f'<div style="font-size:1.4rem;font-weight:800;color:{c}">{unfilled}</div>'
             f'<div style="font-size:0.72rem;color:#666">未填入執行價<br>'
-            f'<small>(過去 NEXT_OPEN 訊號缺 execution_price)</small></div>'
-            f'</div>',
+            f"<small>(過去 NEXT_OPEN 訊號缺 execution_price)</small></div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
     with ph_cols[1]:
@@ -609,8 +614,8 @@ def page_data_health() -> None:
             f'border:2px solid {c}20;background:{c}10">'
             f'<div style="font-size:1.4rem;font-weight:800;color:{c}">{outcomes_pend}</div>'
             f'<div style="font-size:0.72rem;color:#666">績效待計算<br>'
-            f'<small>(trade_date ≤ 30d 前但 outcomes_computed_at IS NULL)</small></div>'
-            f'</div>',
+            f"<small>(trade_date ≤ 30d 前但 outcomes_computed_at IS NULL)</small></div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
     with ph_cols[2]:
@@ -621,8 +626,8 @@ def page_data_health() -> None:
             f'border:2px solid {c}20;background:{c}10">'
             f'<div style="font-size:1.4rem;font-weight:800;color:{c}">{foe_total:,}</div>'
             f'<div style="font-size:0.72rem;color:#666">foe_v1 已計算結果<br>'
-            f'<small>(Forward Outcome Evaluation 總筆數)</small></div>'
-            f'</div>',
+            f"<small>(Forward Outcome Evaluation 總筆數)</small></div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
     with ph_cols[3]:
@@ -639,8 +644,8 @@ def page_data_health() -> None:
             f'border:2px solid {c}20;background:{c}10">'
             f'<div style="font-size:1.1rem;font-weight:800;color:{c}">{mat_label}</div>'
             f'<div style="font-size:0.72rem;color:#666">最新 foe_v1 成熟日<br>'
-            f'<small>(horizon_20d_matured_at)</small></div>'
-            f'</div>',
+            f"<small>(horizon_20d_matured_at)</small></div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
     if ph.get("fs_unfilled_past", 0) > 0:
@@ -716,11 +721,18 @@ def page_data_health() -> None:
             "請確認 `main.py` 的 `write_forward_signals()` 是否因例外而靜默失敗。"
         )
         missing_rows = [
-            {"日期": str(row["date"]), "analysis_results 筆數": row["ar_cnt"], "forward_signals": "❌ 缺失"}
+            {
+                "日期": str(row["date"]),
+                "analysis_results 筆數": row["ar_cnt"],
+                "forward_signals": "❌ 缺失",
+            }
             for row in fs_missing
         ]
         import pandas as _pd
-        st.dataframe(_pd.DataFrame(missing_rows).set_index("日期"), use_container_width=True)
+
+        st.dataframe(
+            _pd.DataFrame(missing_rows).set_index("日期"), use_container_width=True
+        )
         st.markdown("---")
 
     if warnings:
@@ -753,8 +765,8 @@ def page_data_health() -> None:
         latest_date = latest_row["date"]
         detail = _load_coverage_detail(latest_date)
 
-        actual    = detail.get("actual",   latest_row["count"])
-        missing   = detail.get("missing",  max(0, expected_uni - actual))
+        actual = detail.get("actual", latest_row["count"])
+        missing = detail.get("missing", max(0, expected_uni - actual))
         ratio_now = latest_row.get("ratio") or 0.0
 
         if ratio_now >= 0.93:
@@ -775,21 +787,25 @@ def page_data_health() -> None:
                 f'<div style="font-size:0.85rem;font-weight:700;color:{impact_c}">'
                 f"{impact_text}</div>"
                 f'<div style="font-size:0.7rem;color:#666">對今日選股可信度</div>'
-                f'</div>',
+                f"</div>",
                 unsafe_allow_html=True,
             )
 
         # ── 缺漏原因分解 ─────────────────────────────────────────
         if missing > 0 and detail:
-            n_delisted    = detail.get("delisted", 0)
-            n_suspended   = detail.get("suspended", 0)
-            n_not_listed  = detail.get("not_listed", 0)
-            n_other       = detail.get("other_missing", 0)
+            n_delisted = detail.get("delisted", 0)
+            n_suspended = detail.get("suspended", 0)
+            n_not_listed = detail.get("not_listed", 0)
+            n_other = detail.get("other_missing", 0)
             parts = []
-            if n_delisted:   parts.append(f"已下市 {n_delisted} 檔")
-            if n_suspended:  parts.append(f"停牌 {n_suspended} 檔")
-            if n_not_listed: parts.append(f"尚未上市 {n_not_listed} 檔")
-            if n_other:      parts.append(f"資料缺漏 {n_other} 檔")
+            if n_delisted:
+                parts.append(f"已下市 {n_delisted} 檔")
+            if n_suspended:
+                parts.append(f"停牌 {n_suspended} 檔")
+            if n_not_listed:
+                parts.append(f"尚未上市 {n_not_listed} 檔")
+            if n_other:
+                parts.append(f"資料缺漏 {n_other} 檔")
             st.caption(f"**缺少 {missing} 檔原因：** " + "、".join(parts))
 
             other_ids = detail.get("other_missing_ids", [])
@@ -810,22 +826,27 @@ def page_data_health() -> None:
 
         # ── 近 20 日明細表 ────────────────────────────────────────
         ratios = [r["ratio"] for r in cov_rows if r["ratio"] is not None]
-        df_cov = _pd.DataFrame([
-            {
-                "日期": str(r["date"]),
-                "股票池有價格": r["count"],
-                "應有檔數": r["expected"],
-                "覆蓋率": f"{r['ratio']*100:.1f}%" if r["ratio"] is not None else "—",
-                "原始筆數": r.get("raw_count", r["count"]),
-                "異常": "⚠️ 含宇宙外資料" if r.get("anomaly") else "",
-            }
-            for r in reversed(cov_rows)
-        ])
+        df_cov = _pd.DataFrame(
+            [
+                {
+                    "日期": str(r["date"]),
+                    "股票池有價格": r["count"],
+                    "應有檔數": r["expected"],
+                    "覆蓋率": (
+                        f"{r['ratio']*100:.1f}%" if r["ratio"] is not None else "—"
+                    ),
+                    "原始筆數": r.get("raw_count", r["count"]),
+                    "異常": "⚠️ 含宇宙外資料" if r.get("anomaly") else "",
+                }
+                for r in reversed(cov_rows)
+            ]
+        )
         st.dataframe(df_cov.set_index("日期"), use_container_width=True)
 
         # ── 進階資訊（Gate 設定 + 門檻模擬）────────────────────
         with st.expander("🔧 進階資訊：Forward Gate 設定與門檻模擬"):
             from config import FORWARD_MARKET_COVERAGE
+
             _min_ratio = FORWARD_MARKET_COVERAGE.get("min_ratio")
             _min_count = FORWARD_MARKET_COVERAGE.get("min_count", 200)
 
@@ -842,18 +863,28 @@ def page_data_health() -> None:
 
             if ratios:
                 st.markdown("**門檻模擬（近 20 交易日）**")
-                st.caption("若啟用各門檻，以下天數的 ForwardSignal 寫入會被阻擋（唯讀模擬）：")
+                st.caption(
+                    "若啟用各門檻，以下天數的 ForwardSignal 寫入會被阻擋（唯讀模擬）："
+                )
                 sim_rows = []
                 for thr in [0.70, 0.75, 0.80, 0.85, 0.90]:
                     blocked = sum(1 for r in ratios if r < thr)
-                    sim_rows.append({
-                        "門檻": f"{thr:.0%}",
-                        "阻擋天數": blocked,
-                        "通過天數": len(ratios) - blocked,
-                        "阻擋率": f"{blocked / len(ratios) * 100:.0f}%",
-                        "建議": "可考慮" if blocked <= 2 else "謹慎評估" if blocked <= 5 else "過於嚴格",
-                    })
-                st.dataframe(_pd.DataFrame(sim_rows).set_index("門檻"), use_container_width=True)
+                    sim_rows.append(
+                        {
+                            "門檻": f"{thr:.0%}",
+                            "阻擋天數": blocked,
+                            "通過天數": len(ratios) - blocked,
+                            "阻擋率": f"{blocked / len(ratios) * 100:.0f}%",
+                            "建議": (
+                                "可考慮"
+                                if blocked <= 2
+                                else "謹慎評估" if blocked <= 5 else "過於嚴格"
+                            ),
+                        }
+                    )
+                st.dataframe(
+                    _pd.DataFrame(sim_rows).set_index("門檻"), use_container_width=True
+                )
 
             st.markdown("**覆蓋率定義說明**")
             st.caption(

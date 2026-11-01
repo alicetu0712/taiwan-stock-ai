@@ -23,7 +23,7 @@ from typing import Optional
 
 
 class DQFlag(str, Enum):
-    OK      = "ok"
+    OK = "ok"
     WARNING = "warning"
     MISSING = "missing"
 
@@ -32,35 +32,41 @@ class DQFlag(str, Enum):
 _FLAG_ICON = {DQFlag.OK: "✅", DQFlag.WARNING: "⚠️", DQFlag.MISSING: "❌"}
 
 _CONFIDENCE_LABEL = {
-    "high":        "高",
+    "high": "高",
     "medium_high": "中高",
-    "medium":      "中",
-    "low":         "低",
+    "medium": "中",
+    "low": "低",
 }
 
 _CONFIDENCE_COLOR = {
-    "high":        "#00c851",
+    "high": "#00c851",
     "medium_high": "#88cc88",
-    "medium":      "#ffbb33",
-    "low":         "#ff4444",
+    "medium": "#ffbb33",
+    "low": "#ff4444",
 }
 
 
 @dataclass
 class StockDataQuality:
-    stock_id:    str
-    price:       DQFlag = DQFlag.OK
-    ma60:        DQFlag = DQFlag.OK
-    volume:      DQFlag = DQFlag.OK
-    pt_score:    DQFlag = DQFlag.OK
+    stock_id: str
+    price: DQFlag = DQFlag.OK
+    ma60: DQFlag = DQFlag.OK
+    volume: DQFlag = DQFlag.OK
+    pt_score: DQFlag = DQFlag.OK
     institution: DQFlag = DQFlag.OK
-    financial:   DQFlag = DQFlag.OK
+    financial: DQFlag = DQFlag.OK
 
     @property
     def confidence(self) -> str:
-        flags = [self.price, self.ma60, self.volume, self.pt_score,
-                 self.institution, self.financial]
-        n_ok      = sum(1 for f in flags if f == DQFlag.OK)
+        flags = [
+            self.price,
+            self.ma60,
+            self.volume,
+            self.pt_score,
+            self.institution,
+            self.financial,
+        ]
+        n_ok = sum(1 for f in flags if f == DQFlag.OK)  # noqa: F841
         n_missing = sum(1 for f in flags if f == DQFlag.MISSING)
         n_warning = sum(1 for f in flags if f == DQFlag.WARNING)
 
@@ -78,13 +84,13 @@ class StockDataQuality:
 
     def to_dict(self) -> dict:
         return {
-            "price":       self.price.value,
-            "ma60":        self.ma60.value,
-            "volume":      self.volume.value,
-            "pt_score":    self.pt_score.value,
+            "price": self.price.value,
+            "ma60": self.ma60.value,
+            "volume": self.volume.value,
+            "pt_score": self.pt_score.value,
             "institution": self.institution.value,
-            "financial":   self.financial.value,
-            "confidence":  self.confidence,
+            "financial": self.financial.value,
+            "confidence": self.confidence,
         }
 
     def flag_icon(self, component: str) -> str:
@@ -129,7 +135,7 @@ def assess_stock_quality(
     if pt_score > 0 or vol_ratio is not None:
         dq.ma60 = DQFlag.OK
     else:
-        dq.ma60 = DQFlag.WARNING    # can't confirm sufficient price history
+        dq.ma60 = DQFlag.WARNING  # can't confirm sufficient price history
 
     # ── Volume ───────────────────────────────────────────────────
     if vol_ratio is not None:
@@ -143,7 +149,7 @@ def assess_stock_quality(
     if pt_score > 0:
         dq.pt_score = DQFlag.OK
     elif close is not None:
-        dq.pt_score = DQFlag.WARNING   # price exists but PT didn't produce score
+        dq.pt_score = DQFlag.WARNING  # price exists but PT didn't produce score
     else:
         dq.pt_score = DQFlag.MISSING
 
@@ -151,7 +157,7 @@ def assess_stock_quality(
     if has_inst_data:
         dq.institution = DQFlag.OK
     elif intelligence_score > 0:
-        dq.institution = DQFlag.WARNING    # stale/partial data contributed a score
+        dq.institution = DQFlag.WARNING  # stale/partial data contributed a score
     else:
         dq.institution = DQFlag.MISSING
 
@@ -159,7 +165,7 @@ def assess_stock_quality(
     if has_financial_data:
         dq.financial = DQFlag.OK
     elif quality_score > 5:
-        dq.financial = DQFlag.WARNING      # historical data contributed a score
+        dq.financial = DQFlag.WARNING  # historical data contributed a score
     else:
         dq.financial = DQFlag.MISSING
 
@@ -169,11 +175,11 @@ def assess_stock_quality(
 def from_dict(d: dict) -> StockDataQuality:
     """Reconstruct from a stored JSON dict."""
     return StockDataQuality(
-        stock_id    = d.get("stock_id", ""),
-        price       = DQFlag(d.get("price",       DQFlag.MISSING.value)),
-        ma60        = DQFlag(d.get("ma60",        DQFlag.MISSING.value)),
-        volume      = DQFlag(d.get("volume",      DQFlag.MISSING.value)),
-        pt_score    = DQFlag(d.get("pt_score",    DQFlag.MISSING.value)),
-        institution = DQFlag(d.get("institution", DQFlag.MISSING.value)),
-        financial   = DQFlag(d.get("financial",   DQFlag.MISSING.value)),
+        stock_id=d.get("stock_id", ""),
+        price=DQFlag(d.get("price", DQFlag.MISSING.value)),
+        ma60=DQFlag(d.get("ma60", DQFlag.MISSING.value)),
+        volume=DQFlag(d.get("volume", DQFlag.MISSING.value)),
+        pt_score=DQFlag(d.get("pt_score", DQFlag.MISSING.value)),
+        institution=DQFlag(d.get("institution", DQFlag.MISSING.value)),
+        financial=DQFlag(d.get("financial", DQFlag.MISSING.value)),
     )

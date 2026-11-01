@@ -6,29 +6,30 @@ PRD §23-C: Frozen Signal Integrity tests
 """
 
 import sys
-from datetime import date
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.engines.overnight_risk import (
-    OVERNIGHT_RULE_VERSION,
+    DQ_COMPLETE,
+    DQ_PARTIAL,
+    DQ_STALE,
+    DQ_UNKNOWN,
     OVERNIGHT_RISK_CONFIG,
-    DQ_COMPLETE, DQ_PARTIAL, DQ_STALE, DQ_UNKNOWN,
-    RISK_GREEN, RISK_YELLOW, RISK_RED, RISK_UNKNOWN,
-    OvernightRiskResult,
+    OVERNIGHT_RULE_VERSION,
+    RISK_GREEN,
+    RISK_RED,
+    RISK_UNKNOWN,
+    RISK_YELLOW,
     RiskReason,
     _derive_data_quality,
     evaluate_overnight_risk,
-    risk_reasons_to_json,
     risk_reasons_from_json,
+    risk_reasons_to_json,
 )
 
-
 # ── Data quality derivation ──────────────────────────────────────────────────
+
 
 class TestDeriveDataQuality:
 
@@ -49,6 +50,7 @@ class TestDeriveDataQuality:
 
 
 # ── Risk evaluation ──────────────────────────────────────────────────────────
+
 
 class TestEvaluateOvernightRisk:
 
@@ -86,7 +88,7 @@ class TestEvaluateOvernightRisk:
 
     def test_vix_moderate_spike_is_yellow(self):
         moderate = OVERNIGHT_RISK_CONFIG["VIX_MODERATE_SPIKE"]
-        severe   = OVERNIGHT_RISK_CONFIG["VIX_SEVERE_SPIKE"]
+        severe = OVERNIGHT_RISK_CONFIG["VIX_SEVERE_SPIKE"]
         r = self._eval(vix_chg=(moderate + severe) / 2)
         assert r.risk_level in (RISK_YELLOW, RISK_RED)
 
@@ -100,24 +102,33 @@ class TestEvaluateOvernightRisk:
 
     def test_missing_one_source_is_partial_quality(self):
         r = evaluate_overnight_risk(
-            sp500_return=0.0, nasdaq_return=None, sox_return=None,
-            vix_close=14.0, vix_change=2.0,
+            sp500_return=0.0,
+            nasdaq_return=None,
+            sox_return=None,
+            vix_close=14.0,
+            vix_change=2.0,
             data_quality=DQ_PARTIAL,
         )
         assert r.data_quality == DQ_PARTIAL
 
     def test_stale_data_is_unknown(self):
         r = evaluate_overnight_risk(
-            sp500_return=1.0, nasdaq_return=1.0, sox_return=1.0,
-            vix_close=12.0, vix_change=1.0,
+            sp500_return=1.0,
+            nasdaq_return=1.0,
+            sox_return=1.0,
+            vix_close=12.0,
+            vix_change=1.0,
             data_quality=DQ_STALE,
         )
         assert r.risk_level == RISK_UNKNOWN
 
     def test_unknown_data_quality_is_unknown(self):
         r = evaluate_overnight_risk(
-            sp500_return=None, nasdaq_return=None, sox_return=None,
-            vix_close=None, vix_change=None,
+            sp500_return=None,
+            nasdaq_return=None,
+            sox_return=None,
+            vix_close=None,
+            vix_change=None,
             data_quality=DQ_UNKNOWN,
         )
         assert r.risk_level == RISK_UNKNOWN
@@ -125,16 +136,22 @@ class TestEvaluateOvernightRisk:
     def test_unknown_never_becomes_green(self):
         """UNKNOWN data quality must never produce GREEN."""
         r = evaluate_overnight_risk(
-            sp500_return=1.0, nasdaq_return=1.0, sox_return=1.0,
-            vix_close=12.0, vix_change=1.0,
+            sp500_return=1.0,
+            nasdaq_return=1.0,
+            sox_return=1.0,
+            vix_close=12.0,
+            vix_change=1.0,
             data_quality=DQ_UNKNOWN,
         )
         assert r.risk_level != RISK_GREEN
 
     def test_stale_never_becomes_green(self):
         r = evaluate_overnight_risk(
-            sp500_return=2.0, nasdaq_return=2.0, sox_return=2.0,
-            vix_close=10.0, vix_change=0.0,
+            sp500_return=2.0,
+            nasdaq_return=2.0,
+            sox_return=2.0,
+            vix_close=10.0,
+            vix_change=0.0,
             data_quality=DQ_STALE,
         )
         assert r.risk_level != RISK_GREEN
@@ -142,8 +159,11 @@ class TestEvaluateOvernightRisk:
     def test_partial_all_positive_is_unknown_not_green(self):
         """PARTIAL with all-positive returns → not GREEN (can't confirm stability)."""
         r = evaluate_overnight_risk(
-            sp500_return=1.5, nasdaq_return=None, sox_return=None,
-            vix_close=12.0, vix_change=1.0,
+            sp500_return=1.5,
+            nasdaq_return=None,
+            sox_return=None,
+            vix_close=12.0,
+            vix_change=1.0,
             data_quality=DQ_PARTIAL,
         )
         assert r.risk_level != RISK_GREEN
@@ -168,6 +188,7 @@ class TestEvaluateOvernightRisk:
 
 # ── Frozen Signal Integrity (PRD §23-C) ──────────────────────────────────────
 
+
 class TestFrozenSignalIntegrity:
     """
     Overnight RED must never modify trade_signal, PT score, or any ForwardSignal
@@ -178,8 +199,11 @@ class TestFrozenSignalIntegrity:
         """evaluate_overnight_risk returns a result; it never touches Recommendation."""
         original_signal = "buy"
         r = evaluate_overnight_risk(
-            sp500_return=-3.0, nasdaq_return=-3.0, sox_return=-4.0,
-            vix_close=35.0, vix_change=30.0,
+            sp500_return=-3.0,
+            nasdaq_return=-3.0,
+            sox_return=-4.0,
+            vix_close=35.0,
+            vix_change=30.0,
             data_quality=DQ_COMPLETE,
         )
         assert r.risk_level == RISK_RED
@@ -190,20 +214,25 @@ class TestFrozenSignalIntegrity:
         """evaluate_overnight_risk must not import or touch any DB session."""
         # If this test passes without patching get_session, the function is pure.
         import src.engines.overnight_risk as oe
+
         calls = []
         original = oe.evaluate_overnight_risk
         # Simply call it and confirm it runs without needing DB
         result = original(
-            sp500_return=-3.0, nasdaq_return=-3.0, sox_return=-4.0,
-            vix_close=35.0, vix_change=30.0,
+            sp500_return=-3.0,
+            nasdaq_return=-3.0,
+            sox_return=-4.0,
+            vix_close=35.0,
+            vix_change=30.0,
             data_quality=DQ_COMPLETE,
         )
         assert result.risk_level == RISK_RED
-        assert len(calls) == 0   # No DB calls recorded
+        assert len(calls) == 0  # No DB calls recorded
 
     def test_overnight_rule_version_is_separate_from_live_rule_version(self):
         """OVERNIGHT_RULE_VERSION must be independent of LIVE_RULE_VERSION."""
         from src.engines.live_decision import LIVE_RULE_VERSION
+
         assert OVERNIGHT_RULE_VERSION != LIVE_RULE_VERSION
         assert OVERNIGHT_RULE_VERSION.startswith("overnight_")
         assert LIVE_RULE_VERSION.startswith("v")

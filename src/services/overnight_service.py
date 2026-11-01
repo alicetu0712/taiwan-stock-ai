@@ -24,18 +24,17 @@ Freeze / retry policy:
 import json
 import logging
 from datetime import date, datetime
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 UTC = ZoneInfo("UTC")
-TW  = ZoneInfo("Asia/Taipei")
+TW = ZoneInfo("Asia/Taipei")
 
 # UNKNOWN retry policy
-_FREEZE_HOUR_TW   = 8    # 08:30 TW: after this, UNKNOWN is permanent for the day
+_FREEZE_HOUR_TW = 8  # 08:30 TW: after this, UNKNOWN is permanent for the day
 _FREEZE_MINUTE_TW = 30
-MAX_RETRY_COUNT   = 3    # max retry attempts for transient UNKNOWN (fetch_error)
+MAX_RETRY_COUNT = 3  # max retry attempts for transient UNKNOWN (fetch_error)
 
 
 def get_overnight_context(execution_date: date):
@@ -90,10 +89,13 @@ def ensure_overnight_context(execution_date: date):
         return _build_and_persist(execution_date, retry_count=retry_count)
     except Exception as exc:
         logger.error(f"overnight_service.ensure: unexpected error: {exc}")
-        return _persist_unknown(execution_date, reason=str(exc), retry_count=retry_count)
+        return _persist_unknown(
+            execution_date, reason=str(exc), retry_count=retry_count
+        )
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
 
 def _should_retry_unknown(ctx) -> bool:
     """
@@ -105,14 +107,17 @@ def _should_retry_unknown(ctx) -> bool:
     - current TW time < freeze time (08:30)
     """
     from src.engines.overnight_risk import DQ_UNKNOWN
+
     if ctx.data_quality != DQ_UNKNOWN:
         return False
     if ctx.retry_count >= MAX_RETRY_COUNT:
         return False
     now_tw = datetime.now(TW)
     freeze = now_tw.replace(
-        hour=_FREEZE_HOUR_TW, minute=_FREEZE_MINUTE_TW,
-        second=0, microsecond=0,
+        hour=_FREEZE_HOUR_TW,
+        minute=_FREEZE_MINUTE_TW,
+        second=0,
+        microsecond=0,
     )
     return now_tw < freeze
 
@@ -120,13 +125,20 @@ def _should_retry_unknown(ctx) -> bool:
 def _delete_context(ctx) -> None:
     """Delete an OvernightMarketContext row from DB (used before retry)."""
     from src.database import OvernightMarketContext, get_session
+
     s = get_session()
     try:
-        row = s.query(OvernightMarketContext).filter(OvernightMarketContext.id == ctx.id).first()
+        row = (
+            s.query(OvernightMarketContext)
+            .filter(OvernightMarketContext.id == ctx.id)
+            .first()
+        )
         if row:
             s.delete(row)
             s.commit()
-            logger.debug(f"overnight_service: deleted UNKNOWN ctx id={ctx.id} for retry")
+            logger.debug(
+                f"overnight_service: deleted UNKNOWN ctx id={ctx.id} for retry"
+            )
     except Exception as exc:
         logger.warning(f"overnight_service: delete context failed: {exc}")
         s.rollback()
@@ -136,15 +148,18 @@ def _delete_context(ctx) -> None:
 
 def _build_and_persist(execution_date: date, retry_count: int = 0):
     """Fetch data, evaluate risk, persist and return OvernightMarketContext."""
-    from src.core.us_trading_calendar import tw_exec_to_us_market_date, us_session_close_utc
     from src.collectors.overnight_collector import fetch_overnight_context
-    from src.engines.overnight_risk import (
-        OVERNIGHT_RULE_VERSION,
-        evaluate_overnight_risk,
-        risk_reasons_to_json,
-        _derive_data_quality,
+    from src.core.us_trading_calendar import (
+        tw_exec_to_us_market_date,
+        us_session_close_utc,
     )
     from src.database import OvernightMarketContext, get_session
+    from src.engines.overnight_risk import (
+        OVERNIGHT_RULE_VERSION,
+        _derive_data_quality,
+        evaluate_overnight_risk,
+        risk_reasons_to_json,
+    )
 
     us_market_date = tw_exec_to_us_market_date(execution_date)
     if us_market_date is None:
@@ -158,7 +173,7 @@ def _build_and_persist(execution_date: date, retry_count: int = 0):
     # Fetch from Yahoo
     fetch_result = fetch_overnight_context(us_market_date)
 
-    sp  = fetch_result.sp500
+    sp = fetch_result.sp500
     ndq = fetch_result.nasdaq
     sox = fetch_result.sox
     vix = fetch_result.vix
@@ -166,7 +181,10 @@ def _build_and_persist(execution_date: date, retry_count: int = 0):
     # Data quality: stale if any indicator has reason="stale"
     any_stale = any(r.reason == "stale" for r in [sp, ndq, sox, vix])
     data_quality = _derive_data_quality(
-        sp500_ok=sp.ok, nasdaq_ok=ndq.ok, sox_ok=sox.ok, vix_ok=vix.ok,
+        sp500_ok=sp.ok,
+        nasdaq_ok=ndq.ok,
+        sox_ok=sox.ok,
+        vix_ok=vix.ok,
         any_stale=any_stale,
     )
 
@@ -189,7 +207,9 @@ def _build_and_persist(execution_date: date, retry_count: int = 0):
     source_ts_naive = None
     for r in [sp, ndq, sox, vix]:
         if r.ok and r.source_timestamp is not None:
-            source_ts_naive = r.source_timestamp.replace(tzinfo=None)  # UTC-naive for SQLite
+            source_ts_naive = r.source_timestamp.replace(
+                tzinfo=None
+            )  # UTC-naive for SQLite
             break
 
     # available_at: exact US session close time (DST-correct, stored as UTC-naive)
@@ -264,7 +284,7 @@ def link_overnight_to_forward_signals(execution_date: date, ctx) -> int:
         count = 0
         for row in rows:
             row.overnight_rule_version = ctx.overnight_rule_version
-            row.overnight_context_id   = ctx.id
+            row.overnight_context_id = ctx.id
             count += 1
         if count:
             s.commit()
@@ -289,8 +309,12 @@ def link_overnight_to_forward_signals(execution_date: date, ctx) -> int:
 
 def _persist_unknown(execution_date: date, reason: str = "", retry_count: int = 0):
     """Persist an UNKNOWN context when data is completely unavailable."""
-    from src.engines.overnight_risk import OVERNIGHT_RULE_VERSION, RISK_UNKNOWN, DQ_UNKNOWN
     from src.database import OvernightMarketContext, get_session
+    from src.engines.overnight_risk import (
+        DQ_UNKNOWN,
+        OVERNIGHT_RULE_VERSION,
+        RISK_UNKNOWN,
+    )
 
     ctx = OvernightMarketContext(
         execution_date=execution_date,

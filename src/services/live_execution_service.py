@@ -37,7 +37,8 @@ def _query_db_last_status(
     Returns None if no record exists.
     """
     try:
-        from src.database import get_session, LiveExecutionEvent
+        from src.database import LiveExecutionEvent, get_session
+
         session = get_session()
         last = (
             session.query(LiveExecutionEvent.live_status)
@@ -94,7 +95,7 @@ def record_if_transition(
         return False
 
     try:
-        from src.database import get_session, LiveExecutionEvent
+        from src.database import LiveExecutionEvent, get_session
 
         evt = LiveExecutionEvent(
             stock_id=stock_id,
@@ -103,7 +104,7 @@ def record_if_transition(
             observed_at=datetime.now(timezone.utc).replace(tzinfo=None),
             current_price=ld.current_price,
             intraday_low=ld.intraday_low,
-            prev_status=db_prev_status,   # DB truth, not UI session
+            prev_status=db_prev_status,  # DB truth, not UI session
             live_status=new_status,
             drop_pct=ld.drop_pct,
             bounce_pct=ld.bounce_pct,

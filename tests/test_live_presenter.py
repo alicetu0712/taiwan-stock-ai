@@ -2,12 +2,10 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from src.presentation.live_presenter import LiveCard, LivePresenter
 
-
 # ── fmt_pct ──────────────────────────────────────────────────────────────────
+
 
 def test_fmt_pct_positive():
     assert LivePresenter.fmt_pct(2.5) == "+2.5%"
@@ -26,6 +24,7 @@ def test_fmt_pct_none():
 
 
 # ── overnight_risk_badge ─────────────────────────────────────────────────────
+
 
 def test_overnight_risk_badge_green():
     html = LivePresenter.overnight_risk_badge("GREEN")
@@ -46,6 +45,7 @@ def test_overnight_risk_badge_unknown_level_fallback():
 
 # ── status_badge_html ─────────────────────────────────────────────────────────
 
+
 def test_status_badge_html():
     ld = MagicMock()
     ld.bg = "#e8f5e9"
@@ -60,6 +60,7 @@ def test_status_badge_html():
 
 # ── price_delta_html ──────────────────────────────────────────────────────────
 
+
 def test_price_delta_html_positive():
     html = LivePresenter.price_delta_html(110.0, 100.0, "vs 訊號")
     assert "+10.0%" in html
@@ -73,6 +74,7 @@ def test_price_delta_html_negative():
 
 
 # ── plain_text_html ───────────────────────────────────────────────────────────
+
 
 def test_plain_text_html_with_content():
     html = LivePresenter.plain_text_html("買在支撐帶下緣")
@@ -89,6 +91,7 @@ def test_plain_text_html_none_like():
 
 
 # ── rr_html ───────────────────────────────────────────────────────────────────
+
 
 def test_rr_html_none_returns_empty():
     ld = MagicMock()
@@ -168,7 +171,7 @@ def test_rr_html_visual_only_does_not_affect_signal():
     quote.trade_date = None
     quote.update_time = None
 
-    card_low  = p.present(rec_base, _make_ld(0.5), quote, "valid", None)
+    card_low = p.present(rec_base, _make_ld(0.5), quote, "valid", None)
     card_high = p.present(rec_base, _make_ld(3.0), quote, "valid", None)
 
     # signal_label must be invariant to rr
@@ -178,6 +181,7 @@ def test_rr_html_visual_only_does_not_affect_signal():
 
 
 # ── price_display_html ────────────────────────────────────────────────────────
+
 
 def test_price_display_stale():
     quote = MagicMock()
@@ -208,6 +212,7 @@ def test_price_display_no_price():
 
 
 # ── buy_note_html ─────────────────────────────────────────────────────────────
+
 
 def test_buy_note_html_not_in_drop():
     from src.engines.live_decision import LiveStatus
@@ -250,6 +255,7 @@ def test_buy_note_html_rapid_drop_ok_rr():
 
 # ── plan_str_from_rec ─────────────────────────────────────────────────────────
 
+
 def test_plan_str_full():
     s = LivePresenter.plan_str_from_rec(98.0, 102.0, 95.0, 115.0)
     assert "進場 98.0–102.0" in s
@@ -270,6 +276,7 @@ def test_plan_str_empty_falls_back():
 
 # ── overnight_card_html / overnight_l1_html (ctx=None) ───────────────────────
 
+
 def test_overnight_card_html_no_ctx():
     html = LivePresenter.overnight_card_html(None, "buy", None)
     assert "尚未取得" in html
@@ -281,6 +288,7 @@ def test_overnight_l1_html_no_ctx():
 
 
 # ── drop_scenario_html ────────────────────────────────────────────────────────
+
 
 def test_drop_scenario_html_not_in_drop():
     from src.engines.live_decision import LiveStatus
@@ -316,6 +324,7 @@ def test_drop_scenario_html_entry_reconfirmed():
 
 
 # ── present() integration ─────────────────────────────────────────────────────
+
 
 def test_present_returns_live_card():
     from src.engines.live_decision import LiveStatus

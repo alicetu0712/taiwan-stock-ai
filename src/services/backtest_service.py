@@ -8,7 +8,6 @@ dashboard/pages/backtest.py 的 @st.cache_data 函數委託此 Service。
 import logging
 from collections import defaultdict
 from datetime import date
-from typing import Optional
 
 import pandas as pd
 
@@ -316,7 +315,9 @@ class BacktestService:
             )
             s.close()
         except Exception as e:
-            logger.exception(f"BacktestService.compute_signal_quality DB query failed: {e}")
+            logger.exception(
+                f"BacktestService.compute_signal_quality DB query failed: {e}"
+            )
             return {}
 
         price_map: dict = defaultdict(list)
@@ -367,6 +368,7 @@ class BacktestService:
                 corr, _ = _spearmanr(v20[f], v20["ret_20"])
                 ic20 = round(float(corr), 4)
                 import math
+
                 # Fisher z t-stat approximation
                 t20 = round(ic20 * math.sqrt(n20), 4)
 
@@ -374,6 +376,7 @@ class BacktestService:
                 corr, _ = _spearmanr(v60[f], v60["ret_60"])
                 ic60 = round(float(corr), 4)
                 import math
+
                 t60 = round(ic60 * math.sqrt(n60), 4)
 
             factor_ic[f] = {
@@ -399,10 +402,14 @@ class BacktestService:
                 if len(v) < min_obs:
                     continue
                 corr, _ = _spearmanr(v[f], v["ret_20"])
-                monthly_rows.append({"ym": ym, "factor": f, "ic_20": round(float(corr), 4), "n": len(v)})
+                monthly_rows.append(
+                    {"ym": ym, "factor": f, "ic_20": round(float(corr), 4), "n": len(v)}
+                )
 
-        monthly_ic_df = pd.DataFrame(monthly_rows) if monthly_rows else pd.DataFrame(
-            columns=["ym", "factor", "ic_20", "n"]
+        monthly_ic_df = (
+            pd.DataFrame(monthly_rows)
+            if monthly_rows
+            else pd.DataFrame(columns=["ym", "factor", "ic_20", "n"])
         )
 
         # ── IC IR（月 IC 序列的均值/標準差）───────────────────
@@ -438,6 +445,7 @@ class BacktestService:
         """
         try:
             from src.database import DailyPrice, Recommendation, get_session
+
             s = get_session()
             recs = (
                 s.query(Recommendation)
@@ -460,9 +468,12 @@ class BacktestService:
 
         # price_map: stock_id -> sorted [(date, open, high, low, close, volume)]
         from collections import defaultdict
+
         price_map: dict = defaultdict(list)
         for p in price_rows:
-            price_map[p.stock_id].append((p.date, p.open, p.high, p.low, p.close, p.volume))
+            price_map[p.stock_id].append(
+                (p.date, p.open, p.high, p.low, p.close, p.volume)
+            )
 
         # 去重（同股 20 交易日內只取第一筆）
         last_date: dict = {}
@@ -473,7 +484,9 @@ class BacktestService:
                 deduped.append(r)
                 last_date[r.stock_id] = r.date
             else:
-                tdays = sum(1 for d, *_ in price_map.get(r.stock_id, []) if prev < d <= r.date)
+                tdays = sum(
+                    1 for d, *_ in price_map.get(r.stock_id, []) if prev < d <= r.date
+                )
                 if tdays >= 20:
                     deduped.append(r)
                     last_date[r.stock_id] = r.date
@@ -481,12 +494,12 @@ class BacktestService:
         # 建立 PriceTrendAnalyzer 並計算每筆推薦的 V2 指標
         try:
             from src.analyzers.price_trend import PriceTrendAnalyzer
+
             pt_engine = PriceTrendAnalyzer()
         except Exception as e:
             logger.error(f"PriceTrendAnalyzer import failed: {e}")
             return {}
 
-        import math
         rows_out = []
         today_dt = date.today()
 
@@ -499,11 +512,20 @@ class BacktestService:
 
             # 組成 DataFrame 供 PriceTrendAnalyzer 使用
             import pandas as _pd
-            hist_df = _pd.DataFrame([
-                {"date": str(d), "open": o, "high": h, "low": lo,
-                 "close": c, "volume": v}
-                for d, o, h, lo, c, v in hist[-90:]
-            ])
+
+            hist_df = _pd.DataFrame(
+                [
+                    {
+                        "date": str(d),
+                        "open": o,
+                        "high": h,
+                        "low": lo,
+                        "close": c,
+                        "volume": v,
+                    }
+                    for d, o, h, lo, c, v in hist[-90:]
+                ]
+            )
 
             # 重跑 V2 分析
             try:
@@ -512,26 +534,32 @@ class BacktestService:
                 logger.debug(f"PT analyze failed for {r.stock_id}: {_exc}")
                 pt_result = None
 
-            pt_score  = pt_result.price_trend_score if pt_result else 0.0
-            setup     = pt_result.setup_type         if pt_result else "none"
-            signal    = pt_result.trade_signal       if pt_result else "wait"
-            ma20_gap  = pt_result.ma20_gap           if pt_result else None
-            ma60_gap  = pt_result.ma60_gap           if pt_result else None
-            vol_ratio = pt_result.volume_ratio       if pt_result else None
-            ma60_slope = pt_result.ma60_slope        if pt_result else "flat"
-            pt_ma20   = pt_result.ma20               if pt_result else None
-            pt_ma60   = pt_result.ma60               if pt_result else None
+            pt_score = pt_result.price_trend_score if pt_result else 0.0
+            setup = pt_result.setup_type if pt_result else "none"
+            signal = pt_result.trade_signal if pt_result else "wait"
+            ma20_gap = pt_result.ma20_gap if pt_result else None
+            ma60_gap = pt_result.ma60_gap if pt_result else None
+            vol_ratio = pt_result.volume_ratio if pt_result else None
+            ma60_slope = pt_result.ma60_slope if pt_result else "flat"
+            pt_ma20 = pt_result.ma20 if pt_result else None
+            pt_ma60 = pt_result.ma60 if pt_result else None
 
             # V2 關卡判斷
             v2_pass = (pt_score >= 60) and (setup != "breakdown") and (signal != "sell")
 
             # MA60 支撐候選分組（條件：價格 < MA20 且 MA20 > MA60 且 MA60 向上 且縮量）
             ma60_bracket = None
-            if (ma20_gap is not None and ma20_gap < 0
-                    and ma60_gap is not None and abs(ma60_gap) <= 5.0
-                    and ma60_slope == "up"
-                    and pt_ma20 is not None and pt_ma60 is not None and pt_ma20 > pt_ma60
-                    and (vol_ratio is None or vol_ratio <= 1.0)):
+            if (
+                ma20_gap is not None
+                and ma20_gap < 0
+                and ma60_gap is not None
+                and abs(ma60_gap) <= 5.0
+                and ma60_slope == "up"
+                and pt_ma20 is not None
+                and pt_ma60 is not None
+                and pt_ma20 > pt_ma60
+                and (vol_ratio is None or vol_ratio <= 1.0)
+            ):
                 ab = abs(ma60_gap)
                 if ab <= 1.0:
                     ma60_bracket = "≤1%"
@@ -561,7 +589,7 @@ class BacktestService:
             # 計算前向報酬
             sp_close = [(d, c) for d, _, _, _, c, _ in sp_full]
             s20, entry = _ret_at(sp_close, r.date, 20)
-            s60, _     = _ret_at(sp_close, r.date, 60)
+            s60, _ = _ret_at(sp_close, r.date, 60)
 
             # 資料例外處理（不合成假報酬，全部排除主要統計）
             data_flag = None
@@ -592,27 +620,29 @@ class BacktestService:
             if b0050_60 is not None:
                 b0050_60 = round(b0050_60 - ROUND_TRIP_COST, 2)
 
-            rows_out.append({
-                "date":        r.date,
-                "stock_id":    r.stock_id,
-                "stock_name":  r.stock_name or "",
-                "pt_score":    round(pt_score, 1),
-                "setup":       setup,
-                "signal":      signal,
-                "ma20_gap":    round(ma20_gap, 1) if ma20_gap is not None else None,
-                "ma60_gap":    round(ma60_gap, 1) if ma60_gap is not None else None,
-                "vol_ratio":   round(vol_ratio, 2) if vol_ratio is not None else None,
-                "dev_bracket": dev_bracket,
-                "ma60_bracket": ma60_bracket,
-                "v2_pass":     v2_pass,
-                "ret_20d":     s20,
-                "ret_60d":     s60,
-                "b0050_20":    b0050_20,
-                "b0050_60":    b0050_60,
-                "alpha_20d":   _alpha(s20, b0050_20),
-                "alpha_60d":   _alpha(s60, b0050_60),
-                "data_flag":   data_flag,
-            })
+            rows_out.append(
+                {
+                    "date": r.date,
+                    "stock_id": r.stock_id,
+                    "stock_name": r.stock_name or "",
+                    "pt_score": round(pt_score, 1),
+                    "setup": setup,
+                    "signal": signal,
+                    "ma20_gap": round(ma20_gap, 1) if ma20_gap is not None else None,
+                    "ma60_gap": round(ma60_gap, 1) if ma60_gap is not None else None,
+                    "vol_ratio": round(vol_ratio, 2) if vol_ratio is not None else None,
+                    "dev_bracket": dev_bracket,
+                    "ma60_bracket": ma60_bracket,
+                    "v2_pass": v2_pass,
+                    "ret_20d": s20,
+                    "ret_60d": s60,
+                    "b0050_20": b0050_20,
+                    "b0050_60": b0050_60,
+                    "alpha_20d": _alpha(s20, b0050_20),
+                    "alpha_60d": _alpha(s60, b0050_60),
+                    "data_flag": data_flag,
+                }
+            )
 
         if not rows_out:
             return {}
@@ -621,52 +651,58 @@ class BacktestService:
 
         def _group_stats(sub: pd.DataFrame, hold: int) -> dict:
             """計算一個子集的彙總指標。"""
-            ret_col   = f"ret_{hold}d"
+            ret_col = f"ret_{hold}d"
             alpha_col = f"alpha_{hold}d"
             r = sub[ret_col].dropna()
             a = sub[alpha_col].dropna()
             n = len(r)
             if n == 0:
                 return {"n": 0}
-            mean_ret   = round(r.mean(), 2)
+            mean_ret = round(r.mean(), 2)
             mean_alpha = round(a.mean(), 2) if len(a) else None
-            win_rate   = round((r > 0).mean() * 100, 1)
-            sharpe     = round(r.mean() / r.std() * (252 / hold) ** 0.5, 2) if r.std() > 0 else None
-            cum        = (1 + r / 100).cumprod()
-            mdd        = round(((cum - cum.cummax()) / cum.cummax() * 100).min(), 2)
+            win_rate = round((r > 0).mean() * 100, 1)
+            sharpe = (
+                round(r.mean() / r.std() * (252 / hold) ** 0.5, 2)
+                if r.std() > 0
+                else None
+            )
+            cum = (1 + r / 100).cumprod()
+            mdd = round(((cum - cum.cummax()) / cum.cummax() * 100).min(), 2)
             return {
-                "n":          n,
-                "mean_ret":   mean_ret,
+                "n": n,
+                "mean_ret": mean_ret,
                 "mean_alpha": mean_alpha,
-                "win_rate":   win_rate,
-                "sharpe":     sharpe,
-                "mdd":        mdd,
+                "win_rate": win_rate,
+                "sharpe": sharpe,
+                "mdd": mdd,
             }
 
         # ── 彙總表：V1 / V2-pass / V2-fail ──────────────────────
         groups = {
-            "V1 全集":   detail,
-            "V2 通過":   detail[detail["v2_pass"]],
-            "V2 篩掉":   detail[~detail["v2_pass"]],
+            "V1 全集": detail,
+            "V2 通過": detail[detail["v2_pass"]],
+            "V2 篩掉": detail[~detail["v2_pass"]],
         }
         summary_rows = []
         for label, sub in groups.items():
             s20 = _group_stats(sub, 20)
             s60 = _group_stats(sub, 60)
-            summary_rows.append({
-                "策略":        label,
-                "樣本數":      s20.get("n", 0),
-                "20D均報酬%":  s20.get("mean_ret"),
-                "20D Alpha%":  s20.get("mean_alpha"),
-                "20D勝率%":    s20.get("win_rate"),
-                "20D Sharpe":  s20.get("sharpe"),
-                "20D MDD%":    s20.get("mdd"),
-                "60D均報酬%":  s60.get("mean_ret"),
-                "60D Alpha%":  s60.get("mean_alpha"),
-                "60D勝率%":    s60.get("win_rate"),
-                "60D Sharpe":  s60.get("sharpe"),
-                "60D MDD%":    s60.get("mdd"),
-            })
+            summary_rows.append(
+                {
+                    "策略": label,
+                    "樣本數": s20.get("n", 0),
+                    "20D均報酬%": s20.get("mean_ret"),
+                    "20D Alpha%": s20.get("mean_alpha"),
+                    "20D勝率%": s20.get("win_rate"),
+                    "20D Sharpe": s20.get("sharpe"),
+                    "20D MDD%": s20.get("mdd"),
+                    "60D均報酬%": s60.get("mean_ret"),
+                    "60D Alpha%": s60.get("mean_alpha"),
+                    "60D勝率%": s60.get("win_rate"),
+                    "60D Sharpe": s60.get("sharpe"),
+                    "60D MDD%": s60.get("mdd"),
+                }
+            )
         summary_df = pd.DataFrame(summary_rows)
 
         # ── 按 setup_type 分組 ──────────────────────────────────
@@ -674,18 +710,22 @@ class BacktestService:
         for setup_val, sub in detail.groupby("setup"):
             s20 = _group_stats(sub, 20)
             s60 = _group_stats(sub, 60)
-            setup_rows.append({
-                "Setup":       setup_val,
-                "樣本數":      s20.get("n", 0),
-                "20D均報酬%":  s20.get("mean_ret"),
-                "20D勝率%":    s20.get("win_rate"),
-                "20D Sharpe":  s20.get("sharpe"),
-                "20D MDD%":    s20.get("mdd"),
-                "60D均報酬%":  s60.get("mean_ret"),
-                "60D勝率%":    s60.get("win_rate"),
-                "60D Sharpe":  s60.get("sharpe"),
-            })
-        by_setup_df = pd.DataFrame(setup_rows).sort_values("20D均報酬%", ascending=False)
+            setup_rows.append(
+                {
+                    "Setup": setup_val,
+                    "樣本數": s20.get("n", 0),
+                    "20D均報酬%": s20.get("mean_ret"),
+                    "20D勝率%": s20.get("win_rate"),
+                    "20D Sharpe": s20.get("sharpe"),
+                    "20D MDD%": s20.get("mdd"),
+                    "60D均報酬%": s60.get("mean_ret"),
+                    "60D勝率%": s60.get("win_rate"),
+                    "60D Sharpe": s60.get("sharpe"),
+                }
+            )
+        by_setup_df = pd.DataFrame(setup_rows).sort_values(
+            "20D均報酬%", ascending=False
+        )
 
         # ── 按乖離率分組 ────────────────────────────────────────
         dev_order = ["< 0%", "0–3%", "3–5%", "5–8%", "8–12%", "≥12%", "—"]
@@ -693,21 +733,25 @@ class BacktestService:
         for bracket, sub in detail.groupby("dev_bracket"):
             s20 = _group_stats(sub, 20)
             s60 = _group_stats(sub, 60)
-            dev_rows.append({
-                "MA20 乖離":   bracket,
-                "樣本數":      s20.get("n", 0),
-                "20D均報酬%":  s20.get("mean_ret"),
-                "20D勝率%":    s20.get("win_rate"),
-                "20D Sharpe":  s20.get("sharpe"),
-                "20D MDD%":    s20.get("mdd"),
-                "60D均報酬%":  s60.get("mean_ret"),
-                "60D勝率%":    s60.get("win_rate"),
-            })
+            dev_rows.append(
+                {
+                    "MA20 乖離": bracket,
+                    "樣本數": s20.get("n", 0),
+                    "20D均報酬%": s20.get("mean_ret"),
+                    "20D勝率%": s20.get("win_rate"),
+                    "20D Sharpe": s20.get("sharpe"),
+                    "20D MDD%": s20.get("mdd"),
+                    "60D均報酬%": s60.get("mean_ret"),
+                    "60D勝率%": s60.get("win_rate"),
+                }
+            )
         by_dev_df = (
             pd.DataFrame(dev_rows)
-            .assign(_order=lambda df: df["MA20 乖離"].map(
-                {v: i for i, v in enumerate(dev_order)}
-            ))
+            .assign(
+                _order=lambda df: df["MA20 乖離"].map(
+                    {v: i for i, v in enumerate(dev_order)}
+                )
+            )
             .sort_values("_order")
             .drop(columns="_order")
             .reset_index(drop=True)
@@ -723,44 +767,50 @@ class BacktestService:
                 continue
             s20 = _group_stats(sub, 20)
             s60 = _group_stats(sub, 60)
-            ma60_rows.append({
-                "MA60 距離":   bracket,
-                "樣本數":      s20.get("n", 0),
-                "20D均報酬%":  s20.get("mean_ret"),
-                "20D Alpha%":  s20.get("mean_alpha"),
-                "20D勝率%":    s20.get("win_rate"),
-                "20D Sharpe":  s20.get("sharpe"),
-                "20D MDD%":    s20.get("mdd"),
-                "60D均報酬%":  s60.get("mean_ret"),
-                "60D Alpha%":  s60.get("mean_alpha"),
-                "60D勝率%":    s60.get("win_rate"),
-                "60D Sharpe":  s60.get("sharpe"),
-            })
+            ma60_rows.append(
+                {
+                    "MA60 距離": bracket,
+                    "樣本數": s20.get("n", 0),
+                    "20D均報酬%": s20.get("mean_ret"),
+                    "20D Alpha%": s20.get("mean_alpha"),
+                    "20D勝率%": s20.get("win_rate"),
+                    "20D Sharpe": s20.get("sharpe"),
+                    "20D MDD%": s20.get("mdd"),
+                    "60D均報酬%": s60.get("mean_ret"),
+                    "60D Alpha%": s60.get("mean_alpha"),
+                    "60D勝率%": s60.get("win_rate"),
+                    "60D Sharpe": s60.get("sharpe"),
+                }
+            )
         # 全部候選合計 + V1 基準對照
         if not ma60_candidates.empty:
-            for label, sub in [("全部 MA60 候選 ≤5%", ma60_candidates),
-                                ("V1 全集（對照）", detail)]:
+            for label, sub in [
+                ("全部 MA60 候選 ≤5%", ma60_candidates),
+                ("V1 全集（對照）", detail),
+            ]:
                 s20 = _group_stats(sub, 20)
                 s60 = _group_stats(sub, 60)
-                ma60_rows.append({
-                    "MA60 距離":   label,
-                    "樣本數":      s20.get("n", 0),
-                    "20D均報酬%":  s20.get("mean_ret"),
-                    "20D Alpha%":  s20.get("mean_alpha"),
-                    "20D勝率%":    s20.get("win_rate"),
-                    "20D Sharpe":  s20.get("sharpe"),
-                    "20D MDD%":    s20.get("mdd"),
-                    "60D均報酬%":  s60.get("mean_ret"),
-                    "60D Alpha%":  s60.get("mean_alpha"),
-                    "60D勝率%":    s60.get("win_rate"),
-                    "60D Sharpe":  s60.get("sharpe"),
-                })
+                ma60_rows.append(
+                    {
+                        "MA60 距離": label,
+                        "樣本數": s20.get("n", 0),
+                        "20D均報酬%": s20.get("mean_ret"),
+                        "20D Alpha%": s20.get("mean_alpha"),
+                        "20D勝率%": s20.get("win_rate"),
+                        "20D Sharpe": s20.get("sharpe"),
+                        "20D MDD%": s20.get("mdd"),
+                        "60D均報酬%": s60.get("mean_ret"),
+                        "60D Alpha%": s60.get("mean_alpha"),
+                        "60D勝率%": s60.get("win_rate"),
+                        "60D Sharpe": s60.get("sharpe"),
+                    }
+                )
         by_ma60_df = pd.DataFrame(ma60_rows)
 
         return {
-            "summary":      summary_df,
-            "by_setup":     by_setup_df,
+            "summary": summary_df,
+            "by_setup": by_setup_df,
             "by_deviation": by_dev_df,
-            "by_ma60_gap":  by_ma60_df,
-            "detail":       detail,
+            "by_ma60_gap": by_ma60_df,
+            "detail": detail,
         }

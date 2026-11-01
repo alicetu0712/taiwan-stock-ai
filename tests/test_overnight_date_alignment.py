@@ -15,13 +15,10 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.us_trading_calendar import (
     is_us_trading_day,
-    prev_us_trading_day,
     tw_exec_to_us_market_date,
     us_session_close_utc,
 )
@@ -30,7 +27,7 @@ from src.core.us_trading_calendar import (
 class TestIsUsTradingDay:
 
     def test_weekday_non_holiday(self):
-        assert is_us_trading_day(date(2026, 10, 21)) is True   # Wednesday
+        assert is_us_trading_day(date(2026, 10, 21)) is True  # Wednesday
 
     def test_saturday_not_trading(self):
         assert is_us_trading_day(date(2026, 10, 24)) is False
@@ -39,7 +36,7 @@ class TestIsUsTradingDay:
         assert is_us_trading_day(date(2026, 10, 25)) is False
 
     def test_nyse_holiday_not_trading(self):
-        assert is_us_trading_day(date(2026, 11, 26)) is False   # Thanksgiving
+        assert is_us_trading_day(date(2026, 11, 26)) is False  # Thanksgiving
 
     def test_christmas_not_trading(self):
         assert is_us_trading_day(date(2026, 12, 25)) is False
@@ -122,17 +119,24 @@ class TestUsSessionCloseUtc:
     def test_available_at_before_tw_open(self):
         # TW opens 09:00 CST = 01:00 UTC next calendar day
         # US close (20:00 or 21:00 UTC) < TW next-day open (01:00 UTC) → always safe
-        from zoneinfo import ZoneInfo
         from datetime import datetime
-        TW = ZoneInfo("Asia/Taipei")
+        from zoneinfo import ZoneInfo
+
+        TW = ZoneInfo("Asia/Taipei")  # noqa: F841
         UTC = ZoneInfo("UTC")
         for us_date in [date(2026, 10, 20), date(2026, 12, 15)]:
             close_utc = us_session_close_utc(us_date)
             # TW execution open = next calendar day 09:00 CST
             from datetime import timedelta
+
             tw_open_et_naive = us_date + timedelta(days=1)
             tw_open_utc = datetime(
-                tw_open_et_naive.year, tw_open_et_naive.month, tw_open_et_naive.day,
-                1, 0, 0, tzinfo=UTC,
+                tw_open_et_naive.year,
+                tw_open_et_naive.month,
+                tw_open_et_naive.day,
+                1,
+                0,
+                0,
+                tzinfo=UTC,
             )
             assert close_utc < tw_open_utc, f"{close_utc} must be before {tw_open_utc}"

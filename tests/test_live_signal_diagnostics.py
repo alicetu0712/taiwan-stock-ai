@@ -28,17 +28,17 @@ from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.database import Base, Recommendation, DailyPrice
-
+from src.database import Base, DailyPrice, Recommendation
 
 # ── Fixed test dates ──────────────────────────────────────────────────────────
 
-SIG_DATE = date(2026, 10, 13)   # signal_date; exec_date = 10/14
+SIG_DATE = date(2026, 10, 13)  # signal_date; exec_date = 10/14
 EXEC_DATE = date(2026, 10, 14)  # next_trading_day(SIG_DATE)
-TODAY     = date(2026, 10, 14)
+TODAY = date(2026, 10, 14)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def db_factory():
@@ -62,29 +62,54 @@ def patched_db(db_factory):
         yield db_factory
 
 
-def _add_rec(factory, stock_id, trade_signal="buy", tier="recommend",
-             is_valid=True, lifecycle_status="active",
-             entry_low=190.0, entry_high=200.0, stop_price=160.0, target1=230.0,
-             signal_date=SIG_DATE, stock_name="TEST"):
+def _add_rec(
+    factory,
+    stock_id,
+    trade_signal="buy",
+    tier="recommend",
+    is_valid=True,
+    lifecycle_status="active",
+    entry_low=190.0,
+    entry_high=200.0,
+    stop_price=160.0,
+    target1=230.0,
+    signal_date=SIG_DATE,
+    stock_name="TEST",
+):
     s = factory()
-    s.add(Recommendation(
-        date=signal_date, stock_id=stock_id, stock_name=stock_name,
-        trade_signal=trade_signal, tier=tier,
-        is_valid=is_valid, lifecycle_status=lifecycle_status,
-        entry_low=entry_low, entry_high=entry_high,
-        stop_price=stop_price, target1=target1,
-        confidence=80.0,
-    ))
+    s.add(
+        Recommendation(
+            date=signal_date,
+            stock_id=stock_id,
+            stock_name=stock_name,
+            trade_signal=trade_signal,
+            tier=tier,
+            is_valid=is_valid,
+            lifecycle_status=lifecycle_status,
+            entry_low=entry_low,
+            entry_high=entry_high,
+            stop_price=stop_price,
+            target1=target1,
+            confidence=80.0,
+        )
+    )
     s.commit()
     s.close()
 
 
 def _add_price(factory, stock_id, price_date=SIG_DATE, close=200.0):
     s = factory()
-    s.add(DailyPrice(
-        stock_id=stock_id, date=price_date,
-        close=close, open=199.0, high=201.0, low=198.0, volume=1000,
-    ))
+    s.add(
+        DailyPrice(
+            stock_id=stock_id,
+            date=price_date,
+            close=close,
+            open=199.0,
+            high=201.0,
+            low=198.0,
+            volume=1000,
+        )
+    )
     s.commit()
     s.close()
 
@@ -92,6 +117,7 @@ def _add_price(factory, stock_id, price_date=SIG_DATE, close=200.0):
 def _run(signal_date=SIG_DATE, today=TODAY):
     """Call _select_live_signals with date.today() patched."""
     from dashboard._pages.live_monitor import _select_live_signals
+
     with patch("dashboard._pages.live_monitor.date") as mock_date:
         mock_date.today.return_value = today
         mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
@@ -101,6 +127,7 @@ def _run(signal_date=SIG_DATE, today=TODAY):
 # ─────────────────────────────────────────────────────────────────────────────
 # 核心不變量：eligible_count == len(eligible_recs)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestEligibleCountConsistency:
 
@@ -131,6 +158,7 @@ class TestEligibleCountConsistency:
 # ─────────────────────────────────────────────────────────────────────────────
 # 排除計數正確性
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestExclusionCounts:
 
@@ -181,9 +209,11 @@ class TestExclusionCounts:
 
     def test_mixed_tiers_partial_eligible(self, patched_db):
         """混合 tier：recommend BUY 進 eligible，其餘被 excl_non_core。"""
-        _add_rec(patched_db, "3042", tier="recommend")        # eligible
-        _add_rec(patched_db, "2615", tier="opportunity")      # excl_non_core
-        _add_rec(patched_db, "3702", tier="watch", trade_signal="strong_buy")  # excl_non_core
+        _add_rec(patched_db, "3042", tier="recommend")  # eligible
+        _add_rec(patched_db, "2615", tier="opportunity")  # excl_non_core
+        _add_rec(
+            patched_db, "3702", tier="watch", trade_signal="strong_buy"
+        )  # excl_non_core
         for sid in ["3042", "2615", "3702"]:
             _add_price(patched_db, sid)
         eligible, diag = _run()
@@ -205,6 +235,7 @@ class TestExclusionCounts:
 # 特殊情況
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestEdgeCases:
 
     def test_no_recommendations_pipeline_not_run(self, patched_db):
@@ -225,9 +256,9 @@ class TestEdgeCases:
 
     def test_buy_count_plus_exclusions_equals_total_buy(self, patched_db):
         """計數一致性：excl_invalid + excl_non_core + excl_lifecycle + eligible = buy_count。"""
-        _add_rec(patched_db, "3042", tier="recommend")             # eligible
-        _add_rec(patched_db, "2615", tier="opportunity")           # excl_non_core
-        _add_rec(patched_db, "9999", is_valid=False)               # excl_invalid
+        _add_rec(patched_db, "3042", tier="recommend")  # eligible
+        _add_rec(patched_db, "2615", tier="opportunity")  # excl_non_core
+        _add_rec(patched_db, "9999", is_valid=False)  # excl_invalid
         _add_rec(patched_db, "8888", lifecycle_status="invalidated")  # excl_lifecycle
         for sid in ["3042", "2615", "9999", "8888"]:
             _add_price(patched_db, sid)
@@ -240,9 +271,7 @@ class TestEdgeCases:
             + diag["not_yet_executable"]
             + diag["eligible_count"]
         )
-        assert computed_total == diag["buy_count"], (
-            f"Counts don't add up: {diag}"
-        )
+        assert computed_total == diag["buy_count"], f"Counts don't add up: {diag}"
 
     def test_eligible_stocks_list_matches_eligible_recs(self, patched_db):
         """diag['eligible_stocks'] 的 sids 與 eligible_recs 的 sids 一致。"""

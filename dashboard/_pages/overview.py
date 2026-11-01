@@ -86,6 +86,7 @@ def _render_trading_reference(
 
     try:
         from src.core.trading_calendar import next_trading_day
+
         next_td = next_trading_day(selected_date)
     except Exception:
         next_td = None
@@ -113,7 +114,11 @@ def _render_trading_reference(
 </div>"""
 
     # — signal processing —
-    buy_recs = [r for r in recs if (r.get("trade_signal") or "").lower() in ("buy", "strong_buy")]
+    buy_recs = [
+        r
+        for r in recs
+        if (r.get("trade_signal") or "").lower() in ("buy", "strong_buy")
+    ]
     wait_recs = [r for r in recs if (r.get("trade_signal") or "").lower() == "wait"]
 
     sig_html = ""
@@ -122,14 +127,14 @@ def _render_trading_reference(
         mobile_cards = ""
 
         for r in buy_recs:
-            name       = r.get("name") or r.get("sid", "—")
-            sid        = r.get("sid", "")
-            entry_low  = r.get("entry_low")
+            name = r.get("name") or r.get("sid", "—")
+            sid = r.get("sid", "")
+            entry_low = r.get("entry_low")
             entry_high = r.get("entry_high")
-            stop_p     = r.get("stop_price")
-            t1         = r.get("target1")
-            ma20_gap   = r.get("ma20_gap")
-            price      = r.get("price")
+            stop_p = r.get("stop_price")
+            t1 = r.get("target1")
+            ma20_gap = r.get("ma20_gap")
+            price = r.get("price")
             price_date = r.get("price_date")
 
             chase_badge = ""
@@ -142,7 +147,9 @@ def _render_trading_reference(
 
             price_note = ""
             if price:
-                src = "前收盤" if (price_date and price_date < selected_date) else "收盤"
+                src = (
+                    "前收盤" if (price_date and price_date < selected_date) else "收盤"
+                )
                 price_note = (
                     f'<span style="font-size:13px;opacity:0.55;margin-left:7px;font-weight:400">'
                     f"{src} {price:.1f}</span>"
@@ -155,7 +162,7 @@ def _render_trading_reference(
             else:
                 entry_str = "—"
             stop_str = f"{stop_p:.1f}" if stop_p else "—"
-            t1_str   = f"{t1:.1f}"    if t1    else "—"
+            t1_str = f"{t1:.1f}" if t1 else "—"
 
             # desktop row
             desktop_rows += f"""
@@ -320,9 +327,9 @@ def _render_candidate_pool(stock_prices: dict) -> None:
 
     # ── 狀態分組 ───────────────────────────────────────────────
     # Issue 10: 加入 wait_pullback 群組
-    near_entry_group    = [c for c in active if c.status == "near_entry"]
+    near_entry_group = [c for c in active if c.status == "near_entry"]
     wait_pullback_group = [c for c in active if c.status == "wait_pullback"]
-    watching_group      = [c for c in active if c.status in ("watching", "overdue")]
+    watching_group = [c for c in active if c.status in ("watching", "overdue")]
 
     # Issue 9: 用 as_of_date 判斷「最新交易日新進」，不用 today()
     new_entries = [c for c in active if as_of_date and c.first_seen_date == as_of_date]
@@ -332,7 +339,7 @@ def _render_candidate_pool(stock_prices: dict) -> None:
         st.markdown(
             f'<div class="section-title">接近進場（{len(near_entry_group)} 檔）'
             f'<span style="font-size:0.75rem;font-weight:400;color:#90a4ae;margin-left:8px">'
-            f'型態接近突破確認，進場條件即將成立</span></div>',
+            f"型態接近突破確認，進場條件即將成立</span></div>",
             unsafe_allow_html=True,
         )
         for c in near_entry_group:
@@ -343,7 +350,7 @@ def _render_candidate_pool(stock_prices: dict) -> None:
         st.markdown(
             f'<div class="section-title">等待回檔（{len(wait_pullback_group)} 檔）'
             f'<span style="font-size:0.75rem;font-weight:400;color:#90a4ae;margin-left:8px">'
-            f'現價偏高，等回測至合理進場區後再考慮進場</span></div>',
+            f"現價偏高，等回測至合理進場區後再考慮進場</span></div>",
             unsafe_allow_html=True,
         )
         for c in wait_pullback_group:
@@ -354,7 +361,7 @@ def _render_candidate_pool(stock_prices: dict) -> None:
         st.markdown(
             f'<div class="section-title">觀察中（{len(watching_group)} 檔）'
             f'<span style="font-size:0.75rem;font-weight:400;color:#90a4ae;margin-left:8px">'
-            f'符合追蹤條件，尚未接近進場時機</span></div>',
+            f"符合追蹤條件，尚未接近進場時機</span></div>",
             unsafe_allow_html=True,
         )
         for c in watching_group:
@@ -362,10 +369,12 @@ def _render_candidate_pool(stock_prices: dict) -> None:
 
     # Issue 9: 標示最新交易日新進，不說「今日」
     if new_entries:
-        new_names = "、".join(
-            (c.stock_name or c.stock_id) for c in new_entries[:5]
+        new_names = "、".join((c.stock_name or c.stock_id) for c in new_entries[:5])
+        extra = (
+            f"等 {len(new_entries)} 檔"
+            if len(new_entries) > 5
+            else f"{len(new_entries)} 檔"
         )
-        extra = f"等 {len(new_entries)} 檔" if len(new_entries) > 5 else f"{len(new_entries)} 檔"
         st.caption(f"最新交易日新進候選（{as_of_label}）：{new_names}（{extra}）")
 
     if not active:
@@ -381,13 +390,15 @@ def _render_candidate_pool(stock_prices: dict) -> None:
             ):
                 for c in latest_exit_list:
                     reason_map = {
-                        "TRIGGERED_BUY":   "正式 BUY 觸發",
-                        "THESIS_FAILED":   "技術型態失效或賣出訊號",
-                        "EXPIRED":         f"觀察滿 {c.trading_days_watched} 交易日未觸發 BUY",
+                        "TRIGGERED_BUY": "正式 BUY 觸發",
+                        "THESIS_FAILED": "技術型態失效或賣出訊號",
+                        "EXPIRED": f"觀察滿 {c.trading_days_watched} 交易日未觸發 BUY",
                         "NOT_IN_UNIVERSE": "不再出現於分析宇宙",
                     }
                     raw_reason = c.exit_reason or ""
-                    reason_key = raw_reason.split(":")[0] if ":" in raw_reason else raw_reason
+                    reason_key = (
+                        raw_reason.split(":")[0] if ":" in raw_reason else raw_reason
+                    )
                     reason_text = reason_map.get(reason_key, raw_reason or "—")
                     icon = "✅" if reason_key == "TRIGGERED_BUY" else "❌"
                     name = c.stock_name or c.stock_id
@@ -409,11 +420,15 @@ def _render_candidate_pool(stock_prices: dict) -> None:
                 col_a, col_b = st.columns(2)
                 col_a.metric(
                     "平均等待交易日",
-                    f"{stats['avg_wait_days']:.1f}" if stats["avg_wait_days"] else "—"
+                    f"{stats['avg_wait_days']:.1f}" if stats["avg_wait_days"] else "—",
                 )
                 col_b.metric(
                     "BUY 轉換率",
-                    f"{stats['conversion_rate']:.1f}%" if stats["conversion_rate"] else "—",
+                    (
+                        f"{stats['conversion_rate']:.1f}%"
+                        if stats["conversion_rate"]
+                        else "—"
+                    ),
                     help="分母 = 已完成週期（觸發BUY + 失效退出），不含仍在觀察的候選",
                 )
             else:
@@ -424,8 +439,9 @@ def _render_candidate_pool(stock_prices: dict) -> None:
             )
 
 
-def _render_candidate_card(cand, today_history: dict, stock_prices: dict,
-                           highlight: bool = False) -> None:
+def _render_candidate_card(
+    cand, today_history: dict, stock_prices: dict, highlight: bool = False
+) -> None:
     """渲染單一候選卡片。"""
     name = cand.stock_name or cand.stock_id
     sid = cand.stock_id
@@ -437,25 +453,41 @@ def _render_candidate_card(cand, today_history: dict, stock_prices: dict,
 
     # 狀態徽章（Issue 10）
     status_badges = {
-        "near_entry":    ('<span style="background:#e65100;color:#fff;border-radius:4px;'
-                          'padding:2px 8px;font-size:0.68rem;font-weight:700">接近進場</span>',
-                          "#1a1a2e", "#e65100"),
-        "wait_pullback": ('<span style="background:#6a1b9a;color:#fff;border-radius:4px;'
-                          'padding:2px 8px;font-size:0.68rem;font-weight:700">等待回檔</span>',
-                          "#0d0d1a", "#6a1b9a"),
-        "watching":      ('<span style="background:#1565c0;color:#fff;border-radius:4px;'
-                          'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察中</span>',
-                          "#0d0d1a", "#1565c0"),
-        "overdue":       ('<span style="background:#5d4037;color:#fff;border-radius:4px;'
-                          'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察逾期</span>',
-                          "#0d0d1a", "#5d4037"),
+        "near_entry": (
+            '<span style="background:#e65100;color:#fff;border-radius:4px;'
+            'padding:2px 8px;font-size:0.68rem;font-weight:700">接近進場</span>',
+            "#1a1a2e",
+            "#e65100",
+        ),
+        "wait_pullback": (
+            '<span style="background:#6a1b9a;color:#fff;border-radius:4px;'
+            'padding:2px 8px;font-size:0.68rem;font-weight:700">等待回檔</span>',
+            "#0d0d1a",
+            "#6a1b9a",
+        ),
+        "watching": (
+            '<span style="background:#1565c0;color:#fff;border-radius:4px;'
+            'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察中</span>',
+            "#0d0d1a",
+            "#1565c0",
+        ),
+        "overdue": (
+            '<span style="background:#5d4037;color:#fff;border-radius:4px;'
+            'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察逾期</span>',
+            "#0d0d1a",
+            "#5d4037",
+        ),
     }
     badge_html, bg_color, border_color = status_badges.get(
-        cand.status, ('', "#0d0d1a", "#444")
+        cand.status, ("", "#0d0d1a", "#444")
     )
 
     # 觀察天數顯示
-    overdue_warn = f' <span style="color:#ff7043;font-size:0.7rem">（逾期）</span>' if overdue else ""
+    overdue_warn = (
+        ' <span style="color:#ff7043;font-size:0.7rem">（逾期）</span>'
+        if overdue
+        else ""
+    )
     days_str = f"已觀察 {days} 個交易日{overdue_warn}"
 
     # 今日變化
@@ -472,15 +504,14 @@ def _render_candidate_card(cand, today_history: dict, stock_prices: dict,
 
     # 退出條件說明
     exit_cond_map = {
-        "breakout":     "突破失敗、量縮回落或型態轉為 breakdown",
+        "breakout": "突破失敗、量縮回落或型態轉為 breakdown",
         "near_breakout": "突破失敗、下跌跌破近期低點或訊號轉賣",
         "pullback_buy": "跌破 MA10/MA20 且無力收復",
         "pullback_hold": "跌破 MA20 收盤",
-        "trending":     "趨勢結構破壞（跌破 MA60 或 breakdown 型態）",
+        "trending": "趨勢結構破壞（跌破 MA60 或 breakdown 型態）",
     }
     exit_when = exit_cond_map.get(
-        cand.entry_setup_type or "none",
-        f"達第 20 個交易日仍無 BUY 訊號，或技術型態失效"
+        cand.entry_setup_type or "none", "達第 20 個交易日仍無 BUY 訊號，或技術型態失效"
     )
 
     score_str = f"{cand.latest_total_score:.0f}" if cand.latest_total_score else "—"
@@ -647,7 +678,7 @@ def render_rec_card(
 
     # ── Price source label (Phase 3) ──────────────────────────────
     _price_date = r.get("price_date")
-    _price_val  = r.get("price")
+    _price_val = r.get("price")
     if _price_date and _price_val:
         _price_src_label = (
             f'<span style="font-size:0.6rem;color:#aaa;margin-left:5px">'
@@ -658,6 +689,7 @@ def render_rec_card(
 
     # ── MA20 乖離率白話 note ──────────────────────────────────────
     from config import ENTRY_QUALITY as _EQ
+
     _chase_gap = _EQ.get("chase_gap_pct", 5.0)
     _ma_gap = card.ma20_gap
     if _ma_gap > _chase_gap:
@@ -665,11 +697,15 @@ def render_rec_card(
         _ma_gap_color = "#e64a19"
         _ma_desc = f"目前股價高於月線 {_ma_gap:.1f}%，已偏離均線較遠，留意追高風險。"
         _chase_html = (
-            '<div style="margin-top:6px;font-size:0.76rem;color:#bf360c;'
-            'background:rgba(255,112,67,0.08);padding:6px 8px;border-radius:4px;line-height:1.6">'
-            '⚠️ <b>什麼是追高？</b> 股票已漲一段，才在相對高位買進，可能剛買就遇到回跌。<br>'
-            '好股票不等於好買點。即使模型顯示強買，也需確認進場價格與停損風險。</div>'
-        ) if is_buy else ""
+            (
+                '<div style="margin-top:6px;font-size:0.76rem;color:#bf360c;'
+                'background:rgba(255,112,67,0.08);padding:6px 8px;border-radius:4px;line-height:1.6">'
+                "⚠️ <b>什麼是追高？</b> 股票已漲一段，才在相對高位買進，可能剛買就遇到回跌。<br>"
+                "好股票不等於好買點。即使模型顯示強買，也需確認進場價格與停損風險。</div>"
+            )
+            if is_buy
+            else ""
+        )
     elif _ma_gap > 1.0:
         _ma_border = "#90a4ae"
         _ma_gap_color = "#546e7a"

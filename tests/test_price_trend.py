@@ -5,16 +5,19 @@ test_price_trend.py — MA Structure 判斷優先順序與 MA60 Support Zone
 MA60 Support Zone 必須在一般 neutral (cur > ma20 or cur > ma60) 之前被捕捉到。
 """
 
-import pytest
 from src.analyzers.price_trend import PriceTrendAnalyzer
 
 
 def _mas(ma5=None, ma10=None, ma20=None, ma60=None):
     d = {}
-    if ma5  is not None: d["ma5"]  = float(ma5)
-    if ma10 is not None: d["ma10"] = float(ma10)
-    if ma20 is not None: d["ma20"] = float(ma20)
-    if ma60 is not None: d["ma60"] = float(ma60)
+    if ma5 is not None:
+        d["ma5"] = float(ma5)
+    if ma10 is not None:
+        d["ma10"] = float(ma10)
+    if ma20 is not None:
+        d["ma20"] = float(ma20)
+    if ma60 is not None:
+        d["ma60"] = float(ma60)
     return d
 
 
@@ -110,25 +113,37 @@ class TestMA60StructureOrdering:
 
         # Setup: vol_ratio=1.5 violates the <= 1.0 condition in _detect_setup
         setup = self.az._detect_setup(
-            cur=100.0, mas=mas,
-            ma_trend="neutral", ma20_slope="down", ma60_slope="up",
-            breakout_20d=False, near_20d=False, failed_breakout=False,
+            cur=100.0,
+            mas=mas,
+            ma_trend="neutral",
+            ma20_slope="down",
+            ma60_slope="up",
+            breakout_20d=False,
+            near_20d=False,
+            failed_breakout=False,
             vol_ratio=1.5,
         )
-        assert setup != "ma60_support", (
-            f"vol_ratio=1.5 should block ma60_support setup, got '{setup}'"
-        )
+        assert (
+            setup != "ma60_support"
+        ), f"vol_ratio=1.5 should block ma60_support setup, got '{setup}'"
 
     def test_case5_low_volume_does_trigger_setup(self):
         """With vol_ratio <= 1.0, same position should become ma60_support setup."""
         mas = _mas(ma5=101, ma10=102, ma20=105, ma60=98)
         setup = self.az._detect_setup(
-            cur=100.0, mas=mas,
-            ma_trend="neutral", ma20_slope="down", ma60_slope="up",
-            breakout_20d=False, near_20d=False, failed_breakout=False,
+            cur=100.0,
+            mas=mas,
+            ma_trend="neutral",
+            ma20_slope="down",
+            ma60_slope="up",
+            breakout_20d=False,
+            near_20d=False,
+            failed_breakout=False,
             vol_ratio=0.7,
         )
-        assert setup == "ma60_support", f"Low vol_ratio should yield ma60_support, got '{setup}'"
+        assert (
+            setup == "ma60_support"
+        ), f"Low vol_ratio should yield ma60_support, got '{setup}'"
 
     # ── 一般回歸測試：確保既有路徑不受影響 ─────────────────────────
 

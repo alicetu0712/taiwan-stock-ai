@@ -5,6 +5,7 @@ Reads from: frozen rec dict, LiveDecision (ld), intraday quote, OvernightContext
 Never re-derives: LiveStatus, RAPID_DROP thresholds, overnight risk levels,
                   ExecutionGuidance decisions, BUY/WAIT/SELL signals, rr_current.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,27 +16,27 @@ class LiveCard:
     """Pre-built HTML fragments for one live signal card."""
 
     # ── Header ─────────────────────────────────────────────────────────────
-    signal_label: str        # "BUY ★" or "BUY"
-    signal_color: str        # hex (#1a7f4b / #2ecc71)
-    border_color: str        # from ld.color (live engine state — pass-through)
+    signal_label: str  # "BUY ★" or "BUY"
+    signal_color: str  # hex (#1a7f4b / #2ecc71)
+    border_color: str  # from ld.color (live engine state — pass-through)
 
     # ── Level 1: always visible ─────────────────────────────────────────
-    price_display: str       # HTML: formatted current price with status handling
-    delta_html: str          # HTML: % change vs frozen signal price
-    status_badge_html: str   # HTML: live status badge (pass-through from ld)
-    reason: str              # live engine reason text (pass-through from ld.reason)
-    overnight_l1_html: str   # HTML: compact risk icon + guidance badge
-    plan_str: str            # plain text: "進場 X–X　停損 X　T1 X"
-    rr_display: str          # HTML: R/R value with VISUAL_ONLY color coding
+    price_display: str  # HTML: formatted current price with status handling
+    delta_html: str  # HTML: % change vs frozen signal price
+    status_badge_html: str  # HTML: live status badge (pass-through from ld)
+    reason: str  # live engine reason text (pass-through from ld.reason)
+    overnight_l1_html: str  # HTML: compact risk icon + guidance badge
+    plan_str: str  # plain text: "進場 X–X　停損 X　T1 X"
+    rr_display: str  # HTML: R/R value with VISUAL_ONLY color coding
 
     # ── Level 2: expander content ───────────────────────────────────────
-    buy_note_html: str       # HTML: BUY ≠ good-entry note
-    plain_html: str          # HTML: wrapped ld.plain_text
-    drop_html: str           # HTML: drop scenario three-stage display
-    overnight_full_html: str # HTML: full overnight card with index detail
+    buy_note_html: str  # HTML: BUY ≠ good-entry note
+    plain_html: str  # HTML: wrapped ld.plain_text
+    drop_html: str  # HTML: drop scenario three-stage display
+    overnight_full_html: str  # HTML: full overnight card with index detail
 
     # ── Expansion control ────────────────────────────────────────────────
-    l2_expanded: bool        # True for RAPID_DROP / WATCHING_LOW / ENTRY_RECONFIRMED
+    l2_expanded: bool  # True for RAPID_DROP / WATCHING_LOW / ENTRY_RECONFIRMED
 
 
 class LivePresenter:
@@ -51,16 +52,16 @@ class LivePresenter:
 
     # Overnight risk level → (icon, text_color, bg_color, label)
     _RISK_META: dict[str, tuple] = {
-        "GREEN":   ("🟢", "#00897b", "#e0f2f1", "穩定"),
-        "YELLOW":  ("🟡", "#f57f17", "#fff8e1", "偏弱"),
-        "RED":     ("🔴", "#c62828", "#ffebee", "高風險"),
+        "GREEN": ("🟢", "#00897b", "#e0f2f1", "穩定"),
+        "YELLOW": ("🟡", "#f57f17", "#fff8e1", "偏弱"),
+        "RED": ("🔴", "#c62828", "#ffebee", "高風險"),
         "UNKNOWN": ("⚪", "#78909c", "#eceff1", "資料不足"),
     }
 
     # VISUAL_ONLY: R/R thresholds below affect badge colour only.
     # They do NOT affect execution guidance or trading decisions.
     _RR_VISUAL_HIGH = 2.0
-    _RR_VISUAL_MID  = 1.0
+    _RR_VISUAL_MID = 1.0
 
     def present(
         self,
@@ -73,12 +74,12 @@ class LivePresenter:
         from src.engines.live_decision import LiveStatus
 
         trade_signal = rec.get("trade_signal", "")
-        sig_price    = rec.get("price")
-        entry_low    = rec.get("entry_low")
-        entry_high   = rec.get("entry_high")
-        stop_p       = rec.get("stop_price")
-        t1           = rec.get("target1")
-        cur_price    = getattr(ld, "current_price", None)
+        sig_price = rec.get("price")
+        entry_low = rec.get("entry_low")
+        entry_high = rec.get("entry_high")
+        stop_p = rec.get("stop_price")
+        t1 = rec.get("target1")
+        cur_price = getattr(ld, "current_price", None)
 
         drop_statuses = (
             LiveStatus.RAPID_DROP,
@@ -105,9 +106,7 @@ class LivePresenter:
             rr_display=self.rr_html(ld),
             buy_note_html=self.buy_note_html(ld),
             plain_html=self.plain_text_html(ld.plain_text),
-            drop_html=(
-                self.drop_scenario_html(ld, sig_price) if sig_price else ""
-            ),
+            drop_html=(self.drop_scenario_html(ld, sig_price) if sig_price else ""),
             overnight_full_html=self.overnight_card_html(
                 overnight_ctx, trade_signal, ld.status
             ),
@@ -131,7 +130,7 @@ class LivePresenter:
         return (
             f'<span style="background:{bg};color:{color};'
             f'font-weight:700;padding:2px 9px;border-radius:10px;font-size:0.78rem">'
-            f'{icon} {label}</span>'
+            f"{icon} {label}</span>"
         )
 
     @staticmethod
@@ -139,18 +138,18 @@ class LivePresenter:
         return (
             f'<span style="background:{ld.bg};color:{ld.color};'
             f'font-weight:700;padding:3px 10px;border-radius:12px;font-size:0.8rem">'
-            f'{ld.icon} {ld.label}</span>'
+            f"{ld.icon} {ld.label}</span>"
         )
 
     @staticmethod
     def price_delta_html(current: float, reference: float, label: str) -> str:
-        diff  = current - reference
-        pct   = diff / reference * 100
+        diff = current - reference
+        pct = diff / reference * 100
         color = "#00897b" if diff >= 0 else "#e53935"
-        sign  = "+" if diff >= 0 else ""
+        sign = "+" if diff >= 0 else ""
         return (
             f'<span style="font-size:0.68rem;color:{color}">'
-            f'{label} {sign}{pct:.1f}%</span>'
+            f"{label} {sign}{pct:.1f}%</span>"
         )
 
     @staticmethod
@@ -160,7 +159,7 @@ class LivePresenter:
         return (
             f'<div style="background:#fffde7;border-radius:6px;padding:8px 10px;'
             f'margin:6px 0;font-size:0.72rem;color:#555;line-height:1.55">'
-            f'💬 {plain_text}</div>'
+            f"💬 {plain_text}</div>"
         )
 
     @classmethod
@@ -186,7 +185,7 @@ class LivePresenter:
 
         price_note = (
             f'<span style="color:#aaa;font-size:0.65rem">'
-            f'（以 {ld.current_price:.1f} 計）</span>'
+            f"（以 {ld.current_price:.1f} 計）</span>"
             if (
                 getattr(ld, "status", None)
                 in (LiveStatus.RAPID_DROP, LiveStatus.WATCHING_LOW)
@@ -196,7 +195,7 @@ class LivePresenter:
         )
         return (
             f'<span style="color:{color};font-weight:700"> R/R {rr:.1f}x</span>'
-            f'{price_note}'
+            f"{price_note}"
         )
 
     @classmethod
@@ -207,14 +206,19 @@ class LivePresenter:
             return (
                 '<div style="margin:6px 0;padding:6px 10px;background:#f5f5f5;'
                 'border-radius:6px;font-size:0.72rem;color:#9e9e9e">'
-                '🌙 隔夜市場資料尚未取得（盤前自動建立）</div>'
+                "🌙 隔夜市場資料尚未取得（盤前自動建立）</div>"
             )
 
+        from src.engines.execution_guidance import (
+            evaluate_execution_guidance,
+            guidance_meta,
+        )
         from src.engines.overnight_risk import RISK_UNKNOWN
-        from src.engines.execution_guidance import evaluate_execution_guidance, guidance_meta
 
         risk_level = ctx.risk_level or RISK_UNKNOWN
-        icon, color, bg, label = cls._RISK_META.get(risk_level, cls._RISK_META["UNKNOWN"])
+        icon, color, bg, label = cls._RISK_META.get(
+            risk_level, cls._RISK_META["UNKNOWN"]
+        )
 
         rows_parts = []
         if ctx.nasdaq_return_pct is not None:
@@ -240,12 +244,12 @@ class LivePresenter:
             f'font-weight:700;padding:2px 8px;border-radius:8px">'
             f'{gmeta["icon"]} {gmeta["label"]}</span>'
             f'<span style="color:#666;margin-left:8px">{guidance_result.plain_text}</span>'
-            f'</div>'
+            f"</div>"
         )
         if guidance_result.caution and guidance_result.caution_text:
             guidance_html += (
                 f'<div style="font-size:0.68rem;color:#e65100;margin-top:3px">'
-                f'{guidance_result.caution_text}</div>'
+                f"{guidance_result.caution_text}</div>"
             )
 
         return (
@@ -253,10 +257,10 @@ class LivePresenter:
             f'border-left:3px solid {color};border-radius:0 6px 6px 0">'
             f'<div style="font-size:0.67rem;color:#999;margin-bottom:2px">🌙 隔夜市場風險</div>'
             f'<div style="font-size:0.85rem;font-weight:700;color:{color}">'
-            f'{icon} {label}</div>'
+            f"{icon} {label}</div>"
             f'<div style="font-size:0.72rem;color:#555;margin-top:3px">{index_row}</div>'
-            f'{guidance_html}'
-            f'</div>'
+            f"{guidance_html}"
+            f"</div>"
         )
 
     @classmethod
@@ -266,11 +270,14 @@ class LivePresenter:
         if ctx is None:
             return (
                 '<div style="font-size:0.7rem;color:#aaa;margin:4px 0">'
-                '🌙 隔夜市場尚未取得</div>'
+                "🌙 隔夜市場尚未取得</div>"
             )
 
+        from src.engines.execution_guidance import (
+            evaluate_execution_guidance,
+            guidance_meta,
+        )
         from src.engines.overnight_risk import RISK_UNKNOWN
-        from src.engines.execution_guidance import evaluate_execution_guidance, guidance_meta
 
         risk_level = ctx.risk_level or RISK_UNKNOWN
         icon, color, _bg, label = cls._RISK_META.get(
@@ -278,7 +285,7 @@ class LivePresenter:
         )
         risk_span = (
             f'<span style="color:{color};font-weight:700;font-size:0.72rem">'
-            f'{icon} {label}</span>'
+            f"{icon} {label}</span>"
         )
         guidance_result = evaluate_execution_guidance(
             trade_signal=trade_signal,
@@ -288,13 +295,13 @@ class LivePresenter:
         gmeta = guidance_meta(guidance_result.guidance)
         guidance_span = (
             f'<span style="background:{gmeta["bg"]};color:{gmeta["color"]};'
-            f'font-weight:700;padding:2px 8px;border-radius:8px;font-size:0.68rem;'
+            f"font-weight:700;padding:2px 8px;border-radius:8px;font-size:0.68rem;"
             f'margin-left:6px">{gmeta["icon"]} {gmeta["label"]}</span>'
         )
         return (
             f'<div style="display:flex;align-items:center;margin:4px 0">'
             f'<span style="font-size:0.67rem;color:#999;margin-right:6px">🌙</span>'
-            f'{risk_span}{guidance_span}</div>'
+            f"{risk_span}{guidance_span}</div>"
         )
 
     @staticmethod
@@ -309,14 +316,12 @@ class LivePresenter:
         if getattr(ld, "status", None) not in drop_statuses:
             return ""
 
-        cur  = getattr(ld, "current_price", None)
+        cur = getattr(ld, "current_price", None)
         ilow = getattr(ld, "intraday_low", None)
 
         if ilow and cur and ilow < sig_price:
             cur_color = (
-                "#558b2f"
-                if ld.status == LiveStatus.ENTRY_RECONFIRMED
-                else "#1565c0"
+                "#558b2f" if ld.status == LiveStatus.ENTRY_RECONFIRMED else "#1565c0"
             )
             narrative = (
                 f'<span style="color:#333">{sig_price:.1f}</span>'
@@ -332,8 +337,8 @@ class LivePresenter:
             narrative = f'<span style="color:#333">{sig_price:.1f}</span>'
 
         stage = {
-            LiveStatus.RAPID_DROP:        1,
-            LiveStatus.WATCHING_LOW:      2,
+            LiveStatus.RAPID_DROP: 1,
+            LiveStatus.WATCHING_LOW: 2,
             LiveStatus.ENTRY_RECONFIRMED: 3,
         }[ld.status]
 
@@ -342,7 +347,7 @@ class LivePresenter:
 
         def _stage_span(i: int) -> str:
             is_current = i == stage
-            is_done    = i < stage
+            is_done = i < stage
             if is_current:
                 clr = stage_colors[i]
                 return f'<span style="color:{clr};font-weight:700">● {stage_labels[i - 1]}</span>'
@@ -358,14 +363,14 @@ class LivePresenter:
         if ilow:
             stop_note = (
                 f'<span style="color:#aaa;font-size:0.65rem"> '
-                f'（盤中觀察點，非模型停損 {ld.stop_price:.1f}）</span>'
+                f"（盤中觀察點，非模型停損 {ld.stop_price:.1f}）</span>"
                 if getattr(ld, "stop_price", None)
                 else ""
             )
             ilow_row = (
                 f'<div style="font-size:0.72rem;color:#555;margin-top:5px">'
                 f'今日盤中觀察低點：<strong style="color:#1565c0">{ilow:.1f}</strong>'
-                f'{stop_note}</div>'
+                f"{stop_note}</div>"
             )
 
         border_color = stage_colors.get(stage, "#f57f17")
@@ -375,8 +380,8 @@ class LivePresenter:
             f'<div style="font-size:0.67rem;color:#999;margin-bottom:3px">今日價格走勢</div>'
             f'<div style="font-size:0.82rem;font-weight:600">{narrative}</div>'
             f'<div style="font-size:0.68rem;margin-top:5px">{stages_html}</div>'
-            f'{ilow_row}'
-            f'</div>'
+            f"{ilow_row}"
+            f"</div>"
         )
 
     @staticmethod
@@ -391,7 +396,7 @@ class LivePresenter:
                 td = quote.trade_date
                 html += (
                     f'<span style="font-size:0.62rem;color:#e53935">'
-                    f' ({td[:4]}/{td[4:6]}/{td[6:]})</span>'
+                    f" ({td[:4]}/{td[4:6]}/{td[6:]})</span>"
                 )
             return html
         if date_status == "unknown" and not cur_price:
@@ -401,14 +406,14 @@ class LivePresenter:
             if quote and getattr(quote, "update_time", None):
                 html += (
                     f'<span style="font-size:0.62rem;color:#aaa">'
-                    f' ({quote.update_time})</span>'
+                    f" ({quote.update_time})</span>"
                 )
             return html
         html = '<span style="color:#f57f17">無即時成交</span>'
         if quote and getattr(quote, "update_time", None):
             html += (
                 f'<span style="font-size:0.62rem;color:#aaa">'
-                f' ({quote.update_time})</span>'
+                f" ({quote.update_time})</span>"
             )
         return html
 
@@ -426,18 +431,18 @@ class LivePresenter:
         if ld.status == LiveStatus.ENTRY_RECONFIRMED:
             return (
                 '<div style="font-size:0.67rem;color:#558b2f;margin-top:3px">'
-                '轉強觀察訊號 — 進場條件改善，但非正式 BUY 確認；仍需自行評估量價結構</div>'
+                "轉強觀察訊號 — 進場條件改善，但非正式 BUY 確認；仍需自行評估量價結構</div>"
             )
         rr = getattr(ld, "rr_current", None)
         # VISUAL_ONLY: rr < 1.5 selects stronger caution wording; does not affect execution guidance
         if rr is not None and rr < 1.5:
             return (
                 f'<div style="font-size:0.67rem;color:#e65100;margin-top:3px">'
-                f'BUY = 模型看好此 Setup ≠ 現價 R/R {rr:.1f}x 就是好時機</div>'
+                f"BUY = 模型看好此 Setup ≠ 現價 R/R {rr:.1f}x 就是好時機</div>"
             )
         return (
             '<div style="font-size:0.67rem;color:#888;margin-top:3px">'
-            'BUY = 模型看好此 Setup，非現在即可進場的指令</div>'
+            "BUY = 模型看好此 Setup，非現在即可進場的指令</div>"
         )
 
     @staticmethod

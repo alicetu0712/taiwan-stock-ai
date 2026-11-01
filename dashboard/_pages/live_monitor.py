@@ -82,6 +82,7 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
     price_map: dict = {}
     if buy_sids:
         from src.database import DailyPrice
+
         price_rows = (
             s.query(DailyPrice.stock_id, DailyPrice.close)
             .filter(DailyPrice.date == signal_date, DailyPrice.stock_id.in_(buy_sids))
@@ -112,15 +113,15 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
     # ── eligible list（相同 filter 邏輯，直接從 all_rows 建構）────────────
     eligible = [
         {
-            "sid":          r.stock_id,
-            "name":         r.stock_name or r.stock_id,
+            "sid": r.stock_id,
+            "name": r.stock_name or r.stock_id,
             "trade_signal": r.trade_signal,
-            "price":        price_map.get(r.stock_id),
-            "entry_low":    r.entry_low,
-            "entry_high":   r.entry_high,
-            "stop_price":   r.stop_price,
-            "target1":      r.target1,
-            "setup_type":   r.setup_type,
+            "price": price_map.get(r.stock_id),
+            "entry_low": r.entry_low,
+            "entry_high": r.entry_high,
+            "stop_price": r.stop_price,
+            "target1": r.target1,
+            "setup_type": r.setup_type,
         }
         for r in buy_rows
         if r.tier == "recommend"
@@ -134,6 +135,7 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
     if exec_date is not None:
         try:
             from src.services.overnight_service import get_overnight_context
+
             overnight_ctx = get_overnight_context(exec_date)
         except Exception:
             pass
@@ -143,8 +145,8 @@ def _select_live_signals(signal_date: date) -> "tuple[list, dict]":
         "exec_date": exec_date,
         "total_recs": total_recs,
         "core_recs_count": len(core_recs),
-        "buy_count": len(buy_rows),           # 全 tier BUY（資訊用）
-        "core_buy_count": len(core_buy_rows), # Core Picks BUY（eligible 邏輯基準）
+        "buy_count": len(buy_rows),  # 全 tier BUY（資訊用）
+        "core_buy_count": len(core_buy_rows),  # Core Picks BUY（eligible 邏輯基準）
         "excl_invalid": excl_invalid,
         "excl_non_core": excl_non_core,
         "excl_lifecycle": excl_lifecycle,
@@ -200,12 +202,14 @@ def _render_overnight_diagnostics(ctx) -> None:
 
 def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) -> None:
     """預設收合的診斷 expander；Core Picks BUY > 0 但 eligible = 0 時自動展開。"""
-    core_buy   = diag.get("core_buy_count", diag["buy_count"])
-    all_buy    = diag["buy_count"]
-    eligible   = diag["eligible_count"]
+    core_buy = diag.get("core_buy_count", diag["buy_count"])
+    all_buy = diag["buy_count"]
+    eligible = diag["eligible_count"]
     # 只有 Core Picks BUY 存在但尚不可執行才顯示 warn
-    warn   = core_buy > 0 and eligible == 0
-    header = "⚠️ 診斷資訊（Core Picks BUY 存在但 Eligible = 0）" if warn else "🔍 診斷資訊"
+    warn = core_buy > 0 and eligible == 0
+    header = (
+        "⚠️ 診斷資訊（Core Picks BUY 存在但 Eligible = 0）" if warn else "🔍 診斷資訊"
+    )
 
     with st.expander(header, expanded=warn):
         c1, c2 = st.columns(2)
@@ -257,11 +261,15 @@ def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) ->
         elif warn:
             reasons = []
             if diag["excl_non_core"]:
-                reasons.append(f"{diag['excl_non_core']} 個 Non-Core（tier ≠ recommend）")
+                reasons.append(
+                    f"{diag['excl_non_core']} 個 Non-Core（tier ≠ recommend）"
+                )
             if diag["excl_invalid"]:
                 reasons.append(f"{diag['excl_invalid']} 個 Invalid（is_valid=False）")
             if diag["excl_lifecycle"]:
-                reasons.append(f"{diag['excl_lifecycle']} 個 Expired（停損或 Superseded）")
+                reasons.append(
+                    f"{diag['excl_lifecycle']} 個 Expired（停損或 Superseded）"
+                )
             if diag["not_yet_executable"]:
                 st.warning(
                     f"⚠️ {signal_date} 有 **{core_buy} 個 Core Picks BUY**，"
@@ -276,13 +284,22 @@ def _render_signal_diagnostics(sel_date: date, signal_date: date, diag: dict) ->
                 )
 
 
-def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int = 10,
-                overnight_ctx=None) -> None:
+def _live_cards(
+    recs: list,
+    market_map: dict,
+    signal_date: "date",
+    interval: int = 10,
+    overnight_ctx=None,
+) -> None:
     """
     Live 卡片內容，由外部 fragment 包裝以支援動態刷新頻率。
     狀態轉換（State Transition）透過 live_execution_service 寫入 DB。
     """
-    from src.collectors.intraday_collector import fetch_intraday, best_price, quote_date_status
+    from src.collectors.intraday_collector import (
+        best_price,
+        fetch_intraday,
+        quote_date_status,
+    )
     from src.engines.live_decision import evaluate_entry_status, market_session_label
     from src.presentation.live_presenter import LivePresenter
     from src.services.live_execution_service import record_if_transition
@@ -293,7 +310,7 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
     is_live = session_label == "盤中"
 
     stock_ids = [r["sid"] for r in recs]
-    quotes    = fetch_intraday(stock_ids, market_map=market_map)
+    quotes = fetch_intraday(stock_ids, market_map=market_map)
 
     # 每個 (stock_id, signal_date) 的最後記錄狀態，跨 fragment 刷新保留
     if "lm_status_map" not in st.session_state:
@@ -302,17 +319,23 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
 
     signal_date_str = str(signal_date)
 
-    from datetime import datetime
     import zoneinfo
+    from datetime import datetime
+
     now_str = datetime.now(zoneinfo.ZoneInfo("Asia/Taipei")).strftime("%H:%M:%S")
     status_color = "#00897b" if is_live else "#78909c"
+    refresh_span = (
+        f'<span style="font-size:0.72rem;color:#00897b">🔄 每 {interval} 秒自動刷新</span>'
+        if is_live
+        else ""
+    )
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
         f'<span style="background:{status_color};color:white;padding:3px 10px;'
         f'border-radius:12px;font-size:0.75rem;font-weight:700">{session_label}</span>'
         f'<span style="font-size:0.72rem;color:#888">最後更新：{now_str}</span>'
-        f'{"<span style=\'font-size:0.72rem;color:#00897b\'>🔄 每 " + str(interval) + " 秒自動刷新</span>" if is_live else ""}'
-        f'</div>',
+        f"{refresh_span}"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -322,24 +345,26 @@ def _live_cards(recs: list, market_map: dict, signal_date: "date", interval: int
 
     cols = st.columns(2)
     for idx, rec in enumerate(recs):
-        sid    = rec["sid"]
-        name   = rec.get("name") or sid
-        quote  = quotes.get(sid)
+        sid = rec["sid"]
+        name = rec.get("name") or sid
+        quote = quotes.get(sid)
 
-        cur_price    = best_price(quote) if quote else None   # 只取真實成交（z 欄位）
+        cur_price = best_price(quote) if quote else None  # 只取真實成交（z 欄位）
         intraday_low = quote.low if quote else None
-        date_status  = quote_date_status(quote) if quote else "unknown"
+        date_status = quote_date_status(quote) if quote else "unknown"
         # fail-closed：只有 date_status=="valid" 才允許輸出正向進場訊號
-        date_known   = (date_status == "valid")
+        date_known = date_status == "valid"
 
-        ld = evaluate_entry_status(cur_price, rec, intraday_low=intraday_low, date_known=date_known)
+        ld = evaluate_entry_status(
+            cur_price, rec, intraday_low=intraday_low, date_known=date_known
+        )
 
         # State Transition → DB
         # session_state 只作 cache 以避免每輪都打 DB query。
         # 只有 cache 顯示「可能有變化（或此 session 首次見到此股）」才呼叫
         # record_if_transition()，由它自己查 DB 做最終確認。
         map_key = (sid, signal_date_str)
-        new_st  = ld.status.value
+        new_st = ld.status.value
         if status_map.get(map_key) != new_st:
             record_if_transition(
                 stock_id=sid,
@@ -428,13 +453,11 @@ def page_live_monitor(sel_date: date) -> None:
     st.caption("AI 訊號每日收盤後固定。盤中只更新「現在能不能執行」的即時判斷。")
 
     # sel_date = today 時，盤中實際應監控前一交易日的訊號（execution_date = today）
-    signal_date      = _effective_signal_date(sel_date)
-    buy_recs, diag   = _select_live_signals(signal_date)
+    signal_date = _effective_signal_date(sel_date)
+    buy_recs, diag = _select_live_signals(signal_date)
 
     if signal_date != sel_date:
-        st.caption(
-            f"🗓 監控 {signal_date} 訊號（execution_date = {sel_date}）"
-        )
+        st.caption(f"🗓 監控 {signal_date} 訊號（execution_date = {sel_date}）")
 
     _render_signal_diagnostics(sel_date, signal_date, diag)
 
@@ -447,10 +470,13 @@ def page_live_monitor(sel_date: date) -> None:
 
     try:
         from src.database import Stock, get_session
+
         s = get_session()
-        stocks = s.query(Stock).filter(
-            Stock.stock_id.in_([r["sid"] for r in buy_recs])
-        ).all()
+        stocks = (
+            s.query(Stock)
+            .filter(Stock.stock_id.in_([r["sid"] for r in buy_recs]))
+            .all()
+        )
         s.close()
         market_map = {stk.stock_id: stk.market for stk in stocks}
     except Exception:
@@ -471,7 +497,7 @@ def page_live_monitor(sel_date: date) -> None:
 
     with st.expander("📋 今日 BUY 推薦", expanded=False):
         for r in buy_recs:
-            sig   = "BUY ★" if r.get("trade_signal") == "strong_buy" else "BUY"
+            sig = "BUY ★" if r.get("trade_signal") == "strong_buy" else "BUY"
             setup = r.get("setup_type") or "—"
             st.markdown(
                 f"**{r.get('name', r['sid'])}** ({r['sid']}) — "
@@ -485,7 +511,12 @@ def page_live_monitor(sel_date: date) -> None:
 
     @st.fragment(run_every=f"{refresh_interval}s")
     def _auto_refresh():
-        _live_cards(buy_recs, market_map, signal_date=signal_date,
-                    interval=refresh_interval, overnight_ctx=overnight_ctx)
+        _live_cards(
+            buy_recs,
+            market_map,
+            signal_date=signal_date,
+            interval=refresh_interval,
+            overnight_ctx=overnight_ctx,
+        )
 
     _auto_refresh()

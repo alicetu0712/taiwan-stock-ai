@@ -503,13 +503,17 @@ class TestPresenterPurity:
         base = {"trade_signal": "buy", "setup_type": "breakout"}
         for vol in [0.1, 0.5, 1.0, 1.4, 1.5, 2.0, 5.0]:
             card = PRESENTER.present({**base, "vol_ratio": vol})
-            assert card.signal_label == "BUY", f"signal_label changed at vol_ratio={vol}"
+            assert (
+                card.signal_label == "BUY"
+            ), f"signal_label changed at vol_ratio={vol}"
 
     def test_signal_label_invariant_to_ma20_gap(self):
         base = {"trade_signal": "wait", "setup_type": "near_breakout"}
         for gap in [-10.0, -2.0, 0.0, 2.0, 5.0, 10.0]:
             card = PRESENTER.present({**base, "ma20_gap": gap})
-            assert card.signal_label == "WAIT", f"signal_label changed at ma20_gap={gap}"
+            assert (
+                card.signal_label == "WAIT"
+            ), f"signal_label changed at ma20_gap={gap}"
 
     def test_signal_label_invariant_to_pt_score(self):
         base = {"trade_signal": "sell", "setup_type": "breakdown"}
@@ -527,7 +531,9 @@ class TestPresenterPurity:
             assert vol_item[0] == "🟡"
             assert f"{vol:.1f}x" in vol_item[2]
             for banned in ("符合", "待觀察", "偏弱", "待收斂"):
-                assert banned not in vol_item[2], f"'{banned}' in near_breakout vol item"
+                assert (
+                    banned not in vol_item[2]
+                ), f"'{banned}' in near_breakout vol item"
 
     def test_checklist_vol_item_neutral_breakout(self):
         for vol in [0.5, 1.0, 1.4, 1.5, 2.0]:
@@ -553,7 +559,7 @@ class TestPresenterPurity:
         items_wait = PRESENTER._checklist("pullback_buy", False, 1.0, [])
         sup_buy = next(i for i in items_buy if i[1] == "支撐")
         sup_wait = next(i for i in items_wait if i[1] == "支撐")
-        assert sup_buy[0] == "🟢"   # engine said buy
+        assert sup_buy[0] == "🟢"  # engine said buy
         assert sup_wait[0] == "🟡"  # engine said wait
 
     # ── plain_tech purity ────────────────────────────────────────────────────

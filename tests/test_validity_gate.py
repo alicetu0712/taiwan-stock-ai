@@ -17,10 +17,10 @@ import pytest
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 
-from src.database import Base, Recommendation, ForwardSignal
-
+from src.database import Base, ForwardSignal, Recommendation
 
 # ── In-memory DB fixture ──────────────────────────────────────────────────────
+
 
 @pytest.fixture(scope="module")
 def db_session():
@@ -44,10 +44,10 @@ def db_session():
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    VALID_DATE   = date(2026, 10, 8)
+    VALID_DATE = date(2026, 10, 8)
     HOLIDAY_DATE = date(2026, 10, 9)
-    SAT_DATE     = date(2026, 10, 10)
-    SUN_DATE     = date(2026, 10, 11)
+    SAT_DATE = date(2026, 10, 10)
+    SUN_DATE = date(2026, 10, 11)
 
     STOCKS_5 = ["3042", "1513", "2330", "2317", "2882"]
     STOCKS_3 = ["3042", "1513", "2330"]
@@ -55,73 +55,85 @@ def db_session():
 
     # 5 valid Recommendation records
     for sid in STOCKS_5:
-        session.add(Recommendation(
-            date=VALID_DATE,
-            stock_id=sid,
-            tier="recommend",
-            trade_signal="buy",
-            is_valid=True,
-            total_score=80.0,
-        ))
+        session.add(
+            Recommendation(
+                date=VALID_DATE,
+                stock_id=sid,
+                tier="recommend",
+                trade_signal="buy",
+                is_valid=True,
+                total_score=80.0,
+            )
+        )
 
     # 3 invalid Recommendation records — holiday (10/09)
     for sid in STOCKS_3:
-        session.add(Recommendation(
-            date=HOLIDAY_DATE,
-            stock_id=sid,
+        session.add(
+            Recommendation(
+                date=HOLIDAY_DATE,
+                stock_id=sid,
+                tier="recommend",
+                trade_signal="buy",
+                is_valid=False,
+                invalid_reason="NON_TRADING_DAY_DATE_MISMATCH",
+                source_price_date=VALID_DATE,
+                total_score=80.0,
+            )
+        )
+
+    # 1 invalid Recommendation — Saturday (10/10)
+    session.add(
+        Recommendation(
+            date=SAT_DATE,
+            stock_id="2330",
             tier="recommend",
             trade_signal="buy",
             is_valid=False,
             invalid_reason="NON_TRADING_DAY_DATE_MISMATCH",
             source_price_date=VALID_DATE,
             total_score=80.0,
-        ))
-
-    # 1 invalid Recommendation — Saturday (10/10)
-    session.add(Recommendation(
-        date=SAT_DATE,
-        stock_id="2330",
-        tier="recommend",
-        trade_signal="buy",
-        is_valid=False,
-        invalid_reason="NON_TRADING_DAY_DATE_MISMATCH",
-        source_price_date=VALID_DATE,
-        total_score=80.0,
-    ))
+        )
+    )
 
     # 1 invalid Recommendation — Sunday (10/11)
-    session.add(Recommendation(
-        date=SUN_DATE,
-        stock_id="2882",
-        tier="recommend",
-        trade_signal="buy",
-        is_valid=False,
-        invalid_reason="NON_TRADING_DAY_DATE_MISMATCH",
-        source_price_date=VALID_DATE,
-        total_score=80.0,
-    ))
-
-    # 10 valid ForwardSignal records
-    for sid in STOCKS_10:
-        session.add(ForwardSignal(
-            trade_date=VALID_DATE,
-            stock_id=sid,
-            trade_signal="buy",
-            is_valid=True,
-            total_score=75.0,
-        ))
-
-    # 4 invalid ForwardSignal records — holiday (10/09)
-    for sid in STOCKS_10[:4]:
-        session.add(ForwardSignal(
-            trade_date=HOLIDAY_DATE,
-            stock_id=sid,
+    session.add(
+        Recommendation(
+            date=SUN_DATE,
+            stock_id="2882",
+            tier="recommend",
             trade_signal="buy",
             is_valid=False,
             invalid_reason="NON_TRADING_DAY_DATE_MISMATCH",
             source_price_date=VALID_DATE,
-            total_score=75.0,
-        ))
+            total_score=80.0,
+        )
+    )
+
+    # 10 valid ForwardSignal records
+    for sid in STOCKS_10:
+        session.add(
+            ForwardSignal(
+                trade_date=VALID_DATE,
+                stock_id=sid,
+                trade_signal="buy",
+                is_valid=True,
+                total_score=75.0,
+            )
+        )
+
+    # 4 invalid ForwardSignal records — holiday (10/09)
+    for sid in STOCKS_10[:4]:
+        session.add(
+            ForwardSignal(
+                trade_date=HOLIDAY_DATE,
+                stock_id=sid,
+                trade_signal="buy",
+                is_valid=False,
+                invalid_reason="NON_TRADING_DAY_DATE_MISMATCH",
+                source_price_date=VALID_DATE,
+                total_score=75.0,
+            )
+        )
 
     session.commit()
     yield session
@@ -131,24 +143,31 @@ def db_session():
 
 # ── Helper: minimal pipeline gate function ────────────────────────────────────
 
-def _can_create_signal(trade_date: date, source_price_date: date | None) -> tuple[bool, str]:
+
+def _can_create_signal(
+    trade_date: date, source_price_date: date | None
+) -> tuple[bool, str]:
     """
     Mirrors the logic in run_pipeline / _save_recommendations.
     Returns (allowed, reason).
     """
-    from src.core.trading_calendar import market_status, MarketStatus
+    from src.core.trading_calendar import MarketStatus, market_status
 
     status = market_status(trade_date)
     if status in (MarketStatus.WEEKEND, MarketStatus.HOLIDAY):
         return False, f"MARKET_CLOSED:{status.value}"
 
     if source_price_date is not None and source_price_date != trade_date:
-        return False, f"PRICE_DATE_MISMATCH:source={source_price_date},requested={trade_date}"
+        return (
+            False,
+            f"PRICE_DATE_MISMATCH:source={source_price_date},requested={trade_date}",
+        )
 
     return True, "OK"
 
 
 # ── A. Trading day gate ───────────────────────────────────────────────────────
+
 
 class TestTradingDayGate:
     """Gate rejects non-trading days regardless of data."""
@@ -180,6 +199,7 @@ class TestTradingDayGate:
 
 # ── B. Price date mismatch gate ───────────────────────────────────────────────
 
+
 class TestPriceDateMismatchGate:
     """Gate rejects signals when source price date != requested trade_date."""
 
@@ -207,6 +227,7 @@ class TestPriceDateMismatchGate:
 
 # ── C. Validity flag — fixture-based DB ──────────────────────────────────────
 
+
 class TestValidityFlagDB:
     """
     Validity-flagged records exist with correct metadata.
@@ -219,7 +240,7 @@ class TestValidityFlagDB:
             db_session.query(Recommendation)
             .filter(
                 Recommendation.date == date(2026, 10, 9),
-                Recommendation.is_valid == False,
+                Recommendation.is_valid == False,  # noqa: E712,
             )
             .count()
         )
@@ -231,7 +252,7 @@ class TestValidityFlagDB:
             db_session.query(Recommendation)
             .filter(
                 Recommendation.date.in_([date(2026, 10, 10), date(2026, 10, 11)]),
-                Recommendation.is_valid == False,
+                Recommendation.is_valid == False,  # noqa: E712,
             )
             .count()
         )
@@ -243,7 +264,7 @@ class TestValidityFlagDB:
             db_session.query(ForwardSignal)
             .filter(
                 ForwardSignal.trade_date == date(2026, 10, 9),
-                ForwardSignal.is_valid == False,
+                ForwardSignal.is_valid == False,  # noqa: E712,
             )
             .count()
         )
@@ -253,7 +274,7 @@ class TestValidityFlagDB:
         """Total invalid ForwardSignal records matches fixture count (4)."""
         count = (
             db_session.query(ForwardSignal)
-            .filter(ForwardSignal.is_valid == False)
+            .filter(ForwardSignal.is_valid == False)  # noqa: E712
             .count()
         )
         assert count == 4, f"Expected 4 total invalid FS, got {count}"
@@ -264,21 +285,21 @@ class TestValidityFlagDB:
             db_session.query(Recommendation)
             .filter(
                 Recommendation.date == date(2026, 10, 9),
-                Recommendation.is_valid == False,
+                Recommendation.is_valid == False,  # noqa: E712,
             )
             .first()
         )
         assert rec is not None
-        assert rec.source_price_date == date(2026, 10, 8), (
-            f"Expected source_price_date=2026-10-08, got {rec.source_price_date}"
-        )
+        assert rec.source_price_date == date(
+            2026, 10, 8
+        ), f"Expected source_price_date=2026-10-08, got {rec.source_price_date}"
         assert rec.invalid_reason == "NON_TRADING_DAY_DATE_MISMATCH"
 
     def test_invalid_reason_set_on_forward_signal(self, db_session):
         """Invalid ForwardSignal must have invalid_reason='NON_TRADING_DAY_DATE_MISMATCH'."""
         fs = (
             db_session.query(ForwardSignal)
-            .filter(ForwardSignal.is_valid == False)
+            .filter(ForwardSignal.is_valid == False)  # noqa: E712
             .first()
         )
         assert fs is not None
@@ -286,6 +307,7 @@ class TestValidityFlagDB:
 
 
 # ── D. Query filters correctly exclude is_valid=False ────────────────────────
+
 
 class TestQueryFilters:
     """
@@ -332,9 +354,9 @@ class TestQueryFilters:
             .all()
         )
         date_values = {row[0] for row in valid_dates}
-        assert date_values == {date(2026, 10, 8)}, (
-            f"Expected only 2026-10-08 in valid recs, got {date_values}"
-        )
+        assert date_values == {
+            date(2026, 10, 8)
+        }, f"Expected only 2026-10-08 in valid recs, got {date_values}"
 
     def test_invalid_recs_never_appear_in_valid_filter(self, db_session):
         """Non-trading-day dates must not appear in valid-filtered results."""
@@ -352,33 +374,40 @@ class TestQueryFilters:
 
 # ── E. DataValidator gate ─────────────────────────────────────────────────────
 
+
 class TestDataValidatorGate:
     """DataValidator must return proper status codes."""
 
     def test_holiday_market_closed(self):
         import pandas as pd
+
         from src.validators.data_validator import DataValidator
 
         v = DataValidator()
-        df = pd.DataFrame({
-            "stock_id": [str(i).zfill(4) for i in range(200)],
-            "close":    [100.0] * 200,
-            "volume":   [10000.0] * 200,
-        })
+        df = pd.DataFrame(
+            {
+                "stock_id": [str(i).zfill(4) for i in range(200)],
+                "close": [100.0] * 200,
+                "volume": [10000.0] * 200,
+            }
+        )
         valid, msg = v.validate_price_data(df, date(2026, 10, 9))
         assert not valid
         assert "MARKET_CLOSED" in msg
 
     def test_trading_day_data_incomplete(self):
         import pandas as pd
+
         from src.validators.data_validator import DataValidator
 
         v = DataValidator()
-        df = pd.DataFrame({
-            "stock_id": [str(i).zfill(4) for i in range(10)],
-            "close":    [100.0] * 10,
-            "volume":   [10000.0] * 10,
-        })
+        df = pd.DataFrame(
+            {
+                "stock_id": [str(i).zfill(4) for i in range(10)],
+                "close": [100.0] * 10,
+                "volume": [10000.0] * 10,
+            }
+        )
         valid, msg = v.validate_price_data(df, date(2026, 10, 8))
         assert not valid
         assert "DATA_INCOMPLETE" in msg
@@ -386,13 +415,16 @@ class TestDataValidatorGate:
 
     def test_trading_day_ok(self):
         import pandas as pd
+
         from src.validators.data_validator import DataValidator
 
         v = DataValidator()
-        df = pd.DataFrame({
-            "stock_id": [str(i).zfill(4) for i in range(500)],
-            "close":    [100.0] * 500,
-            "volume":   [10000.0] * 500,
-        })
+        df = pd.DataFrame(
+            {
+                "stock_id": [str(i).zfill(4) for i in range(500)],
+                "close": [100.0] * 500,
+                "volume": [10000.0] * 500,
+            }
+        )
         valid, msg = v.validate_price_data(df, date(2026, 10, 8))
         assert valid

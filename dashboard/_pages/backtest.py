@@ -10,9 +10,9 @@ import pandas as pd
 import streamlit as st
 
 from src.services.backtest_service import (  # noqa: F401
+    _FACTOR_COLS,
     ROUND_TRIP_COST,
     BacktestService,
-    _FACTOR_COLS,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,8 +47,10 @@ def load_pipeline_funnels(days: int = 30) -> pd.DataFrame:
     """載入近 N 天的 pipeline 漏斗統計。"""
     try:
         from datetime import date, timedelta
+
         from sqlalchemy.orm import Session
-        from src.database import init_db, PipelineFunnel
+
+        from src.database import PipelineFunnel, init_db
 
         engine = init_db()
         since = date.today() - timedelta(days=days)
@@ -61,18 +63,35 @@ def load_pipeline_funnels(days: int = 30) -> pd.DataFrame:
             )
             if not rows:
                 return pd.DataFrame()
-            return pd.DataFrame([{
-                "date":             r.date,
-                "universe":         r.universe,
-                "with_price":       r.with_price,
-                "hard_filter_pass": r.hard_filter_pass,
-                "scored_55plus":    r.scored_55plus,
-                "scored_65plus":    r.scored_65plus,
-                "recommended":      r.recommended,
-                "fail_top1":        f"{r.fail_top1_reason}({r.fail_top1_count})" if r.fail_top1_reason else "",
-                "fail_top2":        f"{r.fail_top2_reason}({r.fail_top2_count})" if r.fail_top2_reason else "",
-                "fail_top3":        f"{r.fail_top3_reason}({r.fail_top3_count})" if r.fail_top3_reason else "",
-            } for r in rows])
+            return pd.DataFrame(
+                [
+                    {
+                        "date": r.date,
+                        "universe": r.universe,
+                        "with_price": r.with_price,
+                        "hard_filter_pass": r.hard_filter_pass,
+                        "scored_55plus": r.scored_55plus,
+                        "scored_65plus": r.scored_65plus,
+                        "recommended": r.recommended,
+                        "fail_top1": (
+                            f"{r.fail_top1_reason}({r.fail_top1_count})"
+                            if r.fail_top1_reason
+                            else ""
+                        ),
+                        "fail_top2": (
+                            f"{r.fail_top2_reason}({r.fail_top2_count})"
+                            if r.fail_top2_reason
+                            else ""
+                        ),
+                        "fail_top3": (
+                            f"{r.fail_top3_reason}({r.fail_top3_count})"
+                            if r.fail_top3_reason
+                            else ""
+                        ),
+                    }
+                    for r in rows
+                ]
+            )
     except Exception as e:
         logger.warning(f"load_pipeline_funnels failed: {e}")
         return pd.DataFrame()
@@ -88,14 +107,16 @@ def load_validation_funnel() -> dict:
     try:
         from sqlalchemy import func
         from sqlalchemy.orm import Session
-        from src.database import init_db, ForwardSignal, MODEL_VERSION, Recommendation
+
+        from src.database import MODEL_VERSION, ForwardSignal, Recommendation, init_db
 
         engine = init_db()
         with Session(engine) as s:
             n_raw_rec = (
                 s.query(func.count(Recommendation.id))
                 .filter(Recommendation.is_valid.isnot(False))  # exclude invalid
-                .scalar() or 0
+                .scalar()
+                or 0
             )
 
             fs_rows = (
@@ -109,38 +130,50 @@ def load_validation_funnel() -> dict:
                 .all()
             )
 
-        n_fs_total  = len(fs_rows)
-        n_fs_20d    = sum(1 for r in fs_rows if r.fwd_return_20d is not None)
-        n_fs_60d    = sum(1 for r in fs_rows if r.fwd_return_60d is not None)
+        n_fs_total = len(fs_rows)
+        n_fs_20d = sum(1 for r in fs_rows if r.fwd_return_20d is not None)
+        n_fs_60d = sum(1 for r in fs_rows if r.fwd_return_60d is not None)
         latest_date = max((r.trade_date for r in fs_rows), default=None)
 
         return {
-            "n_raw_rec":    n_raw_rec,
-            "n_fs_total":   n_fs_total,
-            "n_fs_20d":     n_fs_20d,
-            "n_fs_60d":     n_fs_60d,
-            "fs_latest":    str(latest_date) if latest_date else "—",
+            "n_raw_rec": n_raw_rec,
+            "n_fs_total": n_fs_total,
+            "n_fs_20d": n_fs_20d,
+            "n_fs_60d": n_fs_60d,
+            "fs_latest": str(latest_date) if latest_date else "—",
         }
     except Exception as e:
         logger.warning(f"load_validation_funnel: {e}")
-        return {"n_raw_rec": 0, "n_fs_total": 0, "n_fs_20d": 0, "n_fs_60d": 0, "fs_latest": "—"}
+        return {
+            "n_raw_rec": 0,
+            "n_fs_total": 0,
+            "n_fs_20d": 0,
+            "n_fs_60d": 0,
+            "fs_latest": "—",
+        }
 
 
 @st.cache_data(ttl=1800)
 def load_rec_diversity(days: int = 60) -> dict:
     """計算推薦重複率統計（近 N 天）。"""
     try:
-        from datetime import date, timedelta
         from collections import Counter
+        from datetime import date, timedelta
+
         from sqlalchemy.orm import Session
-        from src.database import init_db, Recommendation
+
+        from src.database import Recommendation, init_db
 
         engine = init_db()
         since = date.today() - timedelta(days=days)
         with Session(engine) as s:
             rows = (
-                s.query(Recommendation.date, Recommendation.stock_id,
-                        Recommendation.stock_name, Recommendation.total_score)
+                s.query(
+                    Recommendation.date,
+                    Recommendation.stock_id,
+                    Recommendation.stock_name,
+                    Recommendation.total_score,
+                )
                 .filter(Recommendation.date >= since)
                 .filter(Recommendation.is_valid.isnot(False))  # exclude invalid
                 .all()
@@ -156,9 +189,9 @@ def load_rec_diversity(days: int = 60) -> dict:
         top10 = [
             {
                 "stock_id": sid,
-                "count":    c,
+                "count": c,
                 "pct_days": round(c / n_days * 100, 1),
-                "name":     next((r.stock_name for r in rows if r.stock_id == sid), sid),
+                "name": next((r.stock_name for r in rows if r.stock_id == sid), sid),
             }
             for sid, c in cnt.most_common(10)
         ]
@@ -176,13 +209,17 @@ def load_rec_diversity(days: int = 60) -> dict:
                 overlap_rates.append(len(prev & curr) / max(len(prev), len(curr)))
 
         return {
-            "n_days":        n_days,
-            "n_total":       n_total,
-            "n_unique":      n_unique,
-            "unique_rate":   round(n_unique / n_total * 100, 1) if n_total else 0,
-            "avg_overlap":   round(sum(overlap_rates) / len(overlap_rates) * 100, 1) if overlap_rates else 0,
-            "top10":         top10,
-            "since":         since,
+            "n_days": n_days,
+            "n_total": n_total,
+            "n_unique": n_unique,
+            "unique_rate": round(n_unique / n_total * 100, 1) if n_total else 0,
+            "avg_overlap": (
+                round(sum(overlap_rates) / len(overlap_rates) * 100, 1)
+                if overlap_rates
+                else 0
+            ),
+            "top10": top10,
+            "since": since,
         }
     except Exception as e:
         logger.warning(f"load_rec_diversity failed: {e}")
@@ -269,24 +306,24 @@ def page_backtest() -> None:
     from datetime import date, timedelta
 
     _PERIOD_OPTIONS = {
-        "近 30 天":  30,
-        "近 60 天":  60,
-        "近 90 天":  90,
+        "近 30 天": 30,
+        "近 60 天": 60,
+        "近 90 天": 90,
         "近 180 天": 180,
         "近 365 天": 365,
-        "全部":      None,
+        "全部": None,
     }
     period_label = st.selectbox(
         "回測期間",
         list(_PERIOD_OPTIONS.keys()),
-        index=3,            # 預設「近 180 天」
+        index=3,  # 預設「近 180 天」
         key="bt_period",
     )
     period_days = _PERIOD_OPTIONS[period_label]
     if period_days is not None:
         cutoff = date.today() - timedelta(days=period_days)
         sub = sub[pd.to_datetime(sub["date"]).dt.date >= cutoff].copy()
-        df  = df[pd.to_datetime(df["date"]).dt.date  >= cutoff].copy()
+        df = df[pd.to_datetime(df["date"]).dt.date >= cutoff].copy()
         n_incomplete, n_missing = _flag_counts(df)
 
     if sub.empty:
@@ -295,10 +332,10 @@ def page_backtest() -> None:
 
     # ── 樣本漏斗（放在統計指標之前）────────────────────────────────────
     vf = load_validation_funnel()
-    n_raw      = vf.get("n_raw_rec", 0)
-    n_deduped  = len(df)
-    n_matured  = len(sub)
-    n_pending  = n_deduped - n_matured
+    n_raw = vf.get("n_raw_rec", 0)
+    n_deduped = len(df)
+    n_matured = len(sub)
+    n_pending = n_deduped - n_matured
 
     def _row(label, val, dim=False):
         color = "#888" if dim else "#f0f6fc"
@@ -309,9 +346,9 @@ def page_backtest() -> None:
             f'text-align:right;padding-left:16px">{val}</td></tr>'
         )
 
-    fs_total  = vf.get("n_fs_total", 0)
-    fs_20d    = vf.get("n_fs_20d", 0)
-    fs_60d    = vf.get("n_fs_60d", 0)
+    fs_total = vf.get("n_fs_total", 0)
+    fs_20d = vf.get("n_fs_20d", 0)
+    fs_60d = vf.get("n_fs_60d", 0)
     fs_latest = vf.get("fs_latest", "—")
     fs_pending = max(0, fs_total - fs_20d)
 
@@ -637,7 +674,9 @@ def page_backtest() -> None:
                     "t₂₀": _fmt_t(s.get("t_20")),
                     "IC₆₀": _fmt_ic(s.get("ic_60")),
                     "t₆₀": _fmt_t(s.get("t_60")),
-                    "IC IR": f"{s['ic_20_ir']:.2f}" if s.get("ic_20_ir") is not None else "—",
+                    "IC IR": (
+                        f"{s['ic_20_ir']:.2f}" if s.get("ic_20_ir") is not None else "—"
+                    ),
                     "n": s.get("n_20", 0),
                     "_ic20_raw": s.get("ic_20"),
                 }
@@ -758,12 +797,12 @@ def page_backtest() -> None:
         else:
             latest = funnel_df.iloc[-1]
             stages = {
-                "全市場股價":     int(latest.get("universe", 0)),
-                "有歷史資料":     int(latest.get("with_price", 0)),
+                "全市場股價": int(latest.get("universe", 0)),
+                "有歷史資料": int(latest.get("with_price", 0)),
                 "通過 Hard Filter": int(latest.get("hard_filter_pass", 0)),
-                "總分 ≥ 55":     int(latest.get("scored_55plus", 0)),
-                "總分 ≥ 65":     int(latest.get("scored_65plus", 0)),
-                "實際推薦":       int(latest.get("recommended", 0)),
+                "總分 ≥ 55": int(latest.get("scored_55plus", 0)),
+                "總分 ≥ 65": int(latest.get("scored_65plus", 0)),
+                "實際推薦": int(latest.get("recommended", 0)),
             }
             st.caption(f"最新日期：{latest['date']}")
             stage_df = pd.DataFrame(
@@ -771,6 +810,7 @@ def page_backtest() -> None:
             )
             try:
                 import altair as alt
+
                 chart = (
                     alt.Chart(stage_df)
                     .mark_bar()
@@ -838,22 +878,42 @@ def page_backtest() -> None:
         st.markdown("#### 總體績效對比")
         summary = v1v2.get("summary", pd.DataFrame())
         if not summary.empty:
+
             def _fmt(v):
                 if v is None or (isinstance(v, float) and v != v):
                     return "—"
                 if isinstance(v, float):
-                    return f"{v:+.2f}" if "Alpha" in str(v) or "報酬" in str(v) else f"{v:.2f}"
+                    return (
+                        f"{v:+.2f}"
+                        if "Alpha" in str(v) or "報酬" in str(v)
+                        else f"{v:.2f}"
+                    )
                 return str(v)
 
             st.dataframe(
-                summary.style.format({
-                    c: lambda x: f"{x:+.2f}%" if x is not None and isinstance(x, float) else "—"
-                    for c in summary.columns if "%" in c
-                }).format({
-                    c: lambda x: f"{x:.2f}" if x is not None and isinstance(x, float) else "—"
-                    for c in summary.columns if "Sharpe" in c
-                }),
-                use_container_width=True, hide_index=True,
+                summary.style.format(
+                    {
+                        c: lambda x: (
+                            f"{x:+.2f}%"
+                            if x is not None and isinstance(x, float)
+                            else "—"
+                        )
+                        for c in summary.columns
+                        if "%" in c
+                    }
+                ).format(
+                    {
+                        c: lambda x: (
+                            f"{x:.2f}"
+                            if x is not None and isinstance(x, float)
+                            else "—"
+                        )
+                        for c in summary.columns
+                        if "Sharpe" in c
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
             )
 
         tabs_v2 = st.tabs(["按 Setup 型態", "按 MA20 乖離率", "明細資料"])
@@ -877,13 +937,27 @@ def page_backtest() -> None:
         with tabs_v2[2]:
             detail = v1v2.get("detail", pd.DataFrame())
             if not detail.empty:
-                show_cols = ["date", "stock_id", "stock_name", "pt_score", "setup",
-                             "signal", "ma20_gap", "vol_ratio", "v2_pass",
-                             "ret_20d", "ret_60d", "alpha_20d", "alpha_60d"]
+                show_cols = [
+                    "date",
+                    "stock_id",
+                    "stock_name",
+                    "pt_score",
+                    "setup",
+                    "signal",
+                    "ma20_gap",
+                    "vol_ratio",
+                    "v2_pass",
+                    "ret_20d",
+                    "ret_60d",
+                    "alpha_20d",
+                    "alpha_60d",
+                ]
                 st.dataframe(
-                    detail[[c for c in show_cols if c in detail.columns]]
-                    .sort_values("date", ascending=False),
-                    use_container_width=True, hide_index=True,
+                    detail[[c for c in show_cols if c in detail.columns]].sort_values(
+                        "date", ascending=False
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
                 )
 
     with col_right:
@@ -895,13 +969,19 @@ def page_backtest() -> None:
             col_a, col_b = st.columns(2)
             col_a.metric("推薦次數", div["n_total"])
             col_b.metric("不同股票", div["n_unique"])
-            col_a.metric("Unique Rate", f"{div['unique_rate']}%",
-                         help="不同股票數 / 推薦總次數")
-            col_b.metric("日均重疊率", f"{div['avg_overlap']}%",
-                         help="相鄰兩日推薦名單的重疊比例（越高 = 越難換）")
+            col_a.metric(
+                "Unique Rate", f"{div['unique_rate']}%", help="不同股票數 / 推薦總次數"
+            )
+            col_b.metric(
+                "日均重疊率",
+                f"{div['avg_overlap']}%",
+                help="相鄰兩日推薦名單的重疊比例（越高 = 越難換）",
+            )
 
             st.caption(f"統計期間：{div['since']} 起，共 {div['n_days']} 個交易日")
-            top_df = pd.DataFrame(div["top10"])[["stock_id", "name", "count", "pct_days"]]
+            top_df = pd.DataFrame(div["top10"])[
+                ["stock_id", "name", "count", "pct_days"]
+            ]
             top_df.columns = ["股票代號", "名稱", "推薦次數", "出現天%"]
             st.dataframe(top_df, use_container_width=True, hide_index=True)
 
@@ -940,11 +1020,23 @@ def page_backtest() -> None:
                 ma60_detail = detail[detail["ma60_bracket"].notna()].copy()
                 if not ma60_detail.empty:
                     with st.expander(f"📋 MA60 候選明細（共 {len(ma60_detail)} 筆）"):
-                        show_cols = ["date", "stock_id", "stock_name", "ma60_bracket",
-                                     "ma20_gap", "ma60_gap", "vol_ratio",
-                                     "ret_20d", "ret_60d", "alpha_20d", "alpha_60d"]
+                        show_cols = [
+                            "date",
+                            "stock_id",
+                            "stock_name",
+                            "ma60_bracket",
+                            "ma20_gap",
+                            "ma60_gap",
+                            "vol_ratio",
+                            "ret_20d",
+                            "ret_60d",
+                            "alpha_20d",
+                            "alpha_60d",
+                        ]
                         st.dataframe(
-                            ma60_detail[[c for c in show_cols if c in ma60_detail.columns]]
-                            .sort_values("date", ascending=False),
-                            use_container_width=True, hide_index=True,
+                            ma60_detail[
+                                [c for c in show_cols if c in ma60_detail.columns]
+                            ].sort_values("date", ascending=False),
+                            use_container_width=True,
+                            hide_index=True,
                         )

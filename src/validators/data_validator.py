@@ -20,7 +20,8 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Re-export for convenience
-from src.core.trading_calendar import MarketStatus, market_status as _mkt_status
+from src.core.trading_calendar import MarketStatus  # noqa: E402
+from src.core.trading_calendar import market_status as _mkt_status  # noqa: E402
 
 
 class DataValidationError(Exception):
@@ -56,11 +57,17 @@ class DataValidator:
         if status in (MarketStatus.WEEKEND, MarketStatus.HOLIDAY):
             # 確認休市：直接拒絕，不用筆數判斷
             label = "週末" if status == MarketStatus.WEEKEND else "國定假日"
-            return False, f"MARKET_CLOSED: {trade_date} 為{label}，台股休市，不應執行分析。"
+            return (
+                False,
+                f"MARKET_CLOSED: {trade_date} 為{label}，台股休市，不應執行分析。",
+            )
 
         if df is None or df.empty:
             if status == MarketStatus.CALENDAR_UNKNOWN:
-                return False, "CALENDAR_UNKNOWN: 股價資料為空，且交易日曆無法確認當日是否開市。"
+                return (
+                    False,
+                    "CALENDAR_UNKNOWN: 股價資料為空，且交易日曆無法確認當日是否開市。",
+                )
             return False, "DATA_INCOMPLETE: 股價資料為空，今日資料尚未完整更新。"
 
         # 檢查必要欄位
@@ -73,8 +80,14 @@ class DataValidator:
         n = len(df)
         if n < self.MIN_VALID_STOCKS:
             if status == MarketStatus.CALENDAR_UNKNOWN:
-                return False, f"CALENDAR_UNKNOWN: 股價資料筆數過少（{n} 筆），交易日狀態無法確認。"
-            return False, f"DATA_INCOMPLETE: 股價資料筆數過少（{n} 筆），可能尚未完整更新。"
+                return (
+                    False,
+                    f"CALENDAR_UNKNOWN: 股價資料筆數過少（{n} 筆），交易日狀態無法確認。",
+                )
+            return (
+                False,
+                f"DATA_INCOMPLETE: 股價資料筆數過少（{n} 筆），可能尚未完整更新。",
+            )
 
         # 檢查同一天重複的 (stock_id, date) 才是真正的重複
         if "date" in df.columns:

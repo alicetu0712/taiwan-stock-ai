@@ -20,7 +20,7 @@ def _load_scorecard_rows(limit: int = 300) -> list:
     try:
         from sqlalchemy import desc
 
-        from src.database import ForwardSignal, MODEL_VERSION, get_session
+        from src.database import MODEL_VERSION, ForwardSignal, get_session
 
         s = get_session()
         rows = (

@@ -14,9 +14,8 @@ fundamental.py — 基本面篩除引擎（短線波段版）
 """
 
 import logging
-import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +23,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FundamentalResult:
     stock_id: str
-    quality_score: float = 0.0   # 0-100
-    quality_grade: str = "D"     # A+/A/B/C/D
+    quality_score: float = 0.0  # 0-100
+    quality_grade: str = "D"  # A+/A/B/C/D
     eps_score: float = 0.0
     revenue_score: float = 0.0
     margin_score: float = 0.0
@@ -50,9 +49,9 @@ class FundamentalAnalyzer:
     """
 
     WEIGHTS = {
-        "eps":      40,   # EPS YoY 成長
-        "revenue":  25,   # 月營收趨勢
-        "margin":   20,   # 毛利率趨勢
+        "eps": 40,  # EPS YoY 成長
+        "revenue": 25,  # 月營收趨勢
+        "margin": 20,  # 毛利率趨勢
         "op_margin": 15,  # 營益率趨勢
     }
 
@@ -61,7 +60,7 @@ class FundamentalAnalyzer:
 
         if not fin_summary.get("has_data", False):
             result.summary = "財務資料不足，基本面無法評估（以中性分處理）。"
-            result.quality_score = 50.0   # 資料缺失給中性分，不阻擋技術面好的股票
+            result.quality_score = 50.0  # 資料缺失給中性分，不阻擋技術面好的股票
             result.quality_grade = "B"
             return result
 
@@ -71,22 +70,26 @@ class FundamentalAnalyzer:
         # ── EPS YoY（40分）──────────────────────────────────
         eps_score, ep, em = self._score_eps_yoy(fin_summary)
         result.eps_score = eps_score
-        plus.extend(ep); minus.extend(em)
+        plus.extend(ep)
+        minus.extend(em)
 
         # ── 月營收趨勢（25分）────────────────────────────────
         rev_score, rp, rm = self._score_revenue(fin_summary)
         result.revenue_score = rev_score
-        plus.extend(rp); minus.extend(rm)
+        plus.extend(rp)
+        minus.extend(rm)
 
         # ── 毛利率趨勢（20分）────────────────────────────────
         margin_score, mp, mm = self._score_gross_margin(fin_summary)
         result.margin_score = margin_score
-        plus.extend(mp); minus.extend(mm)
+        plus.extend(mp)
+        minus.extend(mm)
 
         # ── 營益率趨勢（15分）────────────────────────────────
         op_score, op, om = self._score_op_margin(fin_summary)
         result.op_margin_score = op_score
-        plus.extend(op); minus.extend(om)
+        plus.extend(op)
+        minus.extend(om)
 
         total = eps_score + rev_score + margin_score + op_score
         max_total = sum(self.WEIGHTS.values())
@@ -99,7 +102,9 @@ class FundamentalAnalyzer:
         result.factors_minus = minus
         result.summary = self._build_summary(result)
 
-        logger.debug(f"{stock_id}: Fundamental Score={normalized:.1f} ({result.quality_grade})")
+        logger.debug(
+            f"{stock_id}: Fundamental Score={normalized:.1f} ({result.quality_grade})"
+        )
         return result
 
     # ── 子評分 ────────────────────────────────────────────────
@@ -110,7 +115,7 @@ class FundamentalAnalyzer:
 
         # 優先用 eps_yoy（年度 YoY）
         eps_yoy = fin.get("eps_yoy")
-        eps_5y = fin.get("eps_5y", [])
+        eps_5y = fin.get("eps_5y", [])  # noqa: F841
         eps_ttm = fin.get("eps_ttm")
 
         # 虧損直接給低分
@@ -129,7 +134,7 @@ class FundamentalAnalyzer:
                 score = 24.0
                 plus.append(f"EPS YoY +{eps_yoy:.0f}%，獲利小幅成長")
             elif eps_yoy >= -5:
-                score = 18.0   # 持平，不扣也不加
+                score = 18.0  # 持平，不扣也不加
             elif eps_yoy >= -20:
                 score = 10.0
                 minus.append(f"EPS YoY {eps_yoy:.0f}%，獲利衰退中，需留意")
@@ -149,7 +154,7 @@ class FundamentalAnalyzer:
             minus.append("EPS 近年呈下降趨勢")
             return 8.0, plus, minus
 
-        return 20.0, plus, minus   # 未知給中性
+        return 20.0, plus, minus  # 未知給中性
 
     def _score_revenue(self, fin: dict) -> Tuple[float, List[str], List[str]]:
         """月營收趨勢（25分）"""
@@ -222,7 +227,7 @@ class FundamentalAnalyzer:
         op_avg = fin.get("op_margin_avg")
         op_trend = fin.get("op_margin_trend", "unknown")
 
-        score = 7.0   # 中性基礎分
+        score = 7.0  # 中性基礎分
 
         if op_avg is not None:
             if op_avg >= 15:
@@ -259,10 +264,10 @@ class FundamentalAnalyzer:
     def _build_summary(self, r: "FundamentalResult") -> str:
         grade_desc = {
             "A+": "近期獲利/營收均在成長，基本面正向",
-            "A":  "基本面穩健，無明顯惡化",
-            "B":  "基本面中性，需持續觀察",
-            "C":  "基本面有部分衰退訊號",
-            "D":  "基本面明顯惡化，需謹慎",
+            "A": "基本面穩健，無明顯惡化",
+            "B": "基本面中性，需持續觀察",
+            "C": "基本面有部分衰退訊號",
+            "D": "基本面明顯惡化，需謹慎",
         }
         desc = grade_desc.get(r.quality_grade, "")
         minus_str = "；".join(r.factors_minus[:2]) if r.factors_minus else "無"

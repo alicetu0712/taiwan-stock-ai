@@ -245,10 +245,12 @@ def fetch_yfinance_daily(stale_df: pd.DataFrame, target_date: date) -> pd.DataFr
     for sid, market, ticker in rows_info:
         data = _fetch_yahoo_one(ticker, target_date)
         if data and data.get("close") and data["close"] > 0:
-            close_f  = _to_float(data["close"])
-            vol_k    = _to_float(data.get("volume", 0)) / 1000 if data.get("volume") else None
+            close_f = _to_float(data["close"])
+            vol_k = (
+                _to_float(data.get("volume", 0)) / 1000 if data.get("volume") else None
+            )
             # amount（百萬元）= 千股 × 收盤價 / 1000；TWSE TradeValue 同單位
-            amt_m    = round(vol_k * close_f / 1000, 2) if vol_k and close_f else None
+            amt_m = round(vol_k * close_f / 1000, 2) if vol_k and close_f else None
             records.append(
                 {
                     "stock_id": sid,

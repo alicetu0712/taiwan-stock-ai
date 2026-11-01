@@ -237,12 +237,12 @@ def build_financial_summary_from_db(stock_id: str, session, as_of_date=None) -> 
         "eps_ttm": rows[0].eps,
         "eps_5y": eps_asc[-5:],
         "eps_trend": _trend(eps_asc),
-        "eps_yoy": eps_yoy,                               # 新增：最新年度 EPS YoY%
+        "eps_yoy": eps_yoy,  # 新增：最新年度 EPS YoY%
         "roe_avg": _avg([r.roe for r in rows[:5]]),
         "roe_5y": roe_asc[-5:],
         "roa_avg": _avg([r.roa for r in rows[:5]]),
         "gross_margin_avg": _avg([r.gross_margin for r in rows[:5]]),
-        "gross_margin_trend": _trend(gm_asc),             # 新增：毛利率趨勢
+        "gross_margin_trend": _trend(gm_asc),  # 新增：毛利率趨勢
         "op_margin_avg": _avg(op_asc[-5:]) if op_asc else None,  # 新增：營益率平均
         "op_margin_trend": _trend(op_asc) if op_asc else "unknown",  # 新增：營益率趨勢
         "debt_ratio": rows[0].debt_ratio,

@@ -25,9 +25,9 @@ _calendar_expiry_warned: set = set()  # years already warned; avoids log spam
 
 
 class MarketStatus(str, Enum):
-    TRADING_DAY      = "TRADING_DAY"
-    WEEKEND          = "WEEKEND"
-    HOLIDAY          = "HOLIDAY"
+    TRADING_DAY = "TRADING_DAY"
+    WEEKEND = "WEEKEND"
+    HOLIDAY = "HOLIDAY"
     CALENDAR_UNKNOWN = "CALENDAR_UNKNOWN"
 
 
@@ -36,36 +36,38 @@ class MarketStatus(str, Enum):
 # Excludes weekends (handled separately).
 # Verify and extend each year when TWSE publishes the new schedule.
 
-_TWSE_HOLIDAYS: frozenset = frozenset([
-    # ── 2026 ──────────────────────────────────────────────────
-    date(2026,  1,  1),   # 元旦
-    date(2026,  1,  2),   # 元旦補假
-    date(2026,  2, 16),   # 農曆除夕前補班/連假（春節）
-    date(2026,  2, 17),   # 春節初一
-    date(2026,  2, 18),   # 春節初二
-    date(2026,  2, 19),   # 春節初三（替代週六）
-    date(2026,  2, 20),   # 春節補假
-    date(2026,  2, 27),   # 和平紀念日補假（228 週六補前一日）
-    date(2026,  4,  3),   # 兒童節（清明節前一天）
-    date(2026,  4,  6),   # 清明節補假
-    date(2026,  6, 19),   # 端午節
-    date(2026,  9, 25),   # 中秋節
-    date(2026, 10,  9),   # 國慶日補假（10/10 週六，補休前一個週五）
-    # ── 2025 ──────────────────────────────────────────────────
-    date(2025,  1,  1),   # 元旦
-    date(2025,  1, 27),   # 除夕
-    date(2025,  1, 28),   # 春節初一
-    date(2025,  1, 29),   # 春節初二
-    date(2025,  1, 30),   # 春節初三
-    date(2025,  1, 31),   # 春節初四
-    date(2025,  2, 28),   # 和平紀念日
-    date(2025,  4,  3),   # 兒童節
-    date(2025,  4,  4),   # 清明節
-    date(2025,  5,  1),   # 勞動節（TWSE 2025 有休市，需確認年度公告）
-    date(2025,  5, 30),   # 端午節
-    date(2025, 10,  9),   # 國慶日補假（如適用）
-    date(2025, 10, 10),   # 國慶日
-])
+_TWSE_HOLIDAYS: frozenset = frozenset(
+    [
+        # ── 2026 ──────────────────────────────────────────────────
+        date(2026, 1, 1),  # 元旦
+        date(2026, 1, 2),  # 元旦補假
+        date(2026, 2, 16),  # 農曆除夕前補班/連假（春節）
+        date(2026, 2, 17),  # 春節初一
+        date(2026, 2, 18),  # 春節初二
+        date(2026, 2, 19),  # 春節初三（替代週六）
+        date(2026, 2, 20),  # 春節補假
+        date(2026, 2, 27),  # 和平紀念日補假（228 週六補前一日）
+        date(2026, 4, 3),  # 兒童節（清明節前一天）
+        date(2026, 4, 6),  # 清明節補假
+        date(2026, 6, 19),  # 端午節
+        date(2026, 9, 25),  # 中秋節
+        date(2026, 10, 9),  # 國慶日補假（10/10 週六，補休前一個週五）
+        # ── 2025 ──────────────────────────────────────────────────
+        date(2025, 1, 1),  # 元旦
+        date(2025, 1, 27),  # 除夕
+        date(2025, 1, 28),  # 春節初一
+        date(2025, 1, 29),  # 春節初二
+        date(2025, 1, 30),  # 春節初三
+        date(2025, 1, 31),  # 春節初四
+        date(2025, 2, 28),  # 和平紀念日
+        date(2025, 4, 3),  # 兒童節
+        date(2025, 4, 4),  # 清明節
+        date(2025, 5, 1),  # 勞動節（TWSE 2025 有休市，需確認年度公告）
+        date(2025, 5, 30),  # 端午節
+        date(2025, 10, 9),  # 國慶日補假（如適用）
+        date(2025, 10, 10),  # 國慶日
+    ]
+)
 
 # Years for which we have confident holiday data
 _COVERED_YEARS: frozenset = frozenset([2025, 2026])
@@ -103,7 +105,10 @@ class TaiwanTradingCalendar:
                 "Add %d TWSE holidays to _TWSE_HOLIDAYS in trading_calendar.py "
                 "(TWSE publishes next year's schedule around Oct-Nov). "
                 "Pipeline will skip all days in %d until updated. Use --force to bypass.",
-                d.year, max_covered, d.year, d.year,
+                d.year,
+                max_covered,
+                d.year,
+                d.year,
             )
         return MarketStatus.CALENDAR_UNKNOWN
 
@@ -179,7 +184,7 @@ def next_trading_day(d: date) -> date | None:
 # TWSE publishes official closing data around 15:00-15:30 Asia/Taipei.
 # The scheduled pipeline runs at 15:55 (safely after publication).
 # Before this hour:minute we consider today's data NOT yet available.
-_DATA_READY_HOUR: int   = 15
+_DATA_READY_HOUR: int = 15
 _DATA_READY_MINUTE: int = 30
 
 
@@ -205,10 +210,8 @@ def effective_trade_date(now_taipei: datetime | None = None) -> date:
 
     today = now_taipei.date()
     is_today_trading = _calendar.is_trading_day(today)
-    data_ready = (
-        now_taipei.hour > _DATA_READY_HOUR
-        or (now_taipei.hour == _DATA_READY_HOUR
-            and now_taipei.minute >= _DATA_READY_MINUTE)
+    data_ready = now_taipei.hour > _DATA_READY_HOUR or (
+        now_taipei.hour == _DATA_READY_HOUR and now_taipei.minute >= _DATA_READY_MINUTE
     )
 
     if is_today_trading and data_ready:

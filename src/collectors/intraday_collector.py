@@ -28,9 +28,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 _TWSE_API = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
-_BATCH_SIZE = 30        # 每次最多查 30 支，避免 URL 過長
-_TIMEOUT    = 8         # 秒
-_CACHE_TTL  = 8         # 秒：快取存活時間（避免同一秒重複打 API）
+_BATCH_SIZE = 30  # 每次最多查 30 支，避免 URL 過長
+_TIMEOUT = 8  # 秒
+_CACHE_TTL = 8  # 秒：快取存活時間（避免同一秒重複打 API）
 
 _price_cache: Dict[str, dict] = {}
 _cache_ts: float = 0.0
@@ -38,18 +38,18 @@ _cache_ts: float = 0.0
 
 @dataclass
 class IntradayQuote:
-    stock_id:   str
-    name:       str
-    price:      Optional[float]   # 最新成交價（z 欄位；盤中無新成交時為 None）
-    open:       Optional[float]
-    high:       Optional[float]
-    low:        Optional[float]
-    volume:     Optional[float]   # 千股
-    update_time: Optional[str]    # "HH:MM:SS" 台灣時間
-    trade_date:  Optional[str]    # "YYYYMMDD" 報價日期（用於 stale 判斷）
-    is_trading:  bool = False     # True = 有新成交（z 欄位有值）
-    source:      str  = "twse_mis"
-    fetched_at:  str  = field(default_factory=lambda: datetime.now().strftime("%H:%M:%S"))
+    stock_id: str
+    name: str
+    price: Optional[float]  # 最新成交價（z 欄位；盤中無新成交時為 None）
+    open: Optional[float]
+    high: Optional[float]
+    low: Optional[float]
+    volume: Optional[float]  # 千股
+    update_time: Optional[str]  # "HH:MM:SS" 台灣時間
+    trade_date: Optional[str]  # "YYYYMMDD" 報價日期（用於 stale 判斷）
+    is_trading: bool = False  # True = 有新成交（z 欄位有值）
+    source: str = "twse_mis"
+    fetched_at: str = field(default_factory=lambda: datetime.now().strftime("%H:%M:%S"))
 
 
 def _parse_float(val: str) -> Optional[float]:
@@ -125,16 +125,16 @@ def fetch_intraday(
             raw_date = item.get("d", "").strip()
             trade_date = raw_date if len(raw_date) == 8 and raw_date.isdigit() else None
             quote = IntradayQuote(
-                stock_id    = sid,
-                name        = item.get("n", ""),
-                price       = price,
-                open        = _parse_float(item.get("o")),
-                high        = _parse_float(item.get("h")),
-                low         = _parse_float(item.get("l")),
-                volume      = _parse_float(item.get("v")),
-                update_time = item.get("t"),
-                trade_date  = trade_date,
-                is_trading  = price is not None,
+                stock_id=sid,
+                name=item.get("n", ""),
+                price=price,
+                open=_parse_float(item.get("o")),
+                high=_parse_float(item.get("h")),
+                low=_parse_float(item.get("l")),
+                volume=_parse_float(item.get("v")),
+                update_time=item.get("t"),
+                trade_date=trade_date,
+                is_trading=price is not None,
             )
             result[sid] = quote
 
@@ -167,5 +167,6 @@ def quote_date_status(quote: IntradayQuote) -> str:
     if quote.trade_date is None:
         return "unknown"
     from datetime import date
+
     today_str = date.today().strftime("%Y%m%d")
     return "valid" if quote.trade_date == today_str else "stale"

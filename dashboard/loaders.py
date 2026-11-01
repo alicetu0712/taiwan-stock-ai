@@ -22,30 +22,29 @@ def _sanitize_trading_plan(d: dict) -> dict:
     when the stored values are stale (computed from a different price era).
     Stale = stop_price >= price, or entry_low > price * 1.5.
     """
-    price     = d.get("price")
-    atr       = d.get("atr")
-    stop_p    = d.get("stop_price")
+    price = d.get("price")
+    atr = d.get("atr")
+    stop_p = d.get("stop_price")
     entry_low = d.get("entry_low")
     if not price or price <= 0:
         return d
-    stale = (
-        (stop_p  is not None and stop_p  >= price) or
-        (entry_low is not None and entry_low > price * 1.5)
+    stale = (stop_p is not None and stop_p >= price) or (
+        entry_low is not None and entry_low > price * 1.5
     )
     if not stale:
         return d
     if atr and atr > 0 and atr < price * 0.5:
-        d["entry_low"]  = round(price - 0.3 * atr, 2)
+        d["entry_low"] = round(price - 0.3 * atr, 2)
         d["entry_high"] = round(price + 0.3 * atr, 2)
         d["stop_price"] = round(price - 2.0 * atr, 2)
-        d["target1"]    = round(price + 2.5 * atr, 2)
-        d["target2"]    = round(price + 5.0 * atr, 2)
+        d["target1"] = round(price + 2.5 * atr, 2)
+        d["target2"] = round(price + 5.0 * atr, 2)
     else:
-        d["entry_low"]  = None
+        d["entry_low"] = None
         d["entry_high"] = None
         d["stop_price"] = None
-        d["target1"]    = None
-        d["target2"]    = None
+        d["target1"] = None
+        d["target2"] = None
     return d
 
 
@@ -169,8 +168,10 @@ def load_recent_recs(days: int = 60) -> pd.DataFrame:
 
 def _is_etf_or_excluded(sid: str, name: str) -> bool:
     """判斷是否為 ETF/權證/非個股標的，需從清單中排除。"""
-    from config import EXCLUDE_KEYWORDS, EXCLUDE_PATTERNS
     import re
+
+    from config import EXCLUDE_KEYWORDS, EXCLUDE_PATTERNS
+
     # 代碼以 0 開頭 → ETF（0050, 0056 等）
     if sid.startswith("0"):
         return True
@@ -216,12 +217,19 @@ def load_stock_names() -> dict:
                 sid = item.get("Code", "").strip()
                 name = item.get("Name", "").strip()
                 # 已在 DB 中的優先保留 DB 名稱，且排除非個股標的
-                if sid and name and sid not in names and not _is_etf_or_excluded(sid, name):
+                if (
+                    sid
+                    and name
+                    and sid not in names
+                    and not _is_etf_or_excluded(sid, name)
+                ):
                     names[sid] = name
     except Exception as e:
         logger.warning(f"load_stock_names TWSE API failed: {e}")
     # 移除 DB 中本身就是 ETF/非個股的條目
-    return {sid: name for sid, name in names.items() if not _is_etf_or_excluded(sid, name)}
+    return {
+        sid: name for sid, name in names.items() if not _is_etf_or_excluded(sid, name)
+    }
 
 
 @st.cache_data(ttl=86400)
@@ -289,10 +297,8 @@ def load_db_recommendations(target_date: date) -> list:
         )
         stock_rows = s.execute(select(Stock)).scalars().all()
         stock_name_map = {r.stock_id: r.name for r in stock_rows if r.name}
-        industry_map   = {
-            r.stock_id: r.industry
-            for r in stock_rows
-            if getattr(r, "industry", None)
+        industry_map = {
+            r.stock_id: r.industry for r in stock_rows if getattr(r, "industry", None)
         }
         ar_map = {
             r.stock_id: r
@@ -324,20 +330,18 @@ def load_db_recommendations(target_date: date) -> list:
         consecutive_map: dict = {}
         try:
             from collections import defaultdict
+
             s2 = get_session()
             if rec_ids:
-                past_rows = (
-                    s2.execute(
-                        select(Recommendation.stock_id, Recommendation.date)
-                        .where(
-                            Recommendation.stock_id.in_(rec_ids),
-                            Recommendation.tier == "recommend",
-                            Recommendation.date <= target_date,
-                        )
-                        .order_by(Recommendation.stock_id, Recommendation.date.desc())
+                past_rows = s2.execute(
+                    select(Recommendation.stock_id, Recommendation.date)
+                    .where(
+                        Recommendation.stock_id.in_(rec_ids),
+                        Recommendation.tier == "recommend",
+                        Recommendation.date <= target_date,
                     )
-                    .all()
-                )
+                    .order_by(Recommendation.stock_id, Recommendation.date.desc())
+                ).all()
                 s2.close()
                 hist: dict = defaultdict(list)
                 for sid, d in past_rows:
@@ -360,7 +364,8 @@ def load_db_recommendations(target_date: date) -> list:
             pm = pm_map.get(r.stock_id)
             result.append(
                 {
-                    "name": getattr(r, "stock_name", None) or stock_name_map.get(r.stock_id, ""),
+                    "name": getattr(r, "stock_name", None)
+                    or stock_name_map.get(r.stock_id, ""),
                     "sid": r.stock_id,
                     "price": db_price_map.get(r.stock_id),
                     "level": r.rec_level or "B",
@@ -381,26 +386,29 @@ def load_db_recommendations(target_date: date) -> list:
                     "stop_loss_price": pm.stop_loss_price if pm else None,
                     "position_pct": pm.position_pct if pm else None,
                     # V2 Decision Center fields
-                    "trade_signal":      getattr(r, "trade_signal", None) or "wait",
-                    "setup_type":        getattr(r, "setup_type", None) or "none",
-                    "ma20_gap":          getattr(r, "ma20_gap", None),
+                    "trade_signal": getattr(r, "trade_signal", None) or "wait",
+                    "setup_type": getattr(r, "setup_type", None) or "none",
+                    "ma20_gap": getattr(r, "ma20_gap", None),
                     "price_trend_score": getattr(r, "price_trend_score", None),
-                    "entry_low":         getattr(r, "entry_low", None),
-                    "entry_high":        getattr(r, "entry_high", None),
-                    "stop_price":        getattr(r, "stop_price", None),
-                    "target1":           getattr(r, "target1", None),
-                    "target2":           getattr(r, "target2", None),
-                    "atr":               getattr(r, "atr", None),
-                    "vol_ratio":         getattr(r, "vol_ratio", None),
+                    "entry_low": getattr(r, "entry_low", None),
+                    "entry_high": getattr(r, "entry_high", None),
+                    "stop_price": getattr(r, "stop_price", None),
+                    "target1": getattr(r, "target1", None),
+                    "target2": getattr(r, "target2", None),
+                    "atr": getattr(r, "atr", None),
+                    "vol_ratio": getattr(r, "vol_ratio", None),
                     # P3/P4 fields
-                    "industry":          industry_map.get(r.stock_id, ""),
-                    "consecutive_days":  consecutive_map.get(r.stock_id, 1),
+                    "industry": industry_map.get(r.stock_id, ""),
+                    "consecutive_days": consecutive_map.get(r.stock_id, 1),
                     # Stock-level data quality
-                    "data_quality":           json.loads(r.data_quality_json)
-                                              if getattr(r, "data_quality_json", None) else None,
-                    "missing_data_factors":   getattr(r, "missing_data_factors", None),
+                    "data_quality": (
+                        json.loads(r.data_quality_json)
+                        if getattr(r, "data_quality_json", None)
+                        else None
+                    ),
+                    "missing_data_factors": getattr(r, "missing_data_factors", None),
                     # Phase 3: price source date for PREVIOUS_CLOSE labeling
-                    "price_date":             db_price_date_map.get(r.stock_id),
+                    "price_date": db_price_date_map.get(r.stock_id),
                 }
             )
             _sanitize_trading_plan(result[-1])
@@ -414,10 +422,16 @@ def load_db_recommendations(target_date: date) -> list:
 def load_opportunity_recs(target_date: date) -> list:
     """從 DB 讀取當日 tier='opportunity' 的推薦（New Opportunities），供 overview 頁獨立顯示。"""
     try:
+        from sqlalchemy import desc as _desc
         from sqlalchemy import select
 
-        from src.database import AnalysisResult, DailyPrice, Recommendation, Stock, get_session
-        from sqlalchemy import desc as _desc
+        from src.database import (
+            AnalysisResult,
+            DailyPrice,
+            Recommendation,
+            Stock,
+            get_session,
+        )
 
         s = get_session()
         rows = (
@@ -442,7 +456,9 @@ def load_opportunity_recs(target_date: date) -> list:
             r.stock_id: r
             for r in s.execute(
                 select(AnalysisResult).where(AnalysisResult.date == target_date)
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         }
         db_price_map = {}
         for r in rows:
@@ -458,29 +474,31 @@ def load_opportunity_recs(target_date: date) -> list:
         result = []
         for r in rows:
             ar = ar_map.get(r.stock_id)
-            result.append({
-                "name": r.stock_name or stock_name_map.get(r.stock_id, ""),
-                "sid": r.stock_id,
-                "price": db_price_map.get(r.stock_id),
-                "level": r.rec_level or "B",
-                "total_score": r.total_score or 0,
-                "score_change_5d": r.score_change_5d,
-                "score_change_10d": r.score_change_10d,
-                "scores": {
-                    "quality": ar.quality_score if ar else 0,
-                    "timing": ar.timing_score if ar else 0,
-                    "behavior": ar.behavior_score if ar else 0,
-                    "risk": ar.risk_score if ar else 0,
-                    "total": r.total_score or (ar.total_score if ar else 0),
-                },
-                "confidence": r.confidence or 0,
-                "timing_change_5d": r.timing_change_5d,
-                "behavior_change_5d": r.behavior_change_5d,
-                "advantages": json.loads(r.advantages) if r.advantages else [],
-                "risks": json.loads(r.risks) if r.risks else [],
-                "watch": json.loads(r.watch_points) if r.watch_points else [],
-                "summary": r.summary or "",
-            })
+            result.append(
+                {
+                    "name": r.stock_name or stock_name_map.get(r.stock_id, ""),
+                    "sid": r.stock_id,
+                    "price": db_price_map.get(r.stock_id),
+                    "level": r.rec_level or "B",
+                    "total_score": r.total_score or 0,
+                    "score_change_5d": r.score_change_5d,
+                    "score_change_10d": r.score_change_10d,
+                    "scores": {
+                        "quality": ar.quality_score if ar else 0,
+                        "timing": ar.timing_score if ar else 0,
+                        "behavior": ar.behavior_score if ar else 0,
+                        "risk": ar.risk_score if ar else 0,
+                        "total": r.total_score or (ar.total_score if ar else 0),
+                    },
+                    "confidence": r.confidence or 0,
+                    "timing_change_5d": r.timing_change_5d,
+                    "behavior_change_5d": r.behavior_change_5d,
+                    "advantages": json.loads(r.advantages) if r.advantages else [],
+                    "risks": json.loads(r.risks) if r.risks else [],
+                    "watch": json.loads(r.watch_points) if r.watch_points else [],
+                    "summary": r.summary or "",
+                }
+            )
         return result
     except Exception as e:
         logger.warning(f"load_opportunity_recs failed: {e}")
@@ -492,6 +510,7 @@ def load_watch_recs(target_date: date) -> list:
     """從 DB 讀取當日 tier='watch' 的觀察名單（由 DecisionEngine.select_watchlist 產生）。"""
     try:
         from sqlalchemy import select
+
         from src.database import AnalysisResult, Recommendation, Stock, get_session
 
         s = get_session()
@@ -517,23 +536,27 @@ def load_watch_recs(target_date: date) -> list:
             r.stock_id: r
             for r in s.execute(
                 select(AnalysisResult).where(AnalysisResult.date == target_date)
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         }
         s.close()
         result = []
         for r in rows:
             ar = ar_map.get(r.stock_id)
-            result.append({
-                "name": r.stock_name or stock_name_map.get(r.stock_id, r.stock_id),
-                "sid": r.stock_id,
-                "total_score": r.total_score or 0,
-                "timing_score": r.timing_score or 0,
-                "behavior_score": r.behavior_score or 0,
-                "confidence": r.confidence or 0,
-                "score_change_5d": r.score_change_5d,
-                "quality": ar.quality_score if ar else 0,
-                "risk": ar.risk_score if ar else 0,
-            })
+            result.append(
+                {
+                    "name": r.stock_name or stock_name_map.get(r.stock_id, r.stock_id),
+                    "sid": r.stock_id,
+                    "total_score": r.total_score or 0,
+                    "timing_score": r.timing_score or 0,
+                    "behavior_score": r.behavior_score or 0,
+                    "confidence": r.confidence or 0,
+                    "score_change_5d": r.score_change_5d,
+                    "quality": ar.quality_score if ar else 0,
+                    "risk": ar.risk_score if ar else 0,
+                }
+            )
         return result
     except Exception as e:
         logger.warning(f"load_watch_recs failed: {e}")
@@ -592,8 +615,15 @@ def load_candidate_pool_data() -> dict:
             "error": f"候選資料讀取失敗：{e}",
             "active": [],
             "recent_exits": [],
-            "stats": {"n_total": 0, "n_active": 0, "n_buy": 0, "n_exited": 0,
-                      "avg_wait_days": None, "conversion_rate": None, "sufficient_data": False},
+            "stats": {
+                "n_total": 0,
+                "n_active": 0,
+                "n_buy": 0,
+                "n_exited": 0,
+                "avg_wait_days": None,
+                "conversion_rate": None,
+                "sufficient_data": False,
+            },
             "today_history": {},
         }
 
@@ -805,12 +835,12 @@ def load_price_chart_data(stock_id: str, days: int = 120) -> pd.DataFrame:
         df = pd.DataFrame(
             [
                 {
-                    "date":       r.date,
-                    "open":       r.open,
-                    "high":       r.high,
-                    "low":        r.low,
-                    "close":      r.close,
-                    "volume":     r.volume,
+                    "date": r.date,
+                    "open": r.open,
+                    "high": r.high,
+                    "low": r.low,
+                    "close": r.close,
+                    "volume": r.volume,
                     "change_pct": r.change_pct,
                 }
                 for r in rows
@@ -852,17 +882,17 @@ def load_latest_pt_analysis(stock_id: str) -> dict:
         if not row:
             return {}
         return {
-            "date":              row.date,
+            "date": row.date,
             "price_trend_score": row.price_trend_score,
-            "timing_score":      row.timing_score,
-            "quality_score":     row.quality_score,
-            "behavior_score":    row.behavior_score,
-            "total_score":       row.total_score,
-            "setup_type":        getattr(row, "setup_type", None),
-            "ma20_gap":          getattr(row, "ma20_gap", None),
-            "volume_ratio":      getattr(row, "volume_ratio", None),
-            "trade_signal":      getattr(row, "trade_signal", None),
-            "rec_level":         row.rec_level,
+            "timing_score": row.timing_score,
+            "quality_score": row.quality_score,
+            "behavior_score": row.behavior_score,
+            "total_score": row.total_score,
+            "setup_type": getattr(row, "setup_type", None),
+            "ma20_gap": getattr(row, "ma20_gap", None),
+            "volume_ratio": getattr(row, "volume_ratio", None),
+            "trade_signal": getattr(row, "trade_signal", None),
+            "rec_level": row.rec_level,
         }
     except Exception as e:
         logger.warning(f"load_latest_pt_analysis({stock_id}) failed: {e}")
@@ -915,7 +945,9 @@ def load_watchable_stocks(sel_date: date) -> list[dict]:
             sid = r[0]
             if sid not in seen:
                 seen.add(sid)
-                result.append({"sid": sid, "name": r[1] or "", "tier": r[2] or "recommend"})
+                result.append(
+                    {"sid": sid, "name": r[1] or "", "tier": r[2] or "recommend"}
+                )
         return result
     except Exception as e:
         logger.warning(f"load_watchable_stocks failed: {e}")
@@ -927,6 +959,7 @@ def load_current_regime() -> str:
     """Compute current market regime from 0050 (cached 1h)."""
     try:
         from src.services.evidence_service import get_current_regime
+
         return get_current_regime()
     except Exception as e:
         logger.warning(f"load_current_regime: {e}")
@@ -945,6 +978,7 @@ def load_evidence_stats(setup_type: str, market_regime: str) -> dict:
             forward_evidence,
             research_evidence,
         )
+
         re_ev = research_evidence(setup_type, market_regime)
         fe_ev = forward_evidence(setup_type, market_regime)
         narrative = evidence_narrative(re_ev, fe_ev)
@@ -959,7 +993,9 @@ def load_pipeline_funnel(target_date: date) -> dict:
     """Load today's pipeline funnel stats from PipelineFunnel table (cached 5 min)."""
     try:
         from sqlalchemy import select
+
         from src.database import PipelineFunnel, get_session
+
         s = get_session()
         row = s.execute(
             select(PipelineFunnel).where(PipelineFunnel.date == target_date)
@@ -968,10 +1004,10 @@ def load_pipeline_funnel(target_date: date) -> dict:
         if not row:
             return {}
         return {
-            "universe":         row.universe or 0,
-            "with_price":       row.with_price or 0,
+            "universe": row.universe or 0,
+            "with_price": row.with_price or 0,
             "hard_filter_pass": row.hard_filter_pass or 0,
-            "recommended":      row.recommended or 0,
+            "recommended": row.recommended or 0,
         }
     except Exception as e:
         logger.warning(f"load_pipeline_funnel: {e}")
@@ -990,48 +1026,55 @@ def load_market_health(target_date) -> dict:
       last_trading_day: date of most recent confirmed trading day
       conditions    : list of warning strings
     """
-    from datetime import date as _date
-    from src.core.trading_calendar import (
-        market_status as _cal_status, MarketStatus as _MS,
-        prev_trading_day as _prev_td,
-    )
+
+    from src.core.trading_calendar import MarketStatus as _MS
+    from src.core.trading_calendar import market_status as _cal_status
+    from src.core.trading_calendar import prev_trading_day as _prev_td
 
     cal_status = _cal_status(target_date)
-    last_td    = _prev_td(target_date)
+    last_td = _prev_td(target_date)
 
     # ── 確認休市 → 直接回傳，不查 pipeline ────────────────────
     if cal_status in (_MS.WEEKEND, _MS.HOLIDAY):
         label = "週末" if cal_status == _MS.WEEKEND else "國定假日"
         return {
-            "level":            "closed",
-            "market_status":    cal_status.value,
+            "level": "closed",
+            "market_status": cal_status.value,
             "last_trading_day": last_td,
-            "regime":           "neutral",
-            "universe":         0,
-            "pass_rate":        0.0,
-            "recs_count":       0,
-            "conditions":       [f"台股{label}休市"],
+            "regime": "neutral",
+            "universe": 0,
+            "pass_rate": 0.0,
+            "recs_count": 0,
+            "conditions": [f"台股{label}休市"],
         }
 
     try:
-        from src.services.evidence_service import get_current_regime
+        from sqlalchemy import func as _func
+        from sqlalchemy import select
+
         from src.database import PipelineFunnel, Recommendation, get_session
-        from sqlalchemy import select, func as _func
+        from src.services.evidence_service import get_current_regime
+
         s = get_session()
         funnel_row = s.execute(
             select(PipelineFunnel).where(PipelineFunnel.date == target_date)
         ).scalar_one_or_none()
-        recs_count = s.execute(
-            select(_func.count()).select_from(Recommendation).where(
-                Recommendation.date == target_date,
-                Recommendation.tier == "recommend",
-            )
-        ).scalar() or 0
+        recs_count = (
+            s.execute(
+                select(_func.count())
+                .select_from(Recommendation)
+                .where(
+                    Recommendation.date == target_date,
+                    Recommendation.tier == "recommend",
+                )
+            ).scalar()
+            or 0
+        )
         s.close()
 
-        regime    = get_current_regime()
-        universe  = funnel_row.universe if funnel_row else 0
-        hf_pass   = funnel_row.hard_filter_pass if funnel_row else 0
+        regime = get_current_regime()
+        universe = funnel_row.universe if funnel_row else 0
+        hf_pass = funnel_row.hard_filter_pass if funnel_row else 0
         pass_rate = round((hf_pass / universe * 100), 1) if universe > 0 else 0.0
 
         conditions = []
@@ -1062,21 +1105,26 @@ def load_market_health(target_date) -> dict:
             level = "yellow"
 
         return {
-            "level":            level,
-            "market_status":    cal_status.value,
+            "level": level,
+            "market_status": cal_status.value,
             "last_trading_day": last_td,
-            "regime":           regime,
-            "universe":         universe,
-            "pass_rate":        pass_rate,
-            "recs_count":       recs_count,
-            "conditions":       conditions,
+            "regime": regime,
+            "universe": universe,
+            "pass_rate": pass_rate,
+            "recs_count": recs_count,
+            "conditions": conditions,
         }
     except Exception as e:
         logger.warning(f"load_market_health: {e}")
         return {
-            "level": "unknown", "market_status": "CALENDAR_UNKNOWN",
-            "last_trading_day": last_td, "conditions": [],
-            "regime": "neutral", "universe": 0, "pass_rate": 0, "recs_count": 0,
+            "level": "unknown",
+            "market_status": "CALENDAR_UNKNOWN",
+            "last_trading_day": last_td,
+            "conditions": [],
+            "regime": "neutral",
+            "universe": 0,
+            "pass_rate": 0,
+            "recs_count": 0,
         }
 
 
@@ -1103,8 +1151,9 @@ def load_forward_signals_scorecard(limit: int = 200) -> list:
     Returns: list of dicts, 依 trade_date DESC 排序。
     """
     try:
-        from src.database import ForwardSignal, MODEL_VERSION, get_session
         from sqlalchemy import desc
+
+        from src.database import MODEL_VERSION, ForwardSignal, get_session
 
         s = get_session()
         rows = (
@@ -1119,30 +1168,30 @@ def load_forward_signals_scorecard(limit: int = 200) -> list:
         s.close()
         return [
             {
-                "trade_date":       str(r.trade_date),
-                "stock_id":         r.stock_id,
-                "stock_name":       r.stock_name or r.stock_id,
-                "setup_type":       r.setup_type,
-                "trade_signal":     r.trade_signal,
-                "decision_label":   r.decision_label,
-                "industry":         r.industry,
-                "market_regime":    r.market_regime_at_signal,
-                "close_at_signal":  r.close_at_signal,
-                "entry_low":        r.entry_low,
-                "entry_high":       r.entry_high,
-                "stop_price":       r.stop_price,
-                "target1":          r.target1,
-                "target2":          r.target2,
-                "fwd_return_20d":   r.fwd_return_20d,
-                "alpha_20d":        r.alpha_20d,
-                "fwd_return_60d":   r.fwd_return_60d,
-                "alpha_60d":        r.alpha_60d,
+                "trade_date": str(r.trade_date),
+                "stock_id": r.stock_id,
+                "stock_name": r.stock_name or r.stock_id,
+                "setup_type": r.setup_type,
+                "trade_signal": r.trade_signal,
+                "decision_label": r.decision_label,
+                "industry": r.industry,
+                "market_regime": r.market_regime_at_signal,
+                "close_at_signal": r.close_at_signal,
+                "entry_low": r.entry_low,
+                "entry_high": r.entry_high,
+                "stop_price": r.stop_price,
+                "target1": r.target1,
+                "target2": r.target2,
+                "fwd_return_20d": r.fwd_return_20d,
+                "alpha_20d": r.alpha_20d,
+                "fwd_return_60d": r.fwd_return_60d,
+                "alpha_60d": r.alpha_60d,
                 "stop_triggered_day": r.stop_triggered_day,
-                "t1_hit_day":       r.t1_hit_day,
-                "outcome_note":     r.outcome_note,
-                "pt_score":         r.pt_score,
-                "total_score":      r.total_score,
-                "confidence":       r.confidence,
+                "t1_hit_day": r.t1_hit_day,
+                "outcome_note": r.outcome_note,
+                "pt_score": r.pt_score,
+                "total_score": r.total_score,
+                "confidence": r.confidence,
             }
             for r in rows
         ]

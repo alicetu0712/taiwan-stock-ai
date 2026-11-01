@@ -10,7 +10,6 @@ import logging
 import pandas as pd
 import streamlit as st
 
-from src.presentation.evidence_presenter import EvidencePresenter
 from src.engines.outcome_evaluation import (
     EXCL_NO_OVERNIGHT_DATA,
     EXEC_DATA_INSUFFICIENT,
@@ -27,6 +26,7 @@ from src.engines.outcome_evaluation import (
     PATH_AWARE,
     PATH_BASELINE,
 )
+from src.presentation.evidence_presenter import EvidencePresenter
 
 logger = logging.getLogger(__name__)
 
@@ -157,18 +157,22 @@ def _section_progress_summary(df: pd.DataFrame):
     n_unique_signals = df["forward_signal_id"].nunique()
 
     baseline_all = df[df["path_type"] == PATH_BASELINE]
-    n_legacy = df[df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA]["forward_signal_id"].nunique()
-    n_formal = baseline_all["forward_signal_id"].nunique() - n_legacy  # unique signals in formal cohort
+    n_legacy = df[df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA][
+        "forward_signal_id"
+    ].nunique()
+    n_formal = (
+        baseline_all["forward_signal_id"].nunique() - n_legacy
+    )  # unique signals in formal cohort
 
     formal_baseline = _formal_eligible(baseline_all)
-    n_pending    = int((formal_baseline["entry_status"] == EXEC_PENDING).sum())
+    n_pending = int((formal_baseline["entry_status"] == EXEC_PENDING).sum())
     n_matured_20d = int(formal_baseline["horizon_20d_matured_at"].notna().sum())
     n_matured_60d = int(formal_baseline["horizon_60d_matured_at"].notna().sum())
 
     ss = _EVIDENCE_PRESENTER.sample_strength(n_matured_20d)
 
     # ── 頁面標題 ──────────────────────────────────────────────────────────────
-    st.html(f"""
+    st.html("""
 <div style="margin-bottom:16px">
   <div style="font-size:1.25rem;font-weight:800;color:#1a1a2e;margin-bottom:8px">
     🔒 選股驗證中心（Forward Evidence）
@@ -188,10 +192,10 @@ def _section_progress_summary(df: pd.DataFrame):
     # ── 進度指標 Grid（2 × 3）────────────────────────────────────────────────
     # 上排：訊號覆蓋狀態（共幾個訊號 / 已有overnight / 缺overnight）
     # 下排：執行進度（PENDING / 完成20D / 完成60D）
-    _formal_bg  = "#e8f5e9" if n_formal > 0  else "#f8f9fa"
-    _formal_clr = "#2e7d32" if n_formal > 0  else "#888"
-    _legacy_bg  = "#fff3e0" if n_legacy > 0  else "#f8f9fa"
-    _legacy_clr = "#e65100" if n_legacy > 0  else "#888"
+    _formal_bg = "#e8f5e9" if n_formal > 0 else "#f8f9fa"
+    _formal_clr = "#2e7d32" if n_formal > 0 else "#888"
+    _legacy_bg = "#fff3e0" if n_legacy > 0 else "#f8f9fa"
+    _legacy_clr = "#e65100" if n_legacy > 0 else "#888"
 
     st.html(f"""
 <style>
@@ -346,7 +350,9 @@ def _section_performance(df: pd.DataFrame):
                 "avg_mae": None,
                 "avg_mfe": None,
             }
-        win_rate = (valid["alpha_20d" if "20" in label_period else "alpha_60d"] > 0).mean() * 100
+        win_rate = (
+            valid["alpha_20d" if "20" in label_period else "alpha_60d"] > 0
+        ).mean() * 100
         ret_col = "return_20d" if "20" in label_period else "return_60d"
         alp_col = "alpha_20d" if "20" in label_period else "alpha_60d"
         mae_col = "mae_20d" if "20" in label_period else "mae_60d"
@@ -560,7 +566,9 @@ def _section_path_comparison(df: pd.DataFrame):
             & formal["entry_status"].notna()
         ]
         if not aware_red.empty:
-            status_counts = aware_red.groupby("entry_status").size().reset_index(name="筆數")
+            status_counts = (
+                aware_red.groupby("entry_status").size().reset_index(name="筆數")
+            )
             status_label = {
                 EXEC_EXECUTED: "✅ EXECUTED（已進場）",
                 EXEC_EXPIRED_BEFORE_ENTRY: "⏰ EXPIRED_BEFORE_ENTRY（超窗未觸發）",
@@ -568,11 +576,15 @@ def _section_path_comparison(df: pd.DataFrame):
                 EXEC_PENDING: "⏳ PENDING（窗口仍在計算中）",
                 EXEC_DATA_INSUFFICIENT: "❓ DATA_INSUFFICIENT",
             }
-            status_counts["說明"] = status_counts["entry_status"].map(status_label).fillna(
+            status_counts["說明"] = (
                 status_counts["entry_status"]
+                .map(status_label)
+                .fillna(status_counts["entry_status"])
             )
             st.dataframe(
-                status_counts[["說明", "筆數"]], use_container_width=True, hide_index=True
+                status_counts[["說明", "筆數"]],
+                use_container_width=True,
+                hide_index=True,
             )
 
     with st.expander("⚠️ 方法限制（§51）", expanded=False):
@@ -597,13 +609,15 @@ def _section_sample_health(df: pd.DataFrame):
         return
 
     baseline_df = df[df["path_type"] == PATH_BASELINE]
-    aware_df    = df[df["path_type"] == PATH_AWARE]
+    aware_df = df[df["path_type"] == PATH_AWARE]
 
-    n_legacy   = df[df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA]["forward_signal_id"].nunique()
+    n_legacy = df[df["exclusion_reason"] == EXCL_NO_OVERNIGHT_DATA][
+        "forward_signal_id"
+    ].nunique()
     n_formal_b = len(_formal_eligible(baseline_df))
     n_formal_a = len(_formal_eligible(aware_df))
-    pending_b  = int((baseline_df["entry_status"] == EXEC_PENDING).sum())
-    pending_a  = int((aware_df["entry_status"] == EXEC_PENDING).sum())
+    pending_b = int((baseline_df["entry_status"] == EXEC_PENDING).sum())
+    pending_a = int((aware_df["entry_status"] == EXEC_PENDING).sum())
 
     # ── Formal Cohort vs Legacy 分組摘要 ──────────────────────────────────
     st.html(f"""
@@ -687,9 +701,13 @@ def _section_sample_health(df: pd.DataFrame):
                 "MISSING_VALID_NEXT_OPEN_ENTRY": "MISSING_VALID_NEXT_OPEN_ENTRY — 缺少有效次日開盤進場價",
                 "RETROACTIVE_OVERNIGHT_CONTEXT": "RETROACTIVE_OVERNIGHT_CONTEXT — 事後補入的 overnight context",
             }
-            excl_counts = excl.groupby("exclusion_reason").size().reset_index(name="筆數")
-            excl_counts["說明"] = excl_counts["exclusion_reason"].map(excl_label).fillna(
+            excl_counts = (
+                excl.groupby("exclusion_reason").size().reset_index(name="筆數")
+            )
+            excl_counts["說明"] = (
                 excl_counts["exclusion_reason"]
+                .map(excl_label)
+                .fillna(excl_counts["exclusion_reason"])
             )
             st.dataframe(
                 excl_counts[["說明", "筆數"]], use_container_width=True, hide_index=True
@@ -705,7 +723,9 @@ def _section_advanced(df: pd.DataFrame):
     st.markdown("### E. 進階技術資訊")
 
     # E1: Overnight risk groupings (existing _section_overnight_evidence logic)
-    with st.expander("🔬 Overnight 風險分組績效（Baseline 路徑 × GREEN/YELLOW/RED）", expanded=False):
+    with st.expander(
+        "🔬 Overnight 風險分組績效（Baseline 路徑 × GREEN/YELLOW/RED）", expanded=False
+    ):
         st.caption(
             "依 overnight_risk_level 分組，比較 20D return / alpha / MAE / MFE / T1達成率。"
             "所有指標皆為 Baseline Next-Open 路徑（不含 Overnight-Aware 調整）。"
@@ -736,33 +756,57 @@ def _section_advanced(df: pd.DataFrame):
                         if len(resolved) > 0
                         else None
                     )
-                    ambig = (sub["target_stop_outcome_20d"] == OUTCOME_SAME_DAY_AMBIGUOUS).sum()
-                    groups.append({
-                        "overnight_risk": level,
-                        "N": n,
-                        "樣本評估": _EVIDENCE_PRESENTER.sample_strength(n).label,
-                        "20D Return (avg %)": round(sub["return_20d"].mean(), 2) if n >= 5 else "—",
-                        "20D Alpha (avg %)": round(sub["alpha_20d"].mean(), 2) if n >= 5 else "—",
-                        "20D MAE (avg %)": round(sub["mae_20d"].mean(), 2) if n >= 5 else "—",
-                        "20D MFE (avg %)": round(sub["mfe_20d"].mean(), 2) if n >= 5 else "—",
-                        "T1達成率 (解決案件)": (
-                            f"{t1_rate:.1f}%" if t1_rate is not None and n >= 5 else "—"
-                        ),
-                        "SAME_DAY_AMBIGUOUS": int(ambig),
-                    })
+                    ambig = (
+                        sub["target_stop_outcome_20d"] == OUTCOME_SAME_DAY_AMBIGUOUS
+                    ).sum()
+                    groups.append(
+                        {
+                            "overnight_risk": level,
+                            "N": n,
+                            "樣本評估": _EVIDENCE_PRESENTER.sample_strength(n).label,
+                            "20D Return (avg %)": (
+                                round(sub["return_20d"].mean(), 2) if n >= 5 else "—"
+                            ),
+                            "20D Alpha (avg %)": (
+                                round(sub["alpha_20d"].mean(), 2) if n >= 5 else "—"
+                            ),
+                            "20D MAE (avg %)": (
+                                round(sub["mae_20d"].mean(), 2) if n >= 5 else "—"
+                            ),
+                            "20D MFE (avg %)": (
+                                round(sub["mfe_20d"].mean(), 2) if n >= 5 else "—"
+                            ),
+                            "T1達成率 (解決案件)": (
+                                f"{t1_rate:.1f}%"
+                                if t1_rate is not None and n >= 5
+                                else "—"
+                            ),
+                            "SAME_DAY_AMBIGUOUS": int(ambig),
+                        }
+                    )
 
                 if groups:
-                    green_g = next((g for g in groups if g["overnight_risk"] == "GREEN"), None)
-                    red_g   = next((g for g in groups if g["overnight_risk"] == "RED"), None)
-                    headline = _EVIDENCE_PRESENTER.overnight_group_headline_html(green_g, red_g)
+                    green_g = next(
+                        (g for g in groups if g["overnight_risk"] == "GREEN"), None
+                    )
+                    red_g = next(
+                        (g for g in groups if g["overnight_risk"] == "RED"), None
+                    )
+                    headline = _EVIDENCE_PRESENTER.overnight_group_headline_html(
+                        green_g, red_g
+                    )
                     if headline:
                         st.html(headline)
                     else:
                         st.caption("各組樣本尚不足 5 筆，暫無 Alpha 摘要。")
-                    st.dataframe(pd.DataFrame(groups), use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        pd.DataFrame(groups), use_container_width=True, hide_index=True
+                    )
 
                     has_ambig = any(g["SAME_DAY_AMBIGUOUS"] > 0 for g in groups)
-                    small_groups = [g for g in groups if isinstance(g["N"], int) and g["N"] < 30]
+                    small_groups = [
+                        g for g in groups if isinstance(g["N"], int) and g["N"] < 30
+                    ]
                     for g in small_groups:
                         _warn_if_small(g["N"], g["overnight_risk"])
                     if has_ambig:
@@ -774,7 +818,9 @@ def _section_advanced(df: pd.DataFrame):
                     st.info("分組後無可顯示資料。")
 
     # E2: Execution rate (existing _section_execution_rate logic)
-    with st.expander("📊 Aware 路徑執行率（PENDING / EXECUTED / EXPIRED 分布）", expanded=False):
+    with st.expander(
+        "📊 Aware 路徑執行率（PENDING / EXECUTED / EXPIRED 分布）", expanded=False
+    ):
         st.caption(
             "Overnight-Aware 路徑統計：有多少比例的訊號在 3 個交易日內實際 ENTRY_RECONFIRMED 進場。"
             f"進場窗口：{FOE_V1_AWARE_ENTRY_WINDOW_TRADING_DAYS} 個交易日（Day1=execution_date, Day2, Day3）。"
@@ -794,9 +840,13 @@ def _section_advanced(df: pd.DataFrame):
                 EXEC_PENDING: "⏳ PENDING — 仍在窗口內等待",
                 EXEC_DATA_INSUFFICIENT: "❓ DATA_INSUFFICIENT — 資料不足",
             }
-            counts["說明"] = counts["entry_status"].map(status_label).fillna(counts["entry_status"])
+            counts["說明"] = (
+                counts["entry_status"].map(status_label).fillna(counts["entry_status"])
+            )
             st.dataframe(
-                counts[["說明", "筆數", "比例"]], use_container_width=True, hide_index=True
+                counts[["說明", "筆數", "比例"]],
+                use_container_width=True,
+                hide_index=True,
             )
             st.caption(
                 "EXPIRED_BEFORE_ENTRY 不代表策略失敗，代表 overnight 情況在窗口內未轉 GREEN 而未進場。"
@@ -810,7 +860,9 @@ def _section_advanced(df: pd.DataFrame):
                 .reset_index()
             )
             if not cross.empty:
-                cross["overnight_risk_level"] = cross["overnight_risk_level"].fillna("(無資料)")
+                cross["overnight_risk_level"] = cross["overnight_risk_level"].fillna(
+                    "(無資料)"
+                )
                 st.caption("執行率 × overnight_risk_level 明細：")
                 st.dataframe(cross, use_container_width=True, hide_index=True)
 

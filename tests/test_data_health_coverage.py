@@ -17,16 +17,12 @@ from sqlalchemy import create_engine
 
 from src.database import (
     AnalysisResult,
-    Base,
     DailyPrice,
     FinancialQuarter,
-    ForwardSignal,
-    MODEL_VERSION,
     Stock,
     get_session,
     init_db,
 )
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,23 +37,38 @@ def _session(engine=None):
     return get_session(engine or _engine())
 
 
-def _add_stock(session, stock_id, is_excluded=False, security_status="listed",
-               listing_date=None, delisted_date=None):
-    session.add(Stock(
-        stock_id=stock_id,
-        name=f"Stock_{stock_id}",
-        is_excluded=is_excluded,
-        security_status=security_status,
-        listing_date=listing_date,
-        delisted_date=delisted_date,
-    ))
+def _add_stock(
+    session,
+    stock_id,
+    is_excluded=False,
+    security_status="listed",
+    listing_date=None,
+    delisted_date=None,
+):
+    session.add(
+        Stock(
+            stock_id=stock_id,
+            name=f"Stock_{stock_id}",
+            is_excluded=is_excluded,
+            security_status=security_status,
+            listing_date=listing_date,
+            delisted_date=delisted_date,
+        )
+    )
 
 
 def _add_price(session, stock_id, trade_date, close=100.0):
-    session.add(DailyPrice(
-        stock_id=stock_id, date=trade_date,
-        close=close, open=100.0, high=102.0, low=98.0, volume=1_000_000,
-    ))
+    session.add(
+        DailyPrice(
+            stock_id=stock_id,
+            date=trade_date,
+            close=close,
+            open=100.0,
+            high=102.0,
+            low=98.0,
+            volume=1_000_000,
+        )
+    )
 
 
 # ── 1. Coverage history: scoped to analysis universe ─────────────────────────
@@ -82,14 +93,23 @@ def test_coverage_scoped_to_universe():
     s.commit()
 
     from sqlalchemy import func
-    universe_size = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+
+    universe_size = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     assert universe_size == 3
 
     # Correct scoped count
     scoped = (
         s.query(func.count(func.distinct(DailyPrice.stock_id)))
         .join(Stock, Stock.stock_id == DailyPrice.stock_id)
-        .filter(DailyPrice.date == d, DailyPrice.close.isnot(None), Stock.is_excluded.isnot(True))
+        .filter(
+            DailyPrice.date == d,
+            DailyPrice.close.isnot(None),
+            Stock.is_excluded.isnot(True),
+        )
         .scalar()
     )
     assert scoped == 3, "scoped count should be 3 (universe stocks only)"
@@ -128,7 +148,12 @@ def test_anomaly_flag_when_raw_exceeds_expected():
     s.commit()
 
     from sqlalchemy import func
-    expected = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+
+    expected = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     raw = s.query(func.count(DailyPrice.stock_id)).filter(DailyPrice.date == d).scalar()
     anomaly = raw > int(expected * 1.05)
     assert anomaly is True, "raw=7, expected=2 → anomaly must be True"
@@ -147,7 +172,12 @@ def test_no_anomaly_when_raw_within_expected():
     s.commit()
 
     from sqlalchemy import func
-    expected = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+
+    expected = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     raw = s.query(func.count(DailyPrice.stock_id)).filter(DailyPrice.date == d).scalar()
     anomaly = raw > int(expected * 1.05)
     assert anomaly is False
@@ -160,20 +190,29 @@ def test_excluded_stock_not_counted():
     s = _session(engine)
     d = date(2026, 10, 30)
 
-    _add_stock(s, "2330")                         # in universe
-    _add_stock(s, "9999", is_excluded=True)       # excluded
+    _add_stock(s, "2330")  # in universe
+    _add_stock(s, "9999", is_excluded=True)  # excluded
     _add_price(s, "2330", d)
     _add_price(s, "9999", d)
     s.commit()
 
     from sqlalchemy import func
-    universe = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+
+    universe = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     assert universe == 1
 
     scoped = (
         s.query(func.count(func.distinct(DailyPrice.stock_id)))
         .join(Stock, Stock.stock_id == DailyPrice.stock_id)
-        .filter(DailyPrice.date == d, DailyPrice.close.isnot(None), Stock.is_excluded.isnot(True))
+        .filter(
+            DailyPrice.date == d,
+            DailyPrice.close.isnot(None),
+            Stock.is_excluded.isnot(True),
+        )
         .scalar()
     )
     assert scoped == 1, "excluded stock should not be in scoped count"
@@ -194,11 +233,20 @@ def test_partial_coverage_ratio():
     s.commit()
 
     from sqlalchemy import func
-    expected = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+
+    expected = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     scoped = (
         s.query(func.count(func.distinct(DailyPrice.stock_id)))
         .join(Stock, Stock.stock_id == DailyPrice.stock_id)
-        .filter(DailyPrice.date == d, DailyPrice.close.isnot(None), Stock.is_excluded.isnot(True))
+        .filter(
+            DailyPrice.date == d,
+            DailyPrice.close.isnot(None),
+            Stock.is_excluded.isnot(True),
+        )
         .scalar()
     )
     ratio = scoped / expected
@@ -230,19 +278,28 @@ def test_financial_coverage_uses_universe_denominator():
     s.commit()
 
     from sqlalchemy import func
+
     fin_stocks = s.query(func.count(func.distinct(FinancialQuarter.stock_id))).scalar()
-    universe_size = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+    universe_size = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     price_distinct = s.query(func.count(func.distinct(DailyPrice.stock_id))).scalar()
 
     # Old (wrong) formula
-    cov_wrong = round(fin_stocks / price_distinct * 100, 1) if price_distinct > 0 else 0.0
+    cov_wrong = (
+        round(fin_stocks / price_distinct * 100, 1) if price_distinct > 0 else 0.0
+    )
     # Correct formula
-    cov_correct = round(fin_stocks / universe_size * 100, 1) if universe_size > 0 else 0.0
+    cov_correct = (
+        round(fin_stocks / universe_size * 100, 1) if universe_size > 0 else 0.0
+    )
 
     assert cov_correct == pytest.approx(66.7, abs=0.1)
-    assert cov_wrong < cov_correct, (
-        "old formula (÷ price_distinct) gives lower coverage than correct formula (÷ universe)"
-    )
+    assert (
+        cov_wrong < cov_correct
+    ), "old formula (÷ price_distinct) gives lower coverage than correct formula (÷ universe)"
     s.close()
 
 
@@ -255,10 +312,15 @@ def test_financial_coverage_zero_when_no_data():
     s.commit()
 
     from sqlalchemy import func
+
     fin_stocks = s.query(func.count(func.distinct(FinancialQuarter.stock_id))).scalar()
     assert fin_stocks == 0
 
-    universe_size = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+    universe_size = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     cov = round(fin_stocks / universe_size * 100, 1) if universe_size > 0 else 0.0
     assert cov == 0.0
     s.close()
@@ -287,17 +349,31 @@ def test_forward_gate_l2_uses_universe_scoped_count():
     _add_price(s, "0050", trade_date)
     # Analysis results
     for sid in ["2330", "2317", "2454"]:
-        s.add(AnalysisResult(
-            stock_id=sid, date=trade_date,
-            setup_type="breakout", trade_signal="buy", total_score=75.0,
-            timing_score=70.0, behavior_score=65.0, quality_score=60.0,
-            risk_score=80.0, confidence=75.0, rec_level="A",
-        ))
+        s.add(
+            AnalysisResult(
+                stock_id=sid,
+                date=trade_date,
+                setup_type="breakout",
+                trade_signal="buy",
+                total_score=75.0,
+                timing_score=70.0,
+                behavior_score=65.0,
+                quality_score=60.0,
+                risk_score=80.0,
+                confidence=75.0,
+                rec_level="A",
+            )
+        )
     s.commit()
 
     from sqlalchemy import func
+
     # Confirm raw DailyPrice count would overflow
-    raw = s.query(func.count(DailyPrice.stock_id)).filter(DailyPrice.date == trade_date).scalar()
+    raw = (
+        s.query(func.count(DailyPrice.stock_id))
+        .filter(DailyPrice.date == trade_date)
+        .scalar()
+    )
     assert raw >= 1004, "raw count must include non-universe stocks"
 
     # Scoped count (what the fixed code computes)
@@ -335,13 +411,22 @@ def test_forward_gate_l2a_rejects_when_universe_undercovered():
     s.commit()
 
     from sqlalchemy import func
-    raw = s.query(func.count(DailyPrice.stock_id)).filter(DailyPrice.date == trade_date).scalar()
+
+    raw = (
+        s.query(func.count(DailyPrice.stock_id))
+        .filter(DailyPrice.date == trade_date)
+        .scalar()
+    )
     assert raw >= 1001
 
     scoped = (
         s.query(func.count(func.distinct(DailyPrice.stock_id)))
         .join(Stock, Stock.stock_id == DailyPrice.stock_id)
-        .filter(DailyPrice.date == trade_date, DailyPrice.close.isnot(None), Stock.is_excluded.isnot(True))
+        .filter(
+            DailyPrice.date == trade_date,
+            DailyPrice.close.isnot(None),
+            Stock.is_excluded.isnot(True),
+        )
         .scalar()
     )
     # Old: passes (raw=1001 >= 200)
@@ -360,22 +445,27 @@ def test_missing_stock_categorization():
     s = _session(engine)
     today = date(2026, 10, 30)
 
-    _add_stock(s, "2330")                                       # has price → not missing
-    _add_stock(s, "D001", security_status="delisted",
-               delisted_date=date(2026, 9, 1))                  # delisted
-    _add_stock(s, "S001", security_status="suspended")          # suspended
-    _add_stock(s, "N001", listing_date=date(2027, 1, 1))        # not listed yet
-    _add_stock(s, "O001")                                       # other: listed but no price
+    _add_stock(s, "2330")  # has price → not missing
+    _add_stock(
+        s, "D001", security_status="delisted", delisted_date=date(2026, 9, 1)
+    )  # delisted
+    _add_stock(s, "S001", security_status="suspended")  # suspended
+    _add_stock(s, "N001", listing_date=date(2027, 1, 1))  # not listed yet
+    _add_stock(s, "O001")  # other: listed but no price
     _add_price(s, "2330", today)
     s.commit()
 
     priced_ids = {"2330"}
     universe_stocks = s.query(Stock).filter(Stock.is_excluded.isnot(True)).all()
-    missing = {st.stock_id: st for st in universe_stocks if st.stock_id not in priced_ids}
+    missing = {
+        st.stock_id: st for st in universe_stocks if st.stock_id not in priced_ids
+    }
 
     delisted, suspended, not_listed, other_missing = [], [], [], []
     for sid, st in missing.items():
-        if (st.delisted_date and st.delisted_date <= today) or st.security_status == "delisted":
+        if (
+            st.delisted_date and st.delisted_date <= today
+        ) or st.security_status == "delisted":
             delisted.append(sid)
         elif st.security_status == "suspended":
             suspended.append(sid)
@@ -411,13 +501,22 @@ def test_ratio_not_capped_anomaly_is_set():
     s.commit()
 
     from sqlalchemy import func
-    expected = s.query(func.count(Stock.stock_id)).filter(Stock.is_excluded.isnot(True)).scalar()
+
+    expected = (
+        s.query(func.count(Stock.stock_id))
+        .filter(Stock.is_excluded.isnot(True))
+        .scalar()
+    )
     raw = s.query(func.count(DailyPrice.stock_id)).filter(DailyPrice.date == d).scalar()
 
     scoped = (
         s.query(func.count(func.distinct(DailyPrice.stock_id)))
         .join(Stock, Stock.stock_id == DailyPrice.stock_id)
-        .filter(DailyPrice.date == d, DailyPrice.close.isnot(None), Stock.is_excluded.isnot(True))
+        .filter(
+            DailyPrice.date == d,
+            DailyPrice.close.isnot(None),
+            Stock.is_excluded.isnot(True),
+        )
         .scalar()
     )
     ratio = scoped / expected  # must be 1.0 (all universe stocks covered)
@@ -434,18 +533,22 @@ def test_ratio_not_capped_anomaly_is_set():
 def test_backtest_service_uses_stock_join_for_market_count():
     """L2 market_count query must join Stock table (not count all DailyPrice rows)."""
     import inspect
+
     from src.services.research_backtest_service import write_forward_signals
+
     src = inspect.getsource(write_forward_signals)
-    assert "join(Stock" in src or ".join(Stock" in src, (
-        "write_forward_signals must join Stock table for L2 market_count"
-    )
+    assert (
+        "join(Stock" in src or ".join(Stock" in src
+    ), "write_forward_signals must join Stock table for L2 market_count"
     assert "is_excluded" in src, "L2 must filter Stock.is_excluded"
 
 
 def test_backtest_service_uses_distinct_in_market_count():
     """L2 market_count must use DISTINCT to avoid double-counting."""
     import inspect
+
     from src.services.research_backtest_service import write_forward_signals
+
     src = inspect.getsource(write_forward_signals)
     assert "func.distinct" in src, "L2 market_count must use func.distinct"
 
@@ -458,11 +561,15 @@ def test_data_health_fin_coverage_uses_universe_not_price_distinct():
     with open("dashboard/_pages/data_health.py") as f:
         src = f.read()
     # Should NOT divide fin_stocks by price_distinct
-    assert "fin_stocks / price_distinct" not in src, (
-        "Financial coverage must not use price_distinct as denominator"
-    )
+    assert (
+        "fin_stocks / price_distinct" not in src
+    ), "Financial coverage must not use price_distinct as denominator"
     # Should use _analysis_universe_size (or similar universe-based denominator)
-    assert "_analysis_universe_size" in src or "fin_stocks / expected" in src or "fin_stocks / universe" in src
+    assert (
+        "_analysis_universe_size" in src
+        or "fin_stocks / expected" in src
+        or "fin_stocks / universe" in src
+    )
 
 
 def test_coverage_history_uses_stock_join():

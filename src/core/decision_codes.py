@@ -11,12 +11,12 @@ from enum import Enum
 
 
 class DecisionCode(str, Enum):
-    STRONG_BUY    = "strong_buy"
-    BUY           = "buy"
+    STRONG_BUY = "strong_buy"
+    BUY = "buy"
     WAIT_PULLBACK = "wait_pullback"
-    WAIT          = "wait"
-    REDUCE        = "reduce"
-    SELL          = "sell"
+    WAIT = "wait"
+    REDUCE = "reduce"
+    SELL = "sell"
 
 
 # Ordered strongest-buy → strongest-sell (used for selectbox ordering)
@@ -30,31 +30,31 @@ ORDERED: tuple["DecisionCode", ...] = (
 )
 
 _DISPLAY: dict["DecisionCode", str] = {
-    DecisionCode.STRONG_BUY:    "BUY ★",
-    DecisionCode.BUY:           "BUY",
+    DecisionCode.STRONG_BUY: "BUY ★",
+    DecisionCode.BUY: "BUY",
     DecisionCode.WAIT_PULLBACK: "WAIT FOR PULLBACK",
-    DecisionCode.WAIT:          "WAIT",
-    DecisionCode.REDUCE:        "REDUCE",
-    DecisionCode.SELL:          "SELL / AVOID",
+    DecisionCode.WAIT: "WAIT",
+    DecisionCode.REDUCE: "REDUCE",
+    DecisionCode.SELL: "SELL / AVOID",
 }
 
 _COLOR: dict["DecisionCode", str] = {
-    DecisionCode.STRONG_BUY:    "#1a7f4b",
-    DecisionCode.BUY:           "#2ecc71",
+    DecisionCode.STRONG_BUY: "#1a7f4b",
+    DecisionCode.BUY: "#2ecc71",
     DecisionCode.WAIT_PULLBACK: "#f39c12",
-    DecisionCode.WAIT:          "#95a5a6",
-    DecisionCode.REDUCE:        "#e67e22",
-    DecisionCode.SELL:          "#e74c3c",
+    DecisionCode.WAIT: "#95a5a6",
+    DecisionCode.REDUCE: "#e67e22",
+    DecisionCode.SELL: "#e74c3c",
 }
 
 # Legacy display-string → code (used for DB migration only)
 _LEGACY_DISPLAY_TO_CODE: dict[str, str] = {
-    "BUY ★":            DecisionCode.STRONG_BUY.value,
-    "BUY":              DecisionCode.BUY.value,
+    "BUY ★": DecisionCode.STRONG_BUY.value,
+    "BUY": DecisionCode.BUY.value,
     "WAIT FOR PULLBACK": DecisionCode.WAIT_PULLBACK.value,
-    "WAIT":             DecisionCode.WAIT.value,
-    "REDUCE":           DecisionCode.REDUCE.value,
-    "SELL / AVOID":     DecisionCode.SELL.value,
+    "WAIT": DecisionCode.WAIT.value,
+    "REDUCE": DecisionCode.REDUCE.value,
+    "SELL / AVOID": DecisionCode.SELL.value,
 }
 
 

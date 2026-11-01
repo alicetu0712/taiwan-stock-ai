@@ -22,30 +22,32 @@ from zoneinfo import ZoneInfo
 # When a holiday falls on Saturday, NYSE typically observes the prior Friday.
 # When a holiday falls on Sunday, NYSE typically observes the following Monday.
 
-_NYSE_HOLIDAYS: frozenset = frozenset([
-    # ── 2026 ──────────────────────────────────────────────────────────────────
-    date(2026,  1,  1),   # New Year's Day
-    date(2026,  1, 19),   # Martin Luther King Jr. Day (3rd Monday)
-    date(2026,  2, 16),   # Presidents' Day (3rd Monday)
-    date(2026,  4,  3),   # Good Friday (Easter = Apr 5)
-    date(2026,  5, 25),   # Memorial Day (last Monday)
-    date(2026,  6, 19),   # Juneteenth
-    date(2026,  7,  3),   # Independence Day observed (Jul 4 = Saturday)
-    date(2026,  9,  7),   # Labor Day (1st Monday)
-    date(2026, 11, 26),   # Thanksgiving Day (4th Thursday)
-    date(2026, 12, 25),   # Christmas Day
-    # ── 2025 ──────────────────────────────────────────────────────────────────
-    date(2025,  1,  1),   # New Year's Day
-    date(2025,  1, 20),   # Martin Luther King Jr. Day (3rd Monday)
-    date(2025,  2, 17),   # Presidents' Day (3rd Monday)
-    date(2025,  4, 18),   # Good Friday (Easter = Apr 20)
-    date(2025,  5, 26),   # Memorial Day (last Monday)
-    date(2025,  6, 19),   # Juneteenth
-    date(2025,  7,  4),   # Independence Day
-    date(2025,  9,  1),   # Labor Day (1st Monday)
-    date(2025, 11, 27),   # Thanksgiving Day (4th Thursday)
-    date(2025, 12, 25),   # Christmas Day
-])
+_NYSE_HOLIDAYS: frozenset = frozenset(
+    [
+        # ── 2026 ──────────────────────────────────────────────────────────────────
+        date(2026, 1, 1),  # New Year's Day
+        date(2026, 1, 19),  # Martin Luther King Jr. Day (3rd Monday)
+        date(2026, 2, 16),  # Presidents' Day (3rd Monday)
+        date(2026, 4, 3),  # Good Friday (Easter = Apr 5)
+        date(2026, 5, 25),  # Memorial Day (last Monday)
+        date(2026, 6, 19),  # Juneteenth
+        date(2026, 7, 3),  # Independence Day observed (Jul 4 = Saturday)
+        date(2026, 9, 7),  # Labor Day (1st Monday)
+        date(2026, 11, 26),  # Thanksgiving Day (4th Thursday)
+        date(2026, 12, 25),  # Christmas Day
+        # ── 2025 ──────────────────────────────────────────────────────────────────
+        date(2025, 1, 1),  # New Year's Day
+        date(2025, 1, 20),  # Martin Luther King Jr. Day (3rd Monday)
+        date(2025, 2, 17),  # Presidents' Day (3rd Monday)
+        date(2025, 4, 18),  # Good Friday (Easter = Apr 20)
+        date(2025, 5, 26),  # Memorial Day (last Monday)
+        date(2025, 6, 19),  # Juneteenth
+        date(2025, 7, 4),  # Independence Day
+        date(2025, 9, 1),  # Labor Day (1st Monday)
+        date(2025, 11, 27),  # Thanksgiving Day (4th Thursday)
+        date(2025, 12, 25),  # Christmas Day
+    ]
+)
 
 _COVERED_YEARS: frozenset = frozenset([2025, 2026])
 
@@ -59,7 +61,7 @@ def is_us_trading_day(d: date) -> bool:
     Return True only if d is a confirmed NYSE trading day.
     Fail-closed: years outside _COVERED_YEARS return False.
     """
-    if d.weekday() >= 5:   # Saturday=5, Sunday=6
+    if d.weekday() >= 5:  # Saturday=5, Sunday=6
         return False
     if d.year not in _COVERED_YEARS:
         return False
@@ -99,5 +101,6 @@ def us_session_close_utc(us_date: date):
     timezone-aware UTC datetime. Handles EDT/EST automatically via zoneinfo.
     """
     from datetime import datetime
+
     close_et = datetime(us_date.year, us_date.month, us_date.day, 16, 0, 0, tzinfo=ET)
     return close_et.astimezone(UTC)

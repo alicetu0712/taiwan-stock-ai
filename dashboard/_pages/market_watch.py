@@ -8,7 +8,6 @@ pages/market_watch.py — 看盤頁
 import logging
 from datetime import date
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -26,39 +25,85 @@ logger = logging.getLogger(__name__)
 # ── 視覺常數 ──────────────────────────────────────────────────────
 
 _SETUP_META = {
-    "breakout":        {"label": "突破前高",       "color": "#0288d1", "bg": "#0d47a1", "icon": "🚀"},
-    "near_breakout":   {"label": "接近前高",        "color": "#29b6f6", "bg": "#01579b", "icon": "🎯"},
-    "failed_breakout": {"label": "突破失敗",        "color": "#ff7043", "bg": "#bf360c", "icon": "⚠️"},
-    "pullback_buy":    {"label": "回踩買點 MA10",   "color": "#43a047", "bg": "#1b5e20", "icon": "🟢"},
-    "pullback_hold":   {"label": "回踩守穩 MA20",   "color": "#66bb6a", "bg": "#2e7d32", "icon": "🟩"},
-    "ma60_support":    {"label": "回踩MA60支撐",    "color": "#ab47bc", "bg": "#4a148c", "icon": "🔵"},
-    "trending":        {"label": "趨勢延伸",         "color": "#42a5f5", "bg": "#1565c0", "icon": "📈"},
-    "overextended":    {"label": "過度乖離",         "color": "#ffa726", "bg": "#e65100", "icon": "🔥"},
-    "breakdown":       {"label": "趨勢破壞",         "color": "#ef5350", "bg": "#b71c1c", "icon": "🔴"},
-    "none":            {"label": "無明確型態",       "color": "#78909c", "bg": "#263238", "icon": "⬜"},
+    "breakout": {
+        "label": "突破前高",
+        "color": "#0288d1",
+        "bg": "#0d47a1",
+        "icon": "🚀",
+    },
+    "near_breakout": {
+        "label": "接近前高",
+        "color": "#29b6f6",
+        "bg": "#01579b",
+        "icon": "🎯",
+    },
+    "failed_breakout": {
+        "label": "突破失敗",
+        "color": "#ff7043",
+        "bg": "#bf360c",
+        "icon": "⚠️",
+    },
+    "pullback_buy": {
+        "label": "回踩買點 MA10",
+        "color": "#43a047",
+        "bg": "#1b5e20",
+        "icon": "🟢",
+    },
+    "pullback_hold": {
+        "label": "回踩守穩 MA20",
+        "color": "#66bb6a",
+        "bg": "#2e7d32",
+        "icon": "🟩",
+    },
+    "ma60_support": {
+        "label": "回踩MA60支撐",
+        "color": "#ab47bc",
+        "bg": "#4a148c",
+        "icon": "🔵",
+    },
+    "trending": {
+        "label": "趨勢延伸",
+        "color": "#42a5f5",
+        "bg": "#1565c0",
+        "icon": "📈",
+    },
+    "overextended": {
+        "label": "過度乖離",
+        "color": "#ffa726",
+        "bg": "#e65100",
+        "icon": "🔥",
+    },
+    "breakdown": {
+        "label": "趨勢破壞",
+        "color": "#ef5350",
+        "bg": "#b71c1c",
+        "icon": "🔴",
+    },
+    "none": {"label": "無明確型態", "color": "#78909c", "bg": "#263238", "icon": "⬜"},
 }
 
 _SIGNAL_META = {
     "strong_buy": {"label": "強買", "color": "#00c851"},
-    "buy":        {"label": "買進", "color": "#33b5e5"},
-    "wait":       {"label": "等待", "color": "#ffbb33"},
-    "reduce":     {"label": "減碼", "color": "#ff8800"},
-    "sell":       {"label": "賣出", "color": "#ff4444"},
+    "buy": {"label": "買進", "color": "#33b5e5"},
+    "wait": {"label": "等待", "color": "#ffbb33"},
+    "reduce": {"label": "減碼", "color": "#ff8800"},
+    "sell": {"label": "賣出", "color": "#ff4444"},
 }
 
 _MA_COLORS = {
-    "ma5":  {"color": "#e0e0e0", "width": 1.2, "dash": "solid"},
+    "ma5": {"color": "#e0e0e0", "width": 1.2, "dash": "solid"},
     "ma10": {"color": "#4fc3f7", "width": 1.5, "dash": "solid"},
     "ma20": {"color": "#ffb74d", "width": 2.0, "dash": "solid"},
     "ma60": {"color": "#ce93d8", "width": 1.8, "dash": "solid"},
 }
 
-_CHART_BG    = "#0d1117"
+_CHART_BG = "#0d1117"
 _CHART_PAPER = "#161b22"
-_GRID_COLOR  = "#21262d"
+_GRID_COLOR = "#21262d"
 
 
 # ── 計算均線 ──────────────────────────────────────────────────────
+
 
 def _add_mas(df: pd.DataFrame) -> pd.DataFrame:
     close = df["close"]
@@ -70,6 +115,7 @@ def _add_mas(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Plotly 圖表 ───────────────────────────────────────────────────
 
+
 def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Figure:
     if df.empty:
         fig = go.Figure()
@@ -78,11 +124,17 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             paper_bgcolor=_CHART_PAPER,
             plot_bgcolor=_CHART_BG,
             font=dict(color="#c9d1d9"),
-            annotations=[dict(
-                text="無價格資料", showarrow=False,
-                font=dict(size=16, color="#666"),
-                xref="paper", yref="paper", x=0.5, y=0.5
-            )],
+            annotations=[
+                dict(
+                    text="無價格資料",
+                    showarrow=False,
+                    font=dict(size=16, color="#666"),
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                )
+            ],
         )
         return fig
 
@@ -91,7 +143,8 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
     sm = _SETUP_META.get(setup, _SETUP_META["none"])
 
     fig = make_subplots(
-        rows=2, cols=1,
+        rows=2,
+        cols=1,
         shared_xaxes=True,
         vertical_spacing=0.03,
         row_heights=[0.75, 0.25],
@@ -109,7 +162,8 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             increasing=dict(line=dict(color="#ef5350", width=1), fillcolor="#ef5350"),
             decreasing=dict(line=dict(color="#26a69a", width=1), fillcolor="#26a69a"),
         ),
-        row=1, col=1,
+        row=1,
+        col=1,
     )
 
     # ── MA 線 ─────────────────────────────────────────────────────
@@ -119,18 +173,24 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             if not visible_df.empty:
                 fig.add_trace(
                     go.Scatter(
-                        x=visible_df["date"], y=visible_df[ma_key],
+                        x=visible_df["date"],
+                        y=visible_df[ma_key],
                         name=ma_key.upper(),
-                        line=dict(color=mc["color"], width=mc["width"], dash=mc["dash"]),
+                        line=dict(
+                            color=mc["color"], width=mc["width"], dash=mc["dash"]
+                        ),
                         mode="lines",
                         hovertemplate=f"{ma_key.upper()} %{{y:.1f}}<extra></extra>",
                     ),
-                    row=1, col=1,
+                    row=1,
+                    col=1,
                 )
 
     # ── MA20 乖離帶（僅在有 MA20 時顯示）─────────────────────────
     if "ma20" in df.columns:
-        ma20_last = df["ma20"].dropna().iloc[-1] if not df["ma20"].dropna().empty else None
+        ma20_last = (
+            df["ma20"].dropna().iloc[-1] if not df["ma20"].dropna().empty else None
+        )
         if ma20_last:
             # 10% 過熱線（虛線）
             fig.add_hline(
@@ -138,7 +198,8 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
                 line=dict(color="#ffa726", width=1, dash="dot"),
                 annotation_text="MA20 +10%",
                 annotation_font=dict(color="#ffa726", size=10),
-                row=1, col=1,
+                row=1,
+                col=1,
             )
 
     # ── 當前價橫線 ────────────────────────────────────────────────
@@ -146,7 +207,8 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
     fig.add_hline(
         y=cur_price,
         line=dict(color="#ffffff", width=1, dash="dot"),
-        row=1, col=1,
+        row=1,
+        col=1,
     )
 
     # ── 成交量 ────────────────────────────────────────────────────
@@ -156,18 +218,22 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
             vol_colors.append("#66bb6a")
         else:
             vol_colors.append(
-                "#ef5350" if df["close"].iloc[i] < df["close"].iloc[i - 1] else "#66bb6a"
+                "#ef5350"
+                if df["close"].iloc[i] < df["close"].iloc[i - 1]
+                else "#66bb6a"
             )
 
     fig.add_trace(
         go.Bar(
-            x=df["date"], y=df["volume"],
+            x=df["date"],
+            y=df["volume"],
             name="成交量",
             marker_color=vol_colors,
             marker_line_width=0,
             hovertemplate="<b>%{x|%m/%d}</b><br>量 %{y:,.0f}<extra></extra>",
         ),
-        row=2, col=1,
+        row=2,
+        col=1,
     )
 
     # ── 20日均量線 ────────────────────────────────────────────────
@@ -176,13 +242,15 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         visible_vol = df[df["vol_ma20"].notna()]
         fig.add_trace(
             go.Scatter(
-                x=visible_vol["date"], y=visible_vol["vol_ma20"],
+                x=visible_vol["date"],
+                y=visible_vol["vol_ma20"],
                 name="均量",
                 line=dict(color="#ffb74d", width=1.5),
                 mode="lines",
                 hovertemplate="均量 %{y:,.0f}<extra></extra>",
             ),
-            row=2, col=1,
+            row=2,
+            col=1,
         )
 
     # ── Layout ───────────────────────────────────────────────────
@@ -192,7 +260,9 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         plot_bgcolor=_CHART_BG,
         font=dict(color="#c9d1d9", size=11),
         legend=dict(
-            orientation="h", x=0, y=1.02,
+            orientation="h",
+            x=0,
+            y=1.02,
             bgcolor="rgba(0,0,0,0)",
             font=dict(size=10, color="#ffffff"),
         ),
@@ -200,23 +270,28 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         margin=dict(l=0, r=0, t=10, b=0),
         xaxis2=dict(
             type="category",
-            showgrid=True, gridcolor=_GRID_COLOR,
+            showgrid=True,
+            gridcolor=_GRID_COLOR,
             showticklabels=True,
-            tickangle=-45, tickfont=dict(size=10, color="#ffffff"),
+            tickangle=-45,
+            tickfont=dict(size=10, color="#ffffff"),
             nticks=10,
         ),
         xaxis=dict(
             type="category",
-            showgrid=False, showticklabels=False,
+            showgrid=False,
+            showticklabels=False,
             rangeslider=dict(visible=False),
         ),
         yaxis=dict(
-            showgrid=True, gridcolor=_GRID_COLOR,
+            showgrid=True,
+            gridcolor=_GRID_COLOR,
             side="right",
             tickfont=dict(size=11, color="#ffffff"),
         ),
         yaxis2=dict(
-            showgrid=True, gridcolor=_GRID_COLOR,
+            showgrid=True,
+            gridcolor=_GRID_COLOR,
             side="right",
             tickfont=dict(size=10, color="#ffffff"),
         ),
@@ -228,8 +303,10 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
         return fig
     fig.add_annotation(
         text=f"{sm['icon']} {sm['label']}",
-        xref="paper", yref="paper",
-        x=0.01, y=0.97,
+        xref="paper",
+        yref="paper",
+        x=0.01,
+        y=0.97,
         font=dict(color=sm["color"], size=12, family="monospace"),
         bgcolor=_CHART_BG,
         bordercolor=sm["color"],
@@ -244,23 +321,30 @@ def build_chart(df: pd.DataFrame, analysis: dict, stock_name: str = "") -> go.Fi
 
 # ── Setup Banner ─────────────────────────────────────────────────
 
-def _render_setup_banner(analysis: dict, stock_id: str, stock_name: str) -> None:
-    setup   = analysis.get("setup_type") or "none"
-    signal  = analysis.get("trade_signal") or "wait"
-    gap     = analysis.get("ma20_gap")
-    vol_r   = analysis.get("volume_ratio")
-    pt      = analysis.get("price_trend_score")
-    level   = analysis.get("rec_level") or "—"
 
-    sm  = _SETUP_META.get(setup, _SETUP_META["none"])
+def _render_setup_banner(analysis: dict, stock_id: str, stock_name: str) -> None:
+    setup = analysis.get("setup_type") or "none"
+    signal = analysis.get("trade_signal") or "wait"
+    gap = analysis.get("ma20_gap")
+    vol_r = analysis.get("volume_ratio")
+    pt = analysis.get("price_trend_score")
+    level = analysis.get("rec_level") or "—"
+
+    sm = _SETUP_META.get(setup, _SETUP_META["none"])
     sig = _SIGNAL_META.get(signal, _SIGNAL_META["wait"])
 
     gap_str = f"{gap:+.1f}%" if gap is not None else "—"
-    gap_color = "#ef5350" if (gap or 0) > 10 else "#43a047" if (gap or 0) < 5 else "#ffb74d"
+    gap_color = (
+        "#ef5350" if (gap or 0) > 10 else "#43a047" if (gap or 0) < 5 else "#ffb74d"
+    )
     vol_str = f"{vol_r:.1f}×" if vol_r is not None else "—"
-    pt_str  = f"{pt:.0f}" if pt is not None else "—"
+    pt_str = f"{pt:.0f}" if pt is not None else "—"
 
-    display_name = f"{stock_name}（{stock_id}）" if stock_name and stock_name != stock_id else stock_id
+    display_name = (
+        f"{stock_name}（{stock_id}）"
+        if stock_name and stock_name != stock_id
+        else stock_id
+    )
 
     st.markdown(
         f"""
@@ -326,6 +410,7 @@ def _render_setup_banner(analysis: dict, stock_id: str, stock_name: str) -> None
 
 # ── MA 數值列 ────────────────────────────────────────────────────
 
+
 def _render_ma_row(df: pd.DataFrame) -> None:
     if df.empty:
         return
@@ -357,9 +442,10 @@ def _render_ma_row(df: pd.DataFrame) -> None:
 
 # ── 主頁 ─────────────────────────────────────────────────────────
 
+
 def page_market_watch(selected_date: date) -> None:
     stock_names = load_stock_names()
-    watchable   = load_watchable_stocks(selected_date)
+    watchable = load_watchable_stocks(selected_date)
 
     # ── 股票選擇器 ──────────────────────────────────────────────
     col_search, col_toggle = st.columns([3, 1])
@@ -412,12 +498,12 @@ def page_market_watch(selected_date: date) -> None:
     if view_mode == "全覽" and watchable:
         st.markdown(
             f'<div style="color:#8b949e;font-size:0.8rem;margin-bottom:12px">'
-            f'今日 {len(watchable)} 檔推薦 — 全覽模式（點選單股切換詳細圖）'
-            f'</div>',
+            f"今日 {len(watchable)} 檔推薦 — 全覽模式（點選單股切換詳細圖）"
+            f"</div>",
             unsafe_allow_html=True,
         )
         for w in watchable:
-            sid  = w["sid"]
+            sid = w["sid"]
             name = w["name"] or stock_names.get(sid, "")
             _render_compact_card(sid, name, selected_date)
         return
@@ -436,8 +522,8 @@ def page_market_watch(selected_date: date) -> None:
         return
 
     stock_name = stock_names.get(sel_sid, "")
-    analysis   = load_latest_pt_analysis(sel_sid)
-    price_df   = load_price_chart_data(sel_sid, days=90)
+    analysis = load_latest_pt_analysis(sel_sid)
+    price_df = load_price_chart_data(sel_sid, days=90)
 
     if price_df.empty:
         st.warning(f"尚無 {sel_sid} 的價格資料。")
@@ -449,8 +535,8 @@ def page_market_watch(selected_date: date) -> None:
     else:
         st.markdown(
             f'<div style="color:#8b949e;font-size:0.85rem;margin-bottom:10px">'
-            f'{sel_sid} {stock_name} — 尚無分析記錄，僅顯示走勢圖'
-            f'</div>',
+            f"{sel_sid} {stock_name} — 尚無分析記錄，僅顯示走勢圖"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -460,7 +546,11 @@ def page_market_watch(selected_date: date) -> None:
 
     # ── 主圖 ──────────────────────────────────────────────────────
     fig = build_chart(price_df, analysis or {}, stock_name)
-    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displayModeBar": False})
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={"scrollZoom": True, "displayModeBar": False},
+    )
 
     # ── MA 說明 ───────────────────────────────────────────────────
     st.markdown(
@@ -479,23 +569,26 @@ def page_market_watch(selected_date: date) -> None:
 
 # ── 全覽模式：每股小卡 ─────────────────────────────────────────────
 
+
 def _render_compact_card(sid: str, name: str, sel_date: date) -> None:
     analysis = load_latest_pt_analysis(sid)
     price_df = load_price_chart_data(sid, days=60)
-    setup    = (analysis.get("setup_type") or "none") if analysis else "none"
-    signal   = (analysis.get("trade_signal") or "wait") if analysis else "wait"
-    sm       = _SETUP_META.get(setup, _SETUP_META["none"])
-    sig      = _SIGNAL_META.get(signal, _SIGNAL_META["wait"])
+    setup = (analysis.get("setup_type") or "none") if analysis else "none"
+    signal = (analysis.get("trade_signal") or "wait") if analysis else "wait"
+    sm = _SETUP_META.get(setup, _SETUP_META["none"])
+    sig = _SIGNAL_META.get(signal, _SIGNAL_META["wait"])
 
-    cur_price  = float(price_df["close"].iloc[-1]) if not price_df.empty else None
-    gap        = analysis.get("ma20_gap") if analysis else None
-    pt         = analysis.get("price_trend_score") if analysis else None
+    cur_price = float(price_df["close"].iloc[-1]) if not price_df.empty else None
+    gap = analysis.get("ma20_gap") if analysis else None
+    pt = analysis.get("price_trend_score") if analysis else None
 
-    gap_str    = f"{gap:+.1f}%" if gap is not None else "—"
-    gap_color  = "#ef5350" if (gap or 0) > 10 else "#43a047" if (gap or 0) < 5 else "#ffb74d"
-    price_str  = f"NT${cur_price:,.1f}" if cur_price else "—"
-    pt_str     = f"{pt:.0f}" if pt is not None else "—"
-    disp_name  = f"{name}（{sid}）" if name and name != sid else sid
+    gap_str = f"{gap:+.1f}%" if gap is not None else "—"
+    gap_color = (  # noqa: F841
+        "#ef5350" if (gap or 0) > 10 else "#43a047" if (gap or 0) < 5 else "#ffb74d"
+    )
+    price_str = f"NT${cur_price:,.1f}" if cur_price else "—"
+    pt_str = f"{pt:.0f}" if pt is not None else "—"
+    disp_name = f"{name}（{sid}）" if name and name != sid else sid
 
     with st.expander(
         f"{sm['icon']} {disp_name}  ·  {sm['label']}  ·  {sig['label']}  ·  {price_str}",
@@ -507,15 +600,18 @@ def _render_compact_card(sid: str, name: str, sel_date: date) -> None:
             col2.metric("MA20乖離", gap_str)
             col3.metric(
                 "量比",
-                f"{analysis.get('volume_ratio', 0):.1f}×"
-                if analysis.get("volume_ratio")
-                else "—",
+                (
+                    f"{analysis.get('volume_ratio', 0):.1f}×"
+                    if analysis.get("volume_ratio")
+                    else "—"
+                ),
             )
 
         if not price_df.empty:
             fig = build_chart(price_df, analysis or {}, name)
             fig.update_layout(height=380)
             st.plotly_chart(
-                fig, use_container_width=True,
+                fig,
+                use_container_width=True,
                 config={"scrollZoom": True, "displayModeBar": False},
             )

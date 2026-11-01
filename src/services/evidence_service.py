@@ -39,6 +39,7 @@ def get_current_regime(engine=None) -> str:
     """
     try:
         from src.database import DailyPrice, get_session
+
         s = get_session(engine)
         rows = (
             s.query(DailyPrice.date, DailyPrice.close)
@@ -54,7 +55,11 @@ def get_current_regime(engine=None) -> str:
         closes = [r.close for r in rows]
         ma60 = sum(closes[-60:]) / 60
         ma60_prev = sum(closes[-70:-10]) / 60 if len(closes) >= 70 else ma60
-        slope = "up" if ma60 > ma60_prev * 1.001 else "down" if ma60 < ma60_prev * 0.999 else "flat"
+        slope = (
+            "up"
+            if ma60 > ma60_prev * 1.001
+            else "down" if ma60 < ma60_prev * 0.999 else "flat"
+        )
         current = closes[-1]
         if current > ma60 and slope == "up":
             return "bull"
@@ -70,6 +75,7 @@ def _compute_0050_regime_map(engine=None) -> dict:
     """Returns {date: regime} for all 0050 dates."""
     try:
         from src.database import DailyPrice, get_session
+
         s = get_session(engine)
         rows = (
             s.query(DailyPrice.date, DailyPrice.close)
@@ -84,9 +90,13 @@ def _compute_0050_regime_map(engine=None) -> dict:
         closes = [r.close for r in rows]
         regime_map = {}
         for i in range(60, len(dates)):
-            ma60 = sum(closes[i - 60:i]) / 60
-            ma60_prev = sum(closes[i - 70:i - 10]) / 60 if i >= 70 else ma60
-            slope = "up" if ma60 > ma60_prev * 1.001 else "down" if ma60 < ma60_prev * 0.999 else "flat"
+            ma60 = sum(closes[i - 60 : i]) / 60
+            ma60_prev = sum(closes[i - 70 : i - 10]) / 60 if i >= 70 else ma60
+            slope = (
+                "up"
+                if ma60 > ma60_prev * 1.001
+                else "down" if ma60 < ma60_prev * 0.999 else "flat"
+            )
             c = closes[i]
             if c > ma60 and slope == "up":
                 regime_map[dates[i]] = "bull"
@@ -100,9 +110,9 @@ def _compute_0050_regime_map(engine=None) -> dict:
         return {}
 
 
-
-
-_ROUND_TRIP_COST_DECIMAL: float = 0.585 / 100  # 0.585% → decimal for raw return arithmetic
+_ROUND_TRIP_COST_DECIMAL: float = (
+    0.585 / 100
+)  # 0.585% → decimal for raw return arithmetic
 
 
 def _compute_forward_alpha(
@@ -151,16 +161,24 @@ def _compute_forward_alpha(
 
 def _alpha_stats(alphas: list) -> dict:
     if not alphas:
-        return {"mean": None, "median": None, "winrate": None, "p25": None, "p75": None, "p10": None, "p90": None}
+        return {
+            "mean": None,
+            "median": None,
+            "winrate": None,
+            "p25": None,
+            "p75": None,
+            "p10": None,
+            "p90": None,
+        }
     a = np.array(alphas) * 100
     return {
-        "mean":    round(float(np.mean(a)), 2),
-        "median":  round(float(np.median(a)), 2),
+        "mean": round(float(np.mean(a)), 2),
+        "median": round(float(np.median(a)), 2),
         "winrate": round(float(np.mean(a > 0)) * 100, 1),
-        "p25":     round(float(np.percentile(a, 25)), 2),
-        "p75":     round(float(np.percentile(a, 75)), 2),
-        "p10":     round(float(np.percentile(a, 10)), 2),
-        "p90":     round(float(np.percentile(a, 90)), 2),
+        "p25": round(float(np.percentile(a, 25)), 2),
+        "p75": round(float(np.percentile(a, 75)), 2),
+        "p10": round(float(np.percentile(a, 10)), 2),
+        "p90": round(float(np.percentile(a, 90)), 2),
     }
 
 
@@ -170,13 +188,22 @@ def research_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
     that match setup_type and computed market_regime.
     """
     empty = {
-        "n": 0, "setup_type": setup_type, "regime": market_regime,
+        "n": 0,
+        "setup_type": setup_type,
+        "regime": market_regime,
         "alpha_20d": {"mean": None, "median": None, "winrate": None},
         "alpha_60d": {"mean": None, "median": None, "winrate": None},
-        "tier_emoji": "🔴", "tier_label": "樣本不足",
+        "tier_emoji": "🔴",
+        "tier_label": "樣本不足",
     }
     try:
-        from src.database import AnalysisResult, DailyPrice, RESEARCH_CUTOFF_DATE, get_session
+        from src.database import (
+            RESEARCH_CUTOFF_DATE,
+            AnalysisResult,
+            DailyPrice,
+            get_session,
+        )
+
         s = get_session(engine)
         ar_rows = (
             s.query(AnalysisResult)
@@ -230,8 +257,12 @@ def research_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         sorted_0050 = sorted(p0050_map.keys())
 
         sorted_matching = sorted(matching, key=lambda x: x[1])
-        dedup_m20 = dedup_by_trading_days(sorted_matching, 20, sorted_dates_map, sorted_0050)
-        dedup_m60 = dedup_by_trading_days(sorted_matching, 60, sorted_dates_map, sorted_0050)
+        dedup_m20 = dedup_by_trading_days(
+            sorted_matching, 20, sorted_dates_map, sorted_0050
+        )
+        dedup_m60 = dedup_by_trading_days(
+            sorted_matching, 60, sorted_dates_map, sorted_0050
+        )
 
         obs_20 = [
             (sid, d, price_map.get(sid, {}).get(d))
@@ -244,22 +275,26 @@ def research_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
             if price_map.get(sid, {}).get(d)
         ]
 
-        alphas_20 = _compute_forward_alpha(obs_20, price_map, sorted_dates_map, p0050_map, sorted_0050, 20)
-        alphas_60 = _compute_forward_alpha(obs_60, price_map, sorted_dates_map, p0050_map, sorted_0050, 60)
+        alphas_20 = _compute_forward_alpha(
+            obs_20, price_map, sorted_dates_map, p0050_map, sorted_0050, 20
+        )
+        alphas_60 = _compute_forward_alpha(
+            obs_60, price_map, sorted_dates_map, p0050_map, sorted_0050, 60
+        )
 
         n = len(alphas_20)
         tier_emoji, tier_label = _evidence_tier(n)
         return {
-            "n":                    n,
-            "n_raw":                len(matching),
-            "n_dedup_20":           len(dedup_m20),
-            "n_dedup_60":           len(dedup_m60),
-            "setup_type":           setup_type,
-            "regime":               market_regime,
-            "alpha_20d":            _alpha_stats(alphas_20),
-            "alpha_60d":            _alpha_stats(alphas_60),
-            "tier_emoji":           tier_emoji,
-            "tier_label":           tier_label,
+            "n": n,
+            "n_raw": len(matching),
+            "n_dedup_20": len(dedup_m20),
+            "n_dedup_60": len(dedup_m60),
+            "setup_type": setup_type,
+            "regime": market_regime,
+            "alpha_20d": _alpha_stats(alphas_20),
+            "alpha_60d": _alpha_stats(alphas_60),
+            "tier_emoji": tier_emoji,
+            "tier_label": tier_label,
             # Alpha 口徑標記（供跨路徑比較時確認一致性）
             # stock_net_minus_bench_raw = (stock_raw − ROUND_TRIP_COST) − bench_raw
             "alpha_cost_convention": "stock_net_minus_bench_raw",
@@ -280,14 +315,34 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
     Legacy records are counted but excluded from alpha computation.
     """
     empty = {
-        "total_recorded": 0, "matured_20d": 0, "matured_60d": 0,
+        "total_recorded": 0,
+        "matured_20d": 0,
+        "matured_60d": 0,
         "n_legacy": 0,
-        "alpha_20d": {"mean": None, "median": None, "winrate": None, "p25": None, "p75": None, "p10": None, "p90": None},
-        "alpha_60d": {"mean": None, "median": None, "winrate": None, "p25": None, "p75": None, "p10": None, "p90": None},
-        "tier_emoji": "🔴", "tier_label": "尚無 OOS 資料",
+        "alpha_20d": {
+            "mean": None,
+            "median": None,
+            "winrate": None,
+            "p25": None,
+            "p75": None,
+            "p10": None,
+            "p90": None,
+        },
+        "alpha_60d": {
+            "mean": None,
+            "median": None,
+            "winrate": None,
+            "p25": None,
+            "p75": None,
+            "p10": None,
+            "p90": None,
+        },
+        "tier_emoji": "🔴",
+        "tier_label": "尚無 OOS 資料",
     }
     try:
-        from src.database import DailyPrice, ForwardSignal, MODEL_VERSION, get_session
+        from src.database import MODEL_VERSION, DailyPrice, ForwardSignal, get_session
+
         s = get_session(engine)
         fs_rows = (
             s.query(ForwardSignal)
@@ -320,48 +375,61 @@ def forward_evidence(setup_type: str, market_regime: str, engine=None) -> dict:
         # (next-day open vs signal-day close). Mixing them produces a blended
         # alpha that is meaningless because the two entry prices are not comparable.
         next_open = [r for r in matching if r.execution_price_type == "NEXT_OPEN"]
-        legacy    = [r for r in matching if r.execution_price_type != "NEXT_OPEN"]
-        n_legacy  = len(legacy)
+        legacy = [r for r in matching if r.execution_price_type != "NEXT_OPEN"]
+        n_legacy = len(legacy)
 
         # Use stored alpha from compute_signal_outcomes() — already correctly computed
         # with NEXT_OPEN logic (execution_date open vs 0050 open same day).
         # Stored as %, convert to decimal for _alpha_stats().
-        matured_20_raw = [r for r in next_open
-                          if r.outcomes_computed_at is not None and r.alpha_20d is not None]
-        matured_60_raw = [r for r in next_open
-                          if r.outcomes_computed_at is not None and r.alpha_60d is not None]
+        matured_20_raw = [
+            r
+            for r in next_open
+            if r.outcomes_computed_at is not None and r.alpha_20d is not None
+        ]
+        matured_60_raw = [
+            r
+            for r in next_open
+            if r.outcomes_computed_at is not None and r.alpha_60d is not None
+        ]
 
         # ── DEDUP：同股票 20D/60D 冷卻，避免重疊成效視窗 ──────────────
         # 連續五天 BUY 同一支股票 = 五個樣本，但後續 20 天高度重疊，
         # 不能視為五次獨立驗證。
         def _dedup_forward(records, n_days):
             """按 trade_date 排序後套用 n_days 冷卻去重，回傳 kept 的記錄集合 key。"""
-            pairs = sorted([(r.stock_id, r.trade_date) for r in records],
-                           key=lambda x: x[1])
+            pairs = sorted(
+                [(r.stock_id, r.trade_date) for r in records], key=lambda x: x[1]
+            )
             kept = dedup_by_trading_days(pairs, n_days, market_calendar=market_calendar)
             return set(kept)
 
         kept_20 = _dedup_forward(matured_20_raw, 20)
         kept_60 = _dedup_forward(matured_60_raw, 60)
 
-        alphas_20 = [r.alpha_20d / 100.0 for r in matured_20_raw
-                     if (r.stock_id, r.trade_date) in kept_20]
-        alphas_60 = [r.alpha_60d / 100.0 for r in matured_60_raw
-                     if (r.stock_id, r.trade_date) in kept_60]
+        alphas_20 = [
+            r.alpha_20d / 100.0
+            for r in matured_20_raw
+            if (r.stock_id, r.trade_date) in kept_20
+        ]
+        alphas_60 = [
+            r.alpha_60d / 100.0
+            for r in matured_60_raw
+            if (r.stock_id, r.trade_date) in kept_60
+        ]
 
         n_m20 = len(alphas_20)
         tier_emoji, tier_label = _evidence_tier(n_m20)
         return {
-            "total_recorded":        len(next_open),
-            "n_legacy":              n_legacy,
-            "n_raw_20d":             len(matured_20_raw),
-            "n_raw_60d":             len(matured_60_raw),
-            "matured_20d":           n_m20,
-            "matured_60d":           len(alphas_60),
-            "alpha_20d":             _alpha_stats(alphas_20),
-            "alpha_60d":             _alpha_stats(alphas_60),
-            "tier_emoji":            tier_emoji,
-            "tier_label":            tier_label,
+            "total_recorded": len(next_open),
+            "n_legacy": n_legacy,
+            "n_raw_20d": len(matured_20_raw),
+            "n_raw_60d": len(matured_60_raw),
+            "matured_20d": n_m20,
+            "matured_60d": len(alphas_60),
+            "alpha_20d": _alpha_stats(alphas_20),
+            "alpha_60d": _alpha_stats(alphas_60),
+            "tier_emoji": tier_emoji,
+            "tier_label": tier_label,
             # Alpha 口徑標記（與 research_evidence 一致，確保可直接比較）
             "alpha_cost_convention": "stock_net_minus_bench_raw",
         }
@@ -375,11 +443,11 @@ def evidence_narrative(re_ev: dict, fe_ev: dict) -> str:
     Plain-language interpretation combining research + forward evidence.
     Conservative: never overstates weak evidence.
     """
-    r_n      = re_ev.get("n", 0)
+    r_n = re_ev.get("n", 0)
     r_alpha20 = re_ev.get("alpha_20d", {}).get("mean")
-    r_wr20    = re_ev.get("alpha_20d", {}).get("winrate")
-    f_total   = fe_ev.get("total_recorded", 0)
-    f_m20     = fe_ev.get("matured_20d", 0)
+    r_wr20 = re_ev.get("alpha_20d", {}).get("winrate")
+    f_total = fe_ev.get("total_recorded", 0)
+    f_m20 = fe_ev.get("matured_20d", 0)
     f_alpha20 = fe_ev.get("alpha_20d", {}).get("mean")
 
     if r_n < 10:
@@ -436,13 +504,19 @@ def monte_carlo_dist(
     Returns price percentiles at day n_days.
     """
     empty = {
-        "p10": None, "p25": None, "p50": None, "p75": None, "p90": None,
-        "n_hist": 0, "sigma_daily": None,
+        "p10": None,
+        "p25": None,
+        "p50": None,
+        "p75": None,
+        "p90": None,
+        "n_hist": 0,
+        "sigma_daily": None,
     }
     if not current_price or current_price <= 0:
         return empty
     try:
         from scipy import stats as sp_stats
+
         from src.database import DailyPrice, get_session
 
         s = get_session(engine)
@@ -473,19 +547,22 @@ def monte_carlo_dist(
 
         rng = np.random.default_rng(42)
         sim_returns = sp_stats.t.rvs(
-            df_t, loc=0.0, scale=scale_t,
-            size=(n_sims, n_days), random_state=rng,
+            df_t,
+            loc=0.0,
+            scale=scale_t,
+            size=(n_sims, n_days),
+            random_state=rng,
         )
         cum_log_ret = sim_returns.sum(axis=1)
         final_prices = current_price * np.exp(cum_log_ret)
 
         return {
-            "p10":       round(float(np.percentile(final_prices, 10)), 2),
-            "p25":       round(float(np.percentile(final_prices, 25)), 2),
-            "p50":       round(float(np.percentile(final_prices, 50)), 2),
-            "p75":       round(float(np.percentile(final_prices, 75)), 2),
-            "p90":       round(float(np.percentile(final_prices, 90)), 2),
-            "n_hist":    len(log_returns),
+            "p10": round(float(np.percentile(final_prices, 10)), 2),
+            "p25": round(float(np.percentile(final_prices, 25)), 2),
+            "p50": round(float(np.percentile(final_prices, 50)), 2),
+            "p75": round(float(np.percentile(final_prices, 75)), 2),
+            "p90": round(float(np.percentile(final_prices, 90)), 2),
+            "n_hist": len(log_returns),
             "sigma_daily": round(float(scale_t) * 100, 2),
         }
     except Exception as e:

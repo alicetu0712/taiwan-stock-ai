@@ -27,6 +27,7 @@ def is_trading_day(d: date = None) -> bool:
     """判斷是否為台股交易日。使用 TaiwanTradingCalendar（含國定假日）。"""
     d = d or date.today()
     from src.core.trading_calendar import is_trading_day as _cal_check
+
     return _cal_check(d)
 
 

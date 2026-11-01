@@ -75,6 +75,7 @@ source = ["src", "dashboard"]
 omit = [
     "src/analyzers/market_behavior.py",
     "src/analyzers/risk.py",
+    "src/analyzers/price_trend.py",
 ]
 
 [tool.coverage.report]

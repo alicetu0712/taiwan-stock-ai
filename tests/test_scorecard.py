@@ -28,8 +28,8 @@ from dashboard._pages.scorecard import (
     _summary_stats,
 )
 
-
 # ── helpers ───────────────────────────────────────────────────
+
 
 def _mon_fri(start: date, end: date) -> list:
     """Generate Mon-Fri trading dates between start and end inclusive."""
@@ -45,21 +45,27 @@ def _mon_fri(start: date, end: date) -> list:
 _TEST_CAL = _mon_fri(date(2024, 1, 1), date(2024, 3, 31))
 
 
-def _row(stock_id: str, trade_date: date, alpha_20: float | None = None,
-         alpha_60: float | None = None, outcome: str | None = None) -> dict:
+def _row(
+    stock_id: str,
+    trade_date: date,
+    alpha_20: float | None = None,
+    alpha_60: float | None = None,
+    outcome: str | None = None,
+) -> dict:
     return {
-        "stock_id":       stock_id,
-        "trade_date":     str(trade_date),
+        "stock_id": stock_id,
+        "trade_date": str(trade_date),
         "decision_label": "buy",
-        "alpha_20d":      alpha_20,
-        "alpha_60d":      alpha_60,
-        "outcome_note":   outcome or ("EXPIRED" if alpha_20 is not None else None),
+        "alpha_20d": alpha_20,
+        "alpha_60d": alpha_60,
+        "outcome_note": outcome or ("EXPIRED" if alpha_20 is not None else None),
         "fwd_return_20d": alpha_20,
         "fwd_return_60d": alpha_60,
     }
 
 
 # ── _dedup_cohort ─────────────────────────────────────────────
+
 
 class TestDedupCohort:
     """Tests use _TEST_CAL (Mon-Fri Jan–Mar 2024). Exact trading-day counts."""
@@ -128,6 +134,7 @@ class TestDedupCohort:
 
 # ── _summary_stats cohort isolation ─────────────────────────
 
+
 class TestSummaryStatsDedup:
     def _make_rows(self):
         """
@@ -160,7 +167,9 @@ class TestSummaryStatsDedup:
         stats = _summary_stats(rows, market_calendar=_TEST_CAL)
         s20 = stats["s20"]
         assert s20["n"] == 2
-        assert abs(s20["avg_alpha"] - 0.5) < 0.01, f"Expected 0.5 got {s20['avg_alpha']}"
+        assert (
+            abs(s20["avg_alpha"] - 0.5) < 0.01
+        ), f"Expected 0.5 got {s20['avg_alpha']}"
         assert s20["winrate"] == 50.0
 
     def test_60d_dedup_n_leq_20d_dedup_n(self):
@@ -192,6 +201,7 @@ class TestSummaryStatsDedup:
 
 # ── _stats_block separate denominators ────────────────────────
 
+
 def _matured_row(alpha: float, outcome: str | None) -> dict:
     """Minimal row dict for _stats_block tests."""
     return {"alpha_20d": alpha, "outcome_note": outcome}
@@ -205,16 +215,16 @@ class TestStatsBlockDenominators:
         rows = [
             _matured_row(1.0, "EXPIRED"),
             _matured_row(2.0, "T1_HIT"),
-            _matured_row(-1.0, None),    # alpha set, outcome unknown
+            _matured_row(-1.0, None),  # alpha set, outcome unknown
         ]
         result = _stats_block(rows, "alpha_20d")
-        assert result["n"] == 3          # all three have alpha
+        assert result["n"] == 3  # all three have alpha
 
     def test_outcome_n_excludes_null_outcome(self):
         rows = [
             _matured_row(1.0, "EXPIRED"),
             _matured_row(2.0, "T1_HIT"),
-            _matured_row(-1.0, None),    # alpha set, outcome unknown
+            _matured_row(-1.0, None),  # alpha set, outcome unknown
         ]
         result = _stats_block(rows, "alpha_20d")
         assert result["n_outcome"] == 2  # only EXPIRED + T1_HIT
@@ -225,12 +235,12 @@ class TestStatsBlockDenominators:
         rows = [
             _matured_row(1.0, "T1_HIT"),
             _matured_row(-1.0, "STOP_TRIGGERED"),
-            _matured_row(0.5, None),   # alpha present, outcome unknown
+            _matured_row(0.5, None),  # alpha present, outcome unknown
         ]
         result = _stats_block(rows, "alpha_20d")
         assert result["n"] == 3
         assert result["n_outcome"] == 2
-        assert result["t1_rate"] == 50.0   # 1/2 not 1/3
+        assert result["t1_rate"] == 50.0  # 1/2 not 1/3
 
     def test_stop_rate_uses_outcome_n(self):
         rows = [

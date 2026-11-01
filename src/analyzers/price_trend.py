@@ -30,34 +30,34 @@ _RAW_MAX = 45.0
 @dataclass
 class PriceTrendResult:
     stock_id: str
-    price_trend_score: float = 0.0   # 0-100
+    price_trend_score: float = 0.0  # 0-100
 
     # Sub-scores (raw, for debug / backtest attribution)
     ma_structure_score: float = 0.0  # max 12
-    ma_slope_score: float = 0.0      # max 8
-    deviation_score: float = 0.0     # max 8
-    setup_score: float = 0.0         # max 10
-    volume_score: float = 0.0        # max 7
+    ma_slope_score: float = 0.0  # max 8
+    deviation_score: float = 0.0  # max 8
+    setup_score: float = 0.0  # max 10
+    volume_score: float = 0.0  # max 7
 
     # MA values
     close: Optional[float] = None
-    ma5:   Optional[float] = None
-    ma10:  Optional[float] = None
-    ma20:  Optional[float] = None
-    ma60:  Optional[float] = None
+    ma5: Optional[float] = None
+    ma10: Optional[float] = None
+    ma20: Optional[float] = None
+    ma60: Optional[float] = None
 
     # Key metrics (stored in DB)
-    ma20_gap: Optional[float] = None     # (close − MA20) / MA20 × 100
+    ma20_gap: Optional[float] = None  # (close − MA20) / MA20 × 100
     ma60_gap: Optional[float] = None
     volume_ratio: Optional[float] = None
 
     # Trend & Setup
-    ma_trend: str = "neutral"           # bullish / bullish_weak / neutral / bearish
-    ma20_slope: str = "neutral"         # up / flat / down
+    ma_trend: str = "neutral"  # bullish / bullish_weak / neutral / bearish
+    ma20_slope: str = "neutral"  # up / flat / down
     ma60_slope: str = "neutral"
-    setup_type: str = "none"            # breakout / pullback_buy / pullback_hold / ma60_support
-                                        # trending / overextended / breakdown / none
-    trade_signal: str = "wait"          # strong_buy / buy / wait / reduce / sell
+    setup_type: str = "none"  # breakout / pullback_buy / pullback_hold / ma60_support
+    # trending / overextended / breakdown / none
+    trade_signal: str = "wait"  # strong_buy / buy / wait / reduce / sell
 
     risk_signals: List[str] = field(default_factory=list)
     summary: str = ""
@@ -70,14 +70,22 @@ class PriceTrendAnalyzer:
         result = PriceTrendResult(stock_id=stock_id)
 
         if history is None or len(history) < self.MIN_HISTORY:
-            result.summary = f"歷史資料不足（{len(history) if history is not None else 0}天）"
+            result.summary = (
+                f"歷史資料不足（{len(history) if history is not None else 0}天）"
+            )
             return result
 
         hist = history.sort_values("date").reset_index(drop=True)
-        close  = hist["close"].values.astype(float)
-        volume = hist["volume"].values.astype(float) if "volume" in hist.columns else np.ones(len(hist))
-        high   = hist["high"].values.astype(float) if "high" in hist.columns else close
-        low    = hist["low"].values.astype(float) if "low" in hist.columns else close  # noqa: F841
+        close = hist["close"].values.astype(float)
+        volume = (
+            hist["volume"].values.astype(float)
+            if "volume" in hist.columns
+            else np.ones(len(hist))
+        )
+        high = hist["high"].values.astype(float) if "high" in hist.columns else close
+        low = (  # noqa: F841
+            hist["low"].values.astype(float) if "low" in hist.columns else close
+        )  # noqa: F841
 
         risk_signals = []
 
@@ -85,7 +93,7 @@ class PriceTrendAnalyzer:
         ma_vals = self._calc_mas(close)
         cur = float(close[-1])
         result.close = cur
-        result.ma5  = ma_vals.get("ma5")
+        result.ma5 = ma_vals.get("ma5")
         result.ma10 = ma_vals.get("ma10")
         result.ma20 = ma_vals.get("ma20")
         result.ma60 = ma_vals.get("ma60")
@@ -111,7 +119,17 @@ class PriceTrendAnalyzer:
         vol_ratio = self._calc_vol_ratio(volume)
         result.volume_ratio = vol_ratio
         breakout_20d, near_20d, failed_breakout = self._check_breakout(close, high)
-        setup = self._detect_setup(cur, ma_vals, ma_trend, ma20_slope, ma60_slope, breakout_20d, near_20d, failed_breakout, vol_ratio)
+        setup = self._detect_setup(
+            cur,
+            ma_vals,
+            ma_trend,
+            ma20_slope,
+            ma60_slope,
+            breakout_20d,
+            near_20d,
+            failed_breakout,
+            vol_ratio,
+        )
         result.setup_type = setup
         result.setup_score = self._score_setup(setup, vol_ratio)
 
@@ -119,8 +137,13 @@ class PriceTrendAnalyzer:
         result.volume_score = self._score_volume(close, volume, setup, vol_ratio)
 
         # ── 合計 → normalize to 0-100 ────────────────────────────
-        raw = (result.ma_structure_score + result.ma_slope_score +
-               result.deviation_score + result.setup_score + result.volume_score)
+        raw = (
+            result.ma_structure_score
+            + result.ma_slope_score
+            + result.deviation_score
+            + result.setup_score
+            + result.volume_score
+        )
         result.price_trend_score = round(max(0.0, min(100.0, raw / _RAW_MAX * 100)), 1)
 
         # ── Risk Signals ──────────────────────────────────────────
@@ -153,38 +176,56 @@ class PriceTrendAnalyzer:
         n = len(close)
         return {
             f"ma{p}": float(np.mean(close[-p:]))
-            for p in TA_CONFIG["ma_periods"] if n >= p
+            for p in TA_CONFIG["ma_periods"]
+            if n >= p
         }
 
     # ── ① MA Structure ────────────────────────────────────────────
 
-    def _score_ma_structure(self, cur: float, mas: Dict, ma60_slope: str = "flat") -> Tuple[float, str]:
+    def _score_ma_structure(
+        self, cur: float, mas: Dict, ma60_slope: str = "flat"
+    ) -> Tuple[float, str]:
         """多頭層級（12分）：完美排列最高，完美空頭最低"""
-        ma5  = mas.get("ma5")
+        ma5 = mas.get("ma5")
         ma10 = mas.get("ma10")
         ma20 = mas.get("ma20")
         ma60 = mas.get("ma60")
 
         if ma5 and ma10 and ma20 and ma60:
-            if cur > ma5 > ma10 > ma20 > ma60:   return 12.0, "bullish"
-            if cur > ma5 > ma20 > ma60:           return 10.0, "bullish"
-            if cur > ma20 > ma60:                 return 8.0,  "bullish"
-            if cur > ma20 and cur > ma60:         return 6.0,  "bullish_weak"
+            if cur > ma5 > ma10 > ma20 > ma60:
+                return 12.0, "bullish"
+            if cur > ma5 > ma20 > ma60:
+                return 10.0, "bullish"
+            if cur > ma20 > ma60:
+                return 8.0, "bullish"
+            if cur > ma20 and cur > ma60:
+                return 6.0, "bullish_weak"
             # MA60 Support Zone：specific before general neutral
             # Price < MA20, near MA60 (±3%), MA20 > MA60, MA60 rising
-            if (cur < ma20 and ma20 > ma60 and ma60_slope == "up"
-                    and abs((cur - ma60) / ma60 * 100) <= 3.0):
+            if (
+                cur < ma20
+                and ma20 > ma60
+                and ma60_slope == "up"
+                and abs((cur - ma60) / ma60 * 100) <= 3.0
+            ):
                 return 5.0, "neutral"
-            if cur > ma20 or cur > ma60:          return 4.0,  "neutral"
-            if cur < ma5 < ma10 < ma20 < ma60:   return 0.0,  "bearish"
-            if cur < ma20 < ma60:                 return 1.0,  "bearish"
-            if cur < ma20:                        return 2.0,  "bearish"
+            if cur > ma20 or cur > ma60:
+                return 4.0, "neutral"
+            if cur < ma5 < ma10 < ma20 < ma60:
+                return 0.0, "bearish"
+            if cur < ma20 < ma60:
+                return 1.0, "bearish"
+            if cur < ma20:
+                return 2.0, "bearish"
             return 3.0, "neutral"
 
         if ma5 and ma20:
-            if cur > ma5 > ma20:   return 8.0, "bullish"
-            if cur > ma20:         return 5.0, "bullish_weak"
-            if cur < ma20:         return 2.0, "bearish"
+            if cur > ma5 > ma20:
+                return 8.0, "bullish"
+            if cur > ma20:
+                return 5.0, "bullish_weak"
+            if cur < ma20:
+                return 2.0, "bearish"
 
         return 4.0, "neutral"
 
@@ -199,29 +240,37 @@ class PriceTrendAnalyzer:
 
         if n >= 25:
             ma20_now = float(np.mean(close[-20:]))
-            ma20_5d  = float(np.mean(close[-25:-5]))
+            ma20_5d = float(np.mean(close[-25:-5]))
             pct = (ma20_now - ma20_5d) / ma20_5d * 100 if ma20_5d else 0
             if pct > 0.3:
-                score += 5; ma20_slope = "up"
+                score += 5
+                ma20_slope = "up"
             elif pct > 0.05:
-                score += 3; ma20_slope = "up"
+                score += 3
+                ma20_slope = "up"
             elif pct > -0.05:
-                score += 2; ma20_slope = "flat"
+                score += 2
+                ma20_slope = "flat"
             elif pct > -0.3:
-                score += 1; ma20_slope = "down"
+                score += 1
+                ma20_slope = "down"
             else:
-                score += 0; ma20_slope = "down"
+                score += 0
+                ma20_slope = "down"
 
         if n >= 70:
             ma60_now = float(np.mean(close[-60:]))
             ma60_10d = float(np.mean(close[-70:-10]))
             pct = (ma60_now - ma60_10d) / ma60_10d * 100 if ma60_10d else 0
             if pct > 0.2:
-                score += 3; ma60_slope = "up"
+                score += 3
+                ma60_slope = "up"
             elif pct > -0.1:
-                score += 2; ma60_slope = "flat"
+                score += 2
+                ma60_slope = "flat"
             else:
-                score += 0; ma60_slope = "down"
+                score += 0
+                ma60_slope = "down"
 
         return min(score, 8.0), ma20_slope, ma60_slope
 
@@ -243,16 +292,28 @@ class PriceTrendAnalyzer:
             ma60_gap = round((cur - ma60) / ma60 * 100, 2)
 
         if ma20_gap is not None:
-            _near_ma60 = (ma60_gap is not None and abs(ma60_gap) <= 3.0
-                          and ma20 is not None and ma60 is not None and ma20 > ma60)
-            if   0   <= ma20_gap <  3:  score = 8.0   # 健康位置
-            elif 3   <= ma20_gap <  5:  score = 7.0
-            elif 5   <= ma20_gap <  8:  score = 5.0
-            elif 8   <= ma20_gap < 12:  score = 3.0
-            elif 12  <= ma20_gap < 15:  score = 1.0
-            elif ma20_gap >= 15:        score = 0.0   # 過熱，不追
-            elif -5  <  ma20_gap < 0:   score = 6.0   # 回踩帶（接近MA20）
-            elif -10 <  ma20_gap <= -5:
+            _near_ma60 = (
+                ma60_gap is not None
+                and abs(ma60_gap) <= 3.0
+                and ma20 is not None
+                and ma60 is not None
+                and ma20 > ma60
+            )
+            if 0 <= ma20_gap < 3:
+                score = 8.0  # 健康位置
+            elif 3 <= ma20_gap < 5:
+                score = 7.0
+            elif 5 <= ma20_gap < 8:
+                score = 5.0
+            elif 8 <= ma20_gap < 12:
+                score = 3.0
+            elif 12 <= ma20_gap < 15:
+                score = 1.0
+            elif ma20_gap >= 15:
+                score = 0.0  # 過熱，不追
+            elif -5 < ma20_gap < 0:
+                score = 6.0  # 回踩帶（接近MA20）
+            elif -10 < ma20_gap <= -5:
                 # MA60 支撐帶（MA20>MA60 且距 MA60 ±3%）視同健康回踩
                 score = 6.0 if _near_ma60 else 3.0
             else:
@@ -269,7 +330,9 @@ class PriceTrendAnalyzer:
         vol_ma = float(np.mean(volume[-20:]))
         return round(float(volume[-1]) / vol_ma, 2) if vol_ma > 0 else None
 
-    def _check_breakout(self, close: np.ndarray, high: np.ndarray) -> Tuple[bool, bool, bool]:
+    def _check_breakout(
+        self, close: np.ndarray, high: np.ndarray
+    ) -> Tuple[bool, bool, bool]:
         """
         Returns (breakout_20d, near_20d, failed_breakout).
 
@@ -287,13 +350,15 @@ class PriceTrendAnalyzer:
         n = len(close)
         if n < 21:
             return False, False, False
-        prev_20d_high = float(np.max(high[-21:-1]))   # exclude today
-        cur_close     = float(close[-1])
+        prev_20d_high = float(np.max(high[-21:-1]))  # exclude today
+        cur_close = float(close[-1])
 
         breakout_20d = cur_close > prev_20d_high
-        near_20d     = (not breakout_20d) and (cur_close >= prev_20d_high * 0.97)
+        near_20d = (not breakout_20d) and (cur_close >= prev_20d_high * 0.97)
 
-        recent_peak   = float(np.max(high[-4:-1])) if n >= 4 else float(high[-2]) if n >= 2 else 0.0
+        recent_peak = (
+            float(np.max(high[-4:-1])) if n >= 4 else float(high[-2]) if n >= 2 else 0.0
+        )
         failed_breakout = (
             not breakout_20d
             and recent_peak >= prev_20d_high * 0.999
@@ -302,8 +367,16 @@ class PriceTrendAnalyzer:
         return breakout_20d, near_20d, failed_breakout
 
     def _detect_setup(
-        self, cur: float, mas: Dict, ma_trend: str, ma20_slope: str, ma60_slope: str,
-        breakout_20d: bool, near_20d: bool, failed_breakout: bool, vol_ratio: Optional[float]
+        self,
+        cur: float,
+        mas: Dict,
+        ma_trend: str,
+        ma20_slope: str,
+        ma60_slope: str,
+        breakout_20d: bool,
+        near_20d: bool,
+        failed_breakout: bool,
+        vol_ratio: Optional[float],
     ) -> str:
         ma10 = mas.get("ma10")
         ma20 = mas.get("ma20")
@@ -330,20 +403,34 @@ class PriceTrendAnalyzer:
             return "near_breakout"
 
         # Pullback Buy：多頭排列，回踩 MA10 附近（±5%），仍在 MA20 上，縮量
-        if ma10 and ma20 and ma_trend in ("bullish", "bullish_weak") and \
-           abs((cur - ma10) / ma10) <= 0.05 and cur > ma20 and \
-           (vol_ratio is None or vol_ratio <= 1.2):
+        if (
+            ma10
+            and ma20
+            and ma_trend in ("bullish", "bullish_weak")
+            and abs((cur - ma10) / ma10) <= 0.05
+            and cur > ma20
+            and (vol_ratio is None or vol_ratio <= 1.2)
+        ):
             return "pullback_buy"
 
         # Pullback Hold：多頭排列，回踩 MA20（0-4%以內）守穩
-        if ma20 and ma_trend in ("bullish", "bullish_weak") and \
-           0 <= (cur - ma20) / ma20 <= 0.04:
+        if (
+            ma20
+            and ma_trend in ("bullish", "bullish_weak")
+            and 0 <= (cur - ma20) / ma20 <= 0.04
+        ):
             return "pullback_hold"
 
         # MA60 Support：多頭中期結構完整（MA20>MA60），回踩至 MA60 ±3%，縮量等確認
-        if (ma60 and ma20 and cur < ma20 and ma20 > ma60 and ma60_slope == "up"
-                and abs((cur - ma60) / ma60) <= 0.03
-                and (vol_ratio is None or vol_ratio <= 1.0)):
+        if (
+            ma60
+            and ma20
+            and cur < ma20
+            and ma20 > ma60
+            and ma60_slope == "up"
+            and abs((cur - ma60) / ma60) <= 0.03
+            and (vol_ratio is None or vol_ratio <= 1.0)
+        ):
             return "ma60_support"
 
         # Trending：多頭排列延伸
@@ -355,16 +442,16 @@ class PriceTrendAnalyzer:
     def _score_setup(self, setup: str, vol_ratio: Optional[float]) -> float:
         """Setup 基礎分（10分）：突破依量比加減分"""
         base = {
-            "breakout":        8.0,
-            "near_breakout":   6.0,  # 接近但未突破：潛力等待
+            "breakout": 8.0,
+            "near_breakout": 6.0,  # 接近但未突破：潛力等待
             "failed_breakout": 2.0,  # 突破失敗：警示訊號
-            "pullback_buy":    9.0,
-            "pullback_hold":   7.0,
-            "ma60_support":    7.0,
-            "trending":        6.0,
-            "overextended":    2.0,
-            "breakdown":       0.0,
-            "none":            3.0,
+            "pullback_buy": 9.0,
+            "pullback_hold": 7.0,
+            "ma60_support": 7.0,
+            "trending": 6.0,
+            "overextended": 2.0,
+            "breakdown": 0.0,
+            "none": 3.0,
         }.get(setup, 3.0)
 
         if setup == "breakout" and vol_ratio is not None:
@@ -378,7 +465,11 @@ class PriceTrendAnalyzer:
     # ── ⑤ Volume Confirmation ─────────────────────────────────────
 
     def _score_volume(
-        self, close: np.ndarray, volume: np.ndarray, setup: str, vol_ratio: Optional[float]
+        self,
+        close: np.ndarray,
+        volume: np.ndarray,
+        setup: str,
+        vol_ratio: Optional[float],
     ) -> float:
         """量能確認（7分）：突破放量高分，縮量回踩高分，爆量跌破最低"""
         if vol_ratio is None or len(close) < 2:
@@ -387,44 +478,62 @@ class PriceTrendAnalyzer:
         price_up = float(close[-1]) >= float(close[-2])
 
         if setup == "breakout":
-            if vol_ratio >= 2.0:  return 7.0
-            if vol_ratio >= 1.5:  return 6.0
-            if vol_ratio >= 1.0:  return 4.0
+            if vol_ratio >= 2.0:
+                return 7.0
+            if vol_ratio >= 1.5:
+                return 6.0
+            if vol_ratio >= 1.0:
+                return 4.0
             return 2.0
 
         if setup in ("pullback_buy", "pullback_hold"):
-            if vol_ratio <= 0.6:  return 7.0  # 縮量回踩最健康
-            if vol_ratio <= 1.0:  return 5.0
-            if vol_ratio <= 1.5:  return 3.0
-            return 1.0            # 放量回踩：賣壓疑慮
+            if vol_ratio <= 0.6:
+                return 7.0  # 縮量回踩最健康
+            if vol_ratio <= 1.0:
+                return 5.0
+            if vol_ratio <= 1.5:
+                return 3.0
+            return 1.0  # 放量回踩：賣壓疑慮
 
         if setup == "ma60_support":
-            if vol_ratio <= 0.6:  return 7.0  # 極度縮量，蓄積跡象
-            if vol_ratio <= 0.8:  return 6.0
-            if vol_ratio <= 1.0:  return 4.0
-            return 2.0            # 放量下跌至MA60：賣壓仍在，慎入
+            if vol_ratio <= 0.6:
+                return 7.0  # 極度縮量，蓄積跡象
+            if vol_ratio <= 0.8:
+                return 6.0
+            if vol_ratio <= 1.0:
+                return 4.0
+            return 2.0  # 放量下跌至MA60：賣壓仍在，慎入
 
         if setup == "near_breakout":
-            if vol_ratio >= 1.5:  return 5.0  # 量能已在醞釀，蓄勢
-            if vol_ratio >= 1.0:  return 4.0
+            if vol_ratio >= 1.5:
+                return 5.0  # 量能已在醞釀，蓄勢
+            if vol_ratio >= 1.0:
+                return 4.0
             return 3.0
 
         if setup == "failed_breakout":
-            if vol_ratio >= 1.5:  return 1.0  # 放量衰竭，確認失敗
+            if vol_ratio >= 1.5:
+                return 1.0  # 放量衰竭，確認失敗
             return 2.0
 
         if setup == "breakdown":
-            if vol_ratio >= 2.0:  return 0.0  # 爆量跌破：強賣訊
-            if vol_ratio >= 1.5:  return 1.0
+            if vol_ratio >= 2.0:
+                return 0.0  # 爆量跌破：強賣訊
+            if vol_ratio >= 1.5:
+                return 1.0
             return 2.0
 
         if setup == "trending":
-            if price_up and vol_ratio >= 1.2:  return 6.0
-            if price_up:                        return 4.0
+            if price_up and vol_ratio >= 1.2:
+                return 6.0
+            if price_up:
+                return 4.0
             return 3.0
 
-        if price_up and vol_ratio >= 1.5:  return 5.0
-        if price_up:                        return 3.0
+        if price_up and vol_ratio >= 1.5:
+            return 5.0
+        if price_up:
+            return 3.0
         return 2.0
 
     # ── Trade Signal ──────────────────────────────────────────────
@@ -433,7 +542,7 @@ class PriceTrendAnalyzer:
         """進場者視角：沒有持股的人應該怎麼做"""
         setup = r.setup_type
         trend = r.ma_trend
-        gap   = r.ma20_gap or 0.0
+        gap = r.ma20_gap or 0.0
 
         if setup == "breakdown":
             return "sell"
@@ -445,23 +554,30 @@ class PriceTrendAnalyzer:
         if setup == "ma60_support":
             return "wait"
 
-        if setup == "pullback_buy" and trend in ("bullish", "bullish_weak") and r.ma20_slope == "up":
+        if (
+            setup == "pullback_buy"
+            and trend in ("bullish", "bullish_weak")
+            and r.ma20_slope == "up"
+        ):
             if r.volume_ratio is not None and r.volume_ratio <= 0.8:
-                return "strong_buy"   # 縮量回踩最佳
+                return "strong_buy"  # 縮量回踩最佳
             return "buy"
 
         if setup == "breakout" and trend in ("bullish", "bullish_weak"):
             if r.volume_ratio is not None and r.volume_ratio >= 1.5:
-                return "strong_buy"   # 放量突破
+                return "strong_buy"  # 放量突破
             return "buy"
 
         if setup == "near_breakout":
-            return "wait"   # 接近但未穿，等突破確認再進場
+            return "wait"  # 接近但未穿，等突破確認再進場
 
         if setup == "failed_breakout":
             return "reduce"  # 突破後收回：多頭陷阱，降低曝險
 
-        if setup in ("pullback_hold", "trending") and trend in ("bullish", "bullish_weak"):
+        if setup in ("pullback_hold", "trending") and trend in (
+            "bullish",
+            "bullish_weak",
+        ):
             return "buy"
 
         if trend == "bearish" and r.ma20_slope == "down":
@@ -473,24 +589,29 @@ class PriceTrendAnalyzer:
 
     def _build_summary(self, r: PriceTrendResult) -> str:
         signal_label = {
-            "strong_buy": "強買", "buy": "買進",
-            "wait": "等待", "reduce": "減碼", "sell": "賣出",
+            "strong_buy": "強買",
+            "buy": "買進",
+            "wait": "等待",
+            "reduce": "減碼",
+            "sell": "賣出",
         }
         setup_label = {
-            "breakout":        "突破前高",
-            "near_breakout":   "接近前高待突破",
+            "breakout": "突破前高",
+            "near_breakout": "接近前高待突破",
             "failed_breakout": "突破失敗撤退",
-            "pullback_buy":    "回踩MA10買點",
-            "pullback_hold":   "回踩MA20守穩",
-            "ma60_support":    "回踩MA60支撐",
-            "trending":        "趨勢延伸",
-            "overextended":    "過度乖離",
-            "breakdown":       "趨勢破壞",
-            "none":            "無明確型態",
+            "pullback_buy": "回踩MA10買點",
+            "pullback_hold": "回踩MA20守穩",
+            "ma60_support": "回踩MA60支撐",
+            "trending": "趨勢延伸",
+            "overextended": "過度乖離",
+            "breakdown": "趨勢破壞",
+            "none": "無明確型態",
         }
         trend_label = {
-            "bullish": "均線多頭", "bullish_weak": "短均線偏多",
-            "neutral": "趨勢中性", "bearish": "均線空頭",
+            "bullish": "均線多頭",
+            "bullish_weak": "短均線偏多",
+            "neutral": "趨勢中性",
+            "bearish": "均線空頭",
         }
         parts = [
             f"訊號[{signal_label.get(r.trade_signal, r.trade_signal)}]",

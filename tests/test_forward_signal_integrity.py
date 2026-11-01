@@ -22,14 +22,14 @@ Tests:
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
-import pytest
-
-
 # ── helpers ─────────────────────────────────────────────────────────────────
+
 
 def _make_engine(tmp_path, name="test.db"):
     from sqlalchemy import create_engine
+
     from src.database import init_db
+
     engine = create_engine(f"sqlite:///{tmp_path}/{name}")
     init_db(engine)
     return engine
@@ -37,12 +37,14 @@ def _make_engine(tmp_path, name="test.db"):
 
 def _session(engine):
     from sqlalchemy.orm import sessionmaker
+
     return sessionmaker(bind=engine)()
 
 
 def _add_stock_and_prices(s, stock_id, dates_closes, opens=None):
     """Insert Stock + DailyPrice rows. opens dict optional."""
     from src.database import DailyPrice, Stock
+
     s.merge(Stock(stock_id=stock_id, name=stock_id))
     for i, (d, c) in enumerate(dates_closes):
         op = opens.get(d) if opens else None
@@ -50,11 +52,14 @@ def _add_stock_and_prices(s, stock_id, dates_closes, opens=None):
     s.flush()
 
 
-def _make_ar(stock_id="2330", signal="buy", setup="breakout", level="B",
-             score=75.0, conf=80.0):
+def _make_ar(
+    stock_id="2330", signal="buy", setup="breakout", level="B", score=75.0, conf=80.0
+):
     """Minimal AnalysisResult stub for write_forward_signals."""
+
     class AR:
         pass
+
     ar = AR()
     ar.stock_id = stock_id
     ar.price_trend_score = score
@@ -86,11 +91,12 @@ def _build_minimal_db(s, trade_date, stock_id="2330", close=100.0, n_extra=0):
 
 
 _MOCK_COVERAGE = {"min_count": 1, "min_ratio": None}
-_TRADING_DAY   = date(2026, 10, 13)   # confirmed trading day
-_NON_TRADING   = date(2026, 10, 10)   # National Day holiday
+_TRADING_DAY = date(2026, 10, 13)  # confirmed trading day
+_NON_TRADING = date(2026, 10, 10)  # National Day holiday
 
 
 # ── FS-1 ────────────────────────────────────────────────────────────────────
+
 
 class TestWriteForwardSignals:
 
@@ -107,14 +113,18 @@ class TestWriteForwardSignals:
             inserted = write_forward_signals(s, _TRADING_DAY, [_make_ar()])
 
         assert inserted == 1, f"Expected 1 inserted, got {inserted}"
-        fs = s.query(ForwardSignal).filter_by(
-            trade_date=_TRADING_DAY, stock_id="2330"
-        ).one()
-        assert fs.execution_price_type == "NEXT_OPEN", (
-            f"Expected NEXT_OPEN, got '{fs.execution_price_type}'"
+        fs = (
+            s.query(ForwardSignal)
+            .filter_by(trade_date=_TRADING_DAY, stock_id="2330")
+            .one()
         )
+        assert (
+            fs.execution_price_type == "NEXT_OPEN"
+        ), f"Expected NEXT_OPEN, got '{fs.execution_price_type}'"
         # execution_price / execution_date are filled later — must be NULL now
-        assert fs.execution_price is None, "execution_price should be NULL at write time"
+        assert (
+            fs.execution_price is None
+        ), "execution_price should be NULL at write time"
         assert fs.execution_date is None, "execution_date should be NULL at write time"
         s.close()
 
@@ -149,20 +159,26 @@ class TestWriteForwardSignals:
             n2 = write_forward_signals(s, _TRADING_DAY, [_make_ar(score=99.0)])
 
         assert n1 == 1 and n2 == 0, "Second write must be skipped"
-        fs = s.query(ForwardSignal).filter_by(
-            trade_date=_TRADING_DAY, stock_id="2330"
-        ).one()
+        fs = (
+            s.query(ForwardSignal)
+            .filter_by(trade_date=_TRADING_DAY, stock_id="2330")
+            .one()
+        )
         assert fs.pt_score == 75.0, "Original score must be preserved"
-        assert fs.execution_price_type == "NEXT_OPEN", "NEXT_OPEN type must be preserved"
+        assert (
+            fs.execution_price_type == "NEXT_OPEN"
+        ), "NEXT_OPEN type must be preserved"
         s.close()
 
 
 # ── FS-3, FS-4 ──────────────────────────────────────────────────────────────
 
+
 class TestFillExecutionPrices:
 
     def _setup_pending_signal(self, s, trade_date, stock_id="2330", sig_close=100.0):
         from src.database import ForwardSignal, Stock
+
         s.merge(Stock(stock_id=stock_id, name=stock_id))
         fs = ForwardSignal(
             trade_date=trade_date,
@@ -188,22 +204,24 @@ class TestFillExecutionPrices:
         s = _session(engine)
 
         trade_date = date(2026, 9, 1)
-        exec_date  = date(2026, 9, 2)
+        exec_date = date(2026, 9, 2)
 
         fs = self._setup_pending_signal(s, trade_date)
         # 0050 trading day calendar
         s.add(DailyPrice(stock_id="0050", date=trade_date, close=120.0))
-        s.add(DailyPrice(stock_id="0050", date=exec_date,  close=121.0))
+        s.add(DailyPrice(stock_id="0050", date=exec_date, close=121.0))
         # target stock open on execution day
-        s.add(DailyPrice(stock_id="2330", date=exec_date,  open=105.0, close=108.0))
+        s.add(DailyPrice(stock_id="2330", date=exec_date, open=105.0, close=108.0))
         s.commit()
 
         updated = fill_execution_prices(s, date(2026, 9, 3))  # as_of > exec_date
         assert updated == 1, f"Expected 1 updated, got {updated}"
 
         s.refresh(fs)
-        assert fs.execution_date  == exec_date, f"Expected {exec_date}, got {fs.execution_date}"
-        assert fs.execution_price == 105.0,     f"Expected 105.0, got {fs.execution_price}"
+        assert (
+            fs.execution_date == exec_date
+        ), f"Expected {exec_date}, got {fs.execution_date}"
+        assert fs.execution_price == 105.0, f"Expected 105.0, got {fs.execution_price}"
         s.close()
 
     def test_no_fill_when_open_unavailable(self, tmp_path):
@@ -215,11 +233,11 @@ class TestFillExecutionPrices:
         s = _session(engine)
 
         trade_date = date(2026, 9, 1)
-        exec_date  = date(2026, 9, 2)
+        exec_date = date(2026, 9, 2)
 
         fs = self._setup_pending_signal(s, trade_date)
         s.add(DailyPrice(stock_id="0050", date=trade_date, close=120.0))
-        s.add(DailyPrice(stock_id="0050", date=exec_date,  close=121.0))
+        s.add(DailyPrice(stock_id="0050", date=exec_date, close=121.0))
         # 2330 有 close 但無 open
         s.add(DailyPrice(stock_id="2330", date=exec_date, open=None, close=108.0))
         s.commit()
@@ -229,7 +247,7 @@ class TestFillExecutionPrices:
 
         s.refresh(fs)
         assert fs.execution_price is None, "execution_price must remain NULL"
-        assert fs.execution_date  is None, "execution_date must remain NULL"
+        assert fs.execution_date is None, "execution_date must remain NULL"
         s.close()
 
     def test_fill_does_not_touch_already_filled(self, tmp_path):
@@ -240,7 +258,7 @@ class TestFillExecutionPrices:
         engine = _make_engine(tmp_path)
         s = _session(engine)
         trade_date = date(2026, 9, 1)
-        exec_date  = date(2026, 9, 2)
+        exec_date = date(2026, 9, 2)
 
         s.merge(Stock(stock_id="2330", name="2330"))
         fs = ForwardSignal(
@@ -252,8 +270,8 @@ class TestFillExecutionPrices:
         )
         s.add(fs)
         s.add(DailyPrice(stock_id="0050", date=trade_date, close=120.0))
-        s.add(DailyPrice(stock_id="0050", date=exec_date,  close=121.0))
-        s.add(DailyPrice(stock_id="2330", date=exec_date,  open=105.0, close=108.0))
+        s.add(DailyPrice(stock_id="0050", date=exec_date, close=121.0))
+        s.add(DailyPrice(stock_id="2330", date=exec_date, open=105.0, close=108.0))
         s.commit()
 
         updated = fill_execution_prices(s, date(2026, 9, 3))
@@ -266,14 +284,24 @@ class TestFillExecutionPrices:
 
 # ── FS-5, FS-6 ──────────────────────────────────────────────────────────────
 
+
 class TestComputeSignalOutcomes:
 
-    def _make_mature_signal(self, s, trade_date, stock_id,
-                            execution_price_type="NEXT_OPEN",
-                            exec_date=None, exec_price=None,
-                            sig_close=None, decision_label="buy",
-                            stop_price=None, target1=None):
+    def _make_mature_signal(
+        self,
+        s,
+        trade_date,
+        stock_id,
+        execution_price_type="NEXT_OPEN",
+        exec_date=None,
+        exec_price=None,
+        sig_close=None,
+        decision_label="buy",
+        stop_price=None,
+        target1=None,
+    ):
         from src.database import ForwardSignal, Stock
+
         s.merge(Stock(stock_id=stock_id, name=stock_id))
         fs = ForwardSignal(
             trade_date=trade_date,
@@ -295,6 +323,7 @@ class TestComputeSignalOutcomes:
 
     def _add_price_series(self, s, stock_id, start_date, closes, opens=None):
         from src.database import DailyPrice
+
         for i, c in enumerate(closes):
             d = start_date + timedelta(days=i)
             op = opens[i] if opens and i < len(opens) else None
@@ -312,9 +341,11 @@ class TestComputeSignalOutcomes:
         # trade_date mature enough
         trade_date = date(2026, 9, 1)
         fs = self._make_mature_signal(
-            s, trade_date, "2330",
+            s,
+            trade_date,
+            "2330",
             execution_price_type="NEXT_OPEN",
-            exec_price=None,   # NOT filled yet
+            exec_price=None,  # NOT filled yet
             exec_date=None,
             sig_close=100.0,
         )
@@ -347,13 +378,15 @@ class TestComputeSignalOutcomes:
         engine = _make_engine(tmp_path)
         s = _session(engine)
 
-        trade_date  = date(2026, 9, 1)
-        exec_date   = date(2026, 9, 2)
+        trade_date = date(2026, 9, 1)
+        exec_date = date(2026, 9, 2)
         entry_price = 100.0
         bench_entry = 120.0
 
         fs = self._make_mature_signal(
-            s, trade_date, "2330",
+            s,
+            trade_date,
+            "2330",
             execution_price_type="NEXT_OPEN",
             exec_date=exec_date,
             exec_price=entry_price,
@@ -364,33 +397,37 @@ class TestComputeSignalOutcomes:
         # 0050: open=bench_entry on exec_date, close=bench_entry, closes[20]=bench_entry*1.01
         # 2330: open=entry_price on exec_date, close=entry_price, closes[20]=entry_price*1.11
         from src.database import DailyPrice, Stock
+
         s.merge(Stock(stock_id="0050", name="0050"))
         for i in range(21):
             d = exec_date + timedelta(days=i)
-            op_0050  = bench_entry if i == 0 else None
-            cl_0050  = bench_entry if i < 20 else round(bench_entry * 1.01, 2)
-            op_2330  = entry_price if i == 0 else None
-            cl_2330  = entry_price if i < 20 else round(entry_price * 1.11, 2)
-            s.add(DailyPrice(stock_id="0050",  date=d, open=op_0050, close=cl_0050))
-            s.add(DailyPrice(stock_id="2330",  date=d, open=op_2330, close=cl_2330))
+            op_0050 = bench_entry if i == 0 else None
+            cl_0050 = bench_entry if i < 20 else round(bench_entry * 1.01, 2)
+            op_2330 = entry_price if i == 0 else None
+            cl_2330 = entry_price if i < 20 else round(entry_price * 1.11, 2)
+            s.add(DailyPrice(stock_id="0050", date=d, open=op_0050, close=cl_0050))
+            s.add(DailyPrice(stock_id="2330", date=d, open=op_2330, close=cl_2330))
         s.commit()
 
         as_of = exec_date + timedelta(days=40)
         updated = compute_signal_outcomes(s, as_of)
 
         s.refresh(fs)
-        assert updated >= 1,             f"Expected ≥1 outcome, got {updated}"
+        assert updated >= 1, f"Expected ≥1 outcome, got {updated}"
         assert fs.alpha_20d is not None, "alpha_20d must be filled after compute"
         assert fs.fwd_return_20d is not None, "fwd_return_20d must be filled"
 
         from src.services.research_backtest_service import ROUND_TRIP_COST
+
         exit_stock = round(entry_price * 1.11, 2)
         exit_bench = round(bench_entry * 1.01, 2)
-        expected_ret   = round((exit_stock - entry_price) / entry_price * 100 - ROUND_TRIP_COST, 2)
+        expected_ret = round(
+            (exit_stock - entry_price) / entry_price * 100 - ROUND_TRIP_COST, 2
+        )
         expected_bench = round((exit_bench - bench_entry) / bench_entry * 100, 2)
         expected_alpha = round(expected_ret - expected_bench, 2)
-        assert abs(fs.fwd_return_20d - expected_ret)   < 0.05
-        assert abs(fs.alpha_20d      - expected_alpha) < 0.05
+        assert abs(fs.fwd_return_20d - expected_ret) < 0.05
+        assert abs(fs.alpha_20d - expected_alpha) < 0.05
         s.close()
 
     def test_legacy_signal_uses_close_path(self, tmp_path):
@@ -401,10 +438,12 @@ class TestComputeSignalOutcomes:
         s = _session(engine)
 
         trade_date = date(2026, 9, 1)
-        sig_close  = 100.0
+        sig_close = 100.0
 
         fs = self._make_mature_signal(
-            s, trade_date, "2330",
+            s,
+            trade_date,
+            "2330",
             execution_price_type="SIGNAL_CLOSE_LEGACY",
             exec_price=None,
             exec_date=None,
@@ -418,18 +457,19 @@ class TestComputeSignalOutcomes:
         s.commit()
 
         as_of = trade_date + timedelta(days=40)
-        updated = compute_signal_outcomes(s, as_of)
+        updated = compute_signal_outcomes(s, as_of)  # noqa: F841
         # Legacy path should produce a result
         s.refresh(fs)
         # alpha may or may not be set depending on 0050 alignment; just verify no crash
         # and that execution_price_type wasn't modified
-        assert fs.execution_price_type == "SIGNAL_CLOSE_LEGACY", (
-            "execution_price_type must not be changed during outcome computation"
-        )
+        assert (
+            fs.execution_price_type == "SIGNAL_CLOSE_LEGACY"
+        ), "execution_price_type must not be changed during outcome computation"
         s.close()
 
 
 # ── FS-7 ─────────────────────────────────────────────────────────────────────
+
 
 class TestForwardEvidenceLegacyIsolation:
 
@@ -443,25 +483,27 @@ class TestForwardEvidenceLegacyIsolation:
 
         # NULL type signal — same setup_type & regime as the query params
         s.merge(Stock(stock_id="2330", name="2330"))
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            setup_type="breakout",
-            trade_signal="buy",
-            market_regime_at_signal="bull",
-            execution_price_type=None,   # legacy / pre-migration
-            alpha_20d=15.0,              # has alpha but must NOT be included
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                setup_type="breakout",
+                trade_signal="buy",
+                market_regime_at_signal="bull",
+                execution_price_type=None,  # legacy / pre-migration
+                alpha_20d=15.0,  # has alpha but must NOT be included
+            )
+        )
         s.commit()
 
         result = forward_evidence("breakout", "bull", engine=engine)
-        assert result.get("n_legacy", -1) >= 1, (
-            "NULL execution_price_type signal must be counted in n_legacy"
-        )
+        assert (
+            result.get("n_legacy", -1) >= 1
+        ), "NULL execution_price_type signal must be counted in n_legacy"
         # No NEXT_OPEN signals with execution_price → matured_20d = 0
-        assert result.get("matured_20d", 0) == 0, (
-            "NULL type signal must NOT contribute to matured_20d alpha stats"
-        )
+        assert (
+            result.get("matured_20d", 0) == 0
+        ), "NULL type signal must NOT contribute to matured_20d alpha stats"
 
     def test_signal_close_legacy_excluded_from_alpha(self, tmp_path):
         """SIGNAL_CLOSE_LEGACY は n_legacy にカウントされ、alpha stats に入らない。"""
@@ -472,22 +514,24 @@ class TestForwardEvidenceLegacyIsolation:
         s = _session(engine)
 
         s.merge(Stock(stock_id="2330", name="2330"))
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            setup_type="breakout",
-            trade_signal="buy",
-            market_regime_at_signal="bull",
-            execution_price_type="SIGNAL_CLOSE_LEGACY",
-            alpha_20d=20.0,
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                setup_type="breakout",
+                trade_signal="buy",
+                market_regime_at_signal="bull",
+                execution_price_type="SIGNAL_CLOSE_LEGACY",
+                alpha_20d=20.0,
+            )
+        )
         s.commit()
 
         result = forward_evidence("breakout", "bull", engine=engine)
         assert result.get("n_legacy", 0) >= 1, "SIGNAL_CLOSE_LEGACY must be in n_legacy"
-        assert result.get("matured_20d", 0) == 0, (
-            "SIGNAL_CLOSE_LEGACY must NOT contribute to alpha stats"
-        )
+        assert (
+            result.get("matured_20d", 0) == 0
+        ), "SIGNAL_CLOSE_LEGACY must NOT contribute to alpha stats"
 
     def test_next_open_with_outcomes_enters_evidence(self, tmp_path):
         """NEXT_OPEN + outcomes_computed_at 有值 + alpha_20d 有値 → forward_evidence alpha に入る。"""
@@ -499,39 +543,44 @@ class TestForwardEvidenceLegacyIsolation:
 
         s.merge(Stock(stock_id="2330", name="2330"))
         trade_date = date(2026, 10, 13)
-        exec_date  = date(2026, 10, 14)
+        exec_date = date(2026, 10, 14)
 
-        s.add(ForwardSignal(
-            trade_date=trade_date,
-            stock_id="2330",
-            setup_type="breakout",
-            trade_signal="buy",
-            market_regime_at_signal="bull",
-            execution_price_type="NEXT_OPEN",
-            execution_date=exec_date,
-            execution_price=100.0,
-            alpha_20d=5.0,
-            outcomes_computed_at=datetime(2026, 11, 5),
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=trade_date,
+                stock_id="2330",
+                setup_type="breakout",
+                trade_signal="buy",
+                market_regime_at_signal="bull",
+                execution_price_type="NEXT_OPEN",
+                execution_date=exec_date,
+                execution_price=100.0,
+                alpha_20d=5.0,
+                outcomes_computed_at=datetime(2026, 11, 5),
+            )
+        )
         # 0050 trading calendar for dedup
         for i in range(30):
-            s.add(DailyPrice(
-                stock_id="0050",
-                date=exec_date + timedelta(days=i),
-                close=120.0 + i,
-            ))
+            s.add(
+                DailyPrice(
+                    stock_id="0050",
+                    date=exec_date + timedelta(days=i),
+                    close=120.0 + i,
+                )
+            )
         s.commit()
 
         result = forward_evidence("breakout", "bull", engine=engine)
-        assert result.get("matured_20d", 0) >= 1, (
-            "NEXT_OPEN signal with outcomes should appear in matured_20d"
-        )
-        assert result.get("alpha_20d", {}).get("mean") is not None, (
-            "alpha_20d.mean must be computed"
-        )
+        assert (
+            result.get("matured_20d", 0) >= 1
+        ), "NEXT_OPEN signal with outcomes should appear in matured_20d"
+        assert (
+            result.get("alpha_20d", {}).get("mean") is not None
+        ), "alpha_20d.mean must be computed"
 
 
 # ── FS-8 ─────────────────────────────────────────────────────────────────────
+
 
 class TestFoeV1SkipsNonNextOpen:
 
@@ -546,51 +595,57 @@ class TestFoeV1SkipsNonNextOpen:
         s.merge(Stock(stock_id="2330", name="2330"))
 
         # NULL type signal
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 9),
-            stock_id="2330",
-            trade_signal="buy",
-            setup_type="breakout",
-            execution_price_type=None,
-            execution_price=None,
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 9),
+                stock_id="2330",
+                trade_signal="buy",
+                setup_type="breakout",
+                execution_price_type=None,
+                execution_price=None,
+            )
+        )
         # SIGNAL_CLOSE_LEGACY signal
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 12),
-            stock_id="2330",
-            trade_signal="buy",
-            setup_type="breakout",
-            execution_price_type="SIGNAL_CLOSE_LEGACY",
-            execution_price=None,
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 12),
+                stock_id="2330",
+                trade_signal="buy",
+                setup_type="breakout",
+                execution_price_type="SIGNAL_CLOSE_LEGACY",
+                execution_price=None,
+            )
+        )
         s.commit()
 
         n = compute_foe_outcomes(s, date(2026, 10, 29))
-        assert n == 0, (
-            "compute_foe_outcomes must return 0 when no NEXT_OPEN+exec_price signals exist"
-        )
+        assert (
+            n == 0
+        ), "compute_foe_outcomes must return 0 when no NEXT_OPEN+exec_price signals exist"
         count = s.query(ForwardOutcomeEvaluation).count()
         assert count == 0, "No ForwardOutcomeEvaluation rows should be created"
         s.close()
 
     def test_foe_also_skips_next_open_without_exec_price(self, tmp_path):
         """compute_foe_outcomes は execution_price が NULL の NEXT_OPEN シグナルもスキップする。"""
-        from src.database import ForwardOutcomeEvaluation, ForwardSignal, Stock
+        from src.database import ForwardSignal, Stock
         from src.services.outcome_service import compute_foe_outcomes
 
         engine = _make_engine(tmp_path)
         s = _session(engine)
 
         s.merge(Stock(stock_id="2330", name="2330"))
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 13),
-            stock_id="2330",
-            trade_signal="buy",
-            setup_type="breakout",
-            execution_price_type="NEXT_OPEN",
-            execution_price=None,    # not yet filled
-            execution_date=None,
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 13),
+                stock_id="2330",
+                trade_signal="buy",
+                setup_type="breakout",
+                execution_price_type="NEXT_OPEN",
+                execution_price=None,  # not yet filled
+                execution_date=None,
+            )
+        )
         s.commit()
 
         n = compute_foe_outcomes(s, date(2026, 10, 29))
@@ -600,42 +655,48 @@ class TestFoeV1SkipsNonNextOpen:
 
 # ── FS-10: Full pipeline smoke ────────────────────────────────────────────────
 
+
 class TestFullPipelineSmoke:
 
     def test_write_fill_compute_evidence(self, tmp_path):
         """FS-10: write → fill → compute_signal_outcomes → forward_evidence の完全パス。"""
         from datetime import timedelta
+
         from src.database import DailyPrice, ForwardSignal, Stock
+        from src.services.evidence_service import forward_evidence
         from src.services.research_backtest_service import (
             compute_signal_outcomes,
             fill_execution_prices,
             write_forward_signals,
         )
-        from src.services.evidence_service import forward_evidence
 
         engine = _make_engine(tmp_path)
         s = _session(engine)
 
-        trade_date = _TRADING_DAY          # 2026-10-13
-        exec_date  = date(2026, 10, 14)    # next trading day
+        trade_date = _TRADING_DAY  # 2026-10-13
+        exec_date = date(2026, 10, 14)  # next trading day
 
         # Set up DailyPrice for gates and later computation
         s.merge(Stock(stock_id="0050", name="0050"))
         s.merge(Stock(stock_id="2330", name="2330"))
         s.add(DailyPrice(stock_id="0050", date=trade_date, close=120.0))
-        s.add(DailyPrice(stock_id="0050", date=exec_date,  close=121.0, open=120.5))
+        s.add(DailyPrice(stock_id="0050", date=exec_date, close=121.0, open=120.5))
 
         entry_p = 100.0
         s.add(DailyPrice(stock_id="2330", date=trade_date, close=entry_p))
-        s.add(DailyPrice(stock_id="2330", date=exec_date,  open=entry_p, close=entry_p))
+        s.add(DailyPrice(stock_id="2330", date=exec_date, open=entry_p, close=entry_p))
 
         # Add 25 trading days of price data after exec_date for compute_signal_outcomes
         for i in range(1, 26):
             d = exec_date + timedelta(days=i)
-            stock_close = entry_p * (1 + 0.005 * i)    # ~0.5% per day
-            bench_close = 120.0  * (1 + 0.002 * i)
-            s.add(DailyPrice(stock_id="2330", date=d, close=stock_close, open=stock_close))
-            s.add(DailyPrice(stock_id="0050",  date=d, close=bench_close, open=bench_close))
+            stock_close = entry_p * (1 + 0.005 * i)  # ~0.5% per day
+            bench_close = 120.0 * (1 + 0.002 * i)
+            s.add(
+                DailyPrice(stock_id="2330", date=d, close=stock_close, open=stock_close)
+            )
+            s.add(
+                DailyPrice(stock_id="0050", date=d, close=bench_close, open=bench_close)
+            )
         s.commit()
 
         # Step 1: write
@@ -643,17 +704,19 @@ class TestFullPipelineSmoke:
             inserted = write_forward_signals(s, trade_date, [_make_ar()])
         assert inserted == 1, f"Step 1: expected 1 signal, got {inserted}"
 
-        fs = s.query(ForwardSignal).filter_by(
-            trade_date=trade_date, stock_id="2330"
-        ).one()
+        fs = (
+            s.query(ForwardSignal)
+            .filter_by(trade_date=trade_date, stock_id="2330")
+            .one()
+        )
         assert fs.execution_price_type == "NEXT_OPEN"
-        assert fs.execution_price is None   # not yet filled
+        assert fs.execution_price is None  # not yet filled
 
         # Step 2: fill (pipeline runs day after trade_date)
         filled = fill_execution_prices(s, exec_date + timedelta(days=1))
         assert filled == 1, f"Step 2: expected 1 fill, got {filled}"
         s.refresh(fs)
-        assert fs.execution_date  == exec_date
+        assert fs.execution_date == exec_date
         assert fs.execution_price == entry_p
 
         # Step 3: compute outcomes (need trade_date + 30 days to be mature)
@@ -676,34 +739,39 @@ class TestFullPipelineSmoke:
         # Because regime filter: the signal was written with whatever regime was computed
         # In this test, 0050 history is only 1 day, so regime = "unknown" — may not match "bull"
         # Just verify it doesn't crash and n_legacy = 0 (no NULL type signals)
-        assert result.get("n_legacy", 0) == 0, (
-            "Should have no legacy signals (all are NEXT_OPEN type)"
-        )
+        assert (
+            result.get("n_legacy", 0) == 0
+        ), "Should have no legacy signals (all are NEXT_OPEN type)"
         s.close()
 
 
 # ── FS-11: foe_v1 horizon immutability ───────────────────────────────────────
+
 
 class TestFoeV1HorizonImmutability:
 
     def test_horizon_matured_at_not_overwritten(self, tmp_path):
         """FS-11: ForwardOutcomeEvaluation.horizon_20d_matured_at が一度セットされると上書きされない。"""
         from src.database import ForwardOutcomeEvaluation, ForwardSignal, Stock
-        from src.services.outcome_service import _fill_horizons_guard, compute_foe_outcomes
+        from src.services.outcome_service import (
+            _fill_horizons_guard,
+        )
 
         engine = _make_engine(tmp_path)
         s = _session(engine)
 
         s.merge(Stock(stock_id="2330", name="2330"))
-        s.add(ForwardSignal(
-            trade_date=date(2026, 10, 13),
-            stock_id="2330",
-            trade_signal="buy",
-            setup_type="breakout",
-            execution_price_type="NEXT_OPEN",
-            execution_price=100.0,
-            execution_date=date(2026, 10, 14),
-        ))
+        s.add(
+            ForwardSignal(
+                trade_date=date(2026, 10, 13),
+                stock_id="2330",
+                trade_signal="buy",
+                setup_type="breakout",
+                execution_price_type="NEXT_OPEN",
+                execution_price=100.0,
+                execution_date=date(2026, 10, 14),
+            )
+        )
         s.commit()
 
         # Directly create a ForwardOutcomeEvaluation with horizon already matured
@@ -718,7 +786,7 @@ class TestFoeV1HorizonImmutability:
             entry_date=date(2026, 10, 14),
             entry_price=100.0,
             entry_price_type="BASELINE_NEXT_OPEN",
-            horizon_20d_matured_at=frozen_time,   # already frozen
+            horizon_20d_matured_at=frozen_time,  # already frozen
             return_20d=5.0,
             alpha_20d=3.0,
         )
@@ -726,16 +794,16 @@ class TestFoeV1HorizonImmutability:
         s.commit()
 
         # Guard must prevent re-computation
-        assert _fill_horizons_guard(foe, "horizon_20d_matured_at") is True, (
-            "_fill_horizons_guard must return True when matured_at is already set"
-        )
+        assert (
+            _fill_horizons_guard(foe, "horizon_20d_matured_at") is True
+        ), "_fill_horizons_guard must return True when matured_at is already set"
 
         # Re-run compute_foe_outcomes — the frozen horizon must not be touched
         # (Full run needs price data; test just verifies the guard logic via the function)
         s.refresh(foe)
-        assert foe.horizon_20d_matured_at == frozen_time, (
-            "horizon_20d_matured_at must not be modified once set"
-        )
-        assert foe.return_20d  == 5.0, "return_20d must not be modified once set"
-        assert foe.alpha_20d   == 3.0, "alpha_20d must not be modified once set"
+        assert (
+            foe.horizon_20d_matured_at == frozen_time
+        ), "horizon_20d_matured_at must not be modified once set"
+        assert foe.return_20d == 5.0, "return_20d must not be modified once set"
+        assert foe.alpha_20d == 3.0, "alpha_20d must not be modified once set"
         s.close()

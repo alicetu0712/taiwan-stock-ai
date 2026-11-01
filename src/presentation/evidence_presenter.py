@@ -4,6 +4,7 @@ evidence_presenter.py — Translation layer for Evidence Dashboard display.
 Sample-size classification thresholds are pre-registered in foe_v1 §46.
 DO NOT modify these thresholds without upgrading the protocol to foe_v2.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,10 +15,10 @@ class SampleStrength:
     """Sample-size classification per foe_v1 §46."""
 
     n: int
-    label: str           # "不足" / "初步觀察" / "有一定參考" / "可評估穩定性"
-    formatted: str       # "N=15（有一定參考）"
+    label: str  # "不足" / "初步觀察" / "有一定參考" / "可評估穩定性"
+    formatted: str  # "N=15（有一定參考）"
     is_insufficient: bool  # n < 10 — show st.warning
-    is_initial: bool       # 10 <= n < 30 — show st.info
+    is_initial: bool  # 10 <= n < 30 — show st.info
 
 
 class EvidencePresenter:
@@ -63,21 +64,21 @@ class EvidencePresenter:
         ):
             return None
 
-        diff       = green_g["20D Alpha (avg %)"] - red_g["20D Alpha (avg %)"]
+        diff = green_g["20D Alpha (avg %)"] - red_g["20D Alpha (avg %)"]
         diff_color = "#00897b" if diff >= 0 else "#e53935"
-        ss_green   = self.sample_strength(green_g["N"])
-        ss_red     = self.sample_strength(red_g["N"])
+        ss_green = self.sample_strength(green_g["N"])
+        ss_red = self.sample_strength(red_g["N"])
 
         return (
             f'<div style="padding:8px 12px;background:#f8f9fa;border-radius:6px;'
             f'font-size:0.82rem;color:#555;margin-bottom:8px">'
-            f'GREEN 組平均 Alpha '
+            f"GREEN 組平均 Alpha "
             f'<strong style="color:#00897b">{green_g["20D Alpha (avg %)"]:+.2f}%</strong>'
-            f'（{ss_green.formatted}）　RED 組 '
+            f"（{ss_green.formatted}）　RED 組 "
             f'<strong style="color:#e53935">{red_g["20D Alpha (avg %)"]:+.2f}%</strong>'
-            f'（{ss_red.formatted}）　差距 '
+            f"（{ss_red.formatted}）　差距 "
             f'<strong style="color:{diff_color}">{diff:+.2f}%</strong>'
-            f'</div>'
+            f"</div>"
         )
 
     @staticmethod

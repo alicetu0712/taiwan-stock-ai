@@ -17,27 +17,28 @@ candidate_pool_service.py — 進場候選追蹤池
 
 import logging
 from datetime import date, datetime
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 CANDIDATE_POOL_VERSION = "v1.0"
 
 # 有明確技術型態的 setup_type（入池條件之一）
-CANDIDATE_ELIGIBLE_SETUPS = frozenset({
-    "breakout",
-    "near_breakout",
-    "pullback_buy",
-    "pullback_hold",
-    "trending",
-})
+CANDIDATE_ELIGIBLE_SETUPS = frozenset(
+    {
+        "breakout",
+        "near_breakout",
+        "pullback_buy",
+        "pullback_hold",
+        "trending",
+    }
+)
 
 # 技術型態已失效（觸發即時退出）
 THESIS_FAILED_SETUPS = frozenset({"breakdown", "failed_breakout"})
 
-CANDIDATE_MIN_SCORE = 55.0       # 品質底線（與 select_opportunities 對齊）
-OVERDUE_TRADING_DAYS = 10        # 第 10 交易日起標記逾期
-MAX_WATCH_TRADING_DAYS = 20      # 第 20 交易日強制退出
+CANDIDATE_MIN_SCORE = 55.0  # 品質底線（與 select_opportunities 對齊）
+OVERDUE_TRADING_DAYS = 10  # 第 10 交易日起標記逾期
+MAX_WATCH_TRADING_DAYS = 20  # 第 20 交易日強制退出
 
 # ── 入池 / 狀態判斷 ──────────────────────────────────────────────────────────
 
@@ -91,17 +92,19 @@ def _get_entry_reason(ar, rec) -> str:
     """生成入池原因（白話，沿用 entry_quality_label）。"""
     from src.engines.decision import entry_quality_label
 
-    label = entry_quality_label({
-        "trade_signal": ar.trade_signal or "wait",
-        "setup_type": ar.setup_type or "none",
-        "ma20_gap": ar.ma20_gap or 0.0,
-    })
+    label = entry_quality_label(
+        {
+            "trade_signal": ar.trade_signal or "wait",
+            "setup_type": ar.setup_type or "none",
+            "ma20_gap": ar.ma20_gap or 0.0,
+        }
+    )
     setup_desc = {
-        "breakout":     "突破型態確立",
+        "breakout": "突破型態確立",
         "near_breakout": "接近關鍵突破位置",
         "pullback_buy": "回測至支撐，型態健康",
         "pullback_hold": "上升趨勢中的健康回測",
-        "trending":     "多頭趨勢延伸",
+        "trending": "多頭趨勢延伸",
     }
     setup_text = setup_desc.get(ar.setup_type or "none", "技術型態待觀察")
     score_text = f"綜合 {ar.total_score:.0f} 分" if ar.total_score else ""
@@ -128,12 +131,14 @@ def _get_missing_conditions(ar, rec) -> str:
         return f"現價偏離 MA20 達 {gap:.1f}%，需回測至合理進場區{range_str}後再考慮進場"
 
     # 使用 decision.tomorrow_triggers 生成觀察重點
-    triggers = tomorrow_triggers({
-        "setup_type": st,
-        "trade_signal": ar.trade_signal or "wait",
-        "vol_ratio": (rec.vol_ratio if rec else None) or ar.volume_ratio,
-        "ma20_gap": (rec.ma20_gap if rec else None) or ar.ma20_gap or 0.0,
-    })
+    triggers = tomorrow_triggers(
+        {
+            "setup_type": st,
+            "trade_signal": ar.trade_signal or "wait",
+            "vol_ratio": (rec.vol_ratio if rec else None) or ar.volume_ratio,
+            "ma20_gap": (rec.ma20_gap if rec else None) or ar.ma20_gap or 0.0,
+        }
+    )
     if triggers:
         # 清理 emoji，最多取前 2 條
         cleaned = []
@@ -145,11 +150,11 @@ def _get_missing_conditions(ar, rec) -> str:
 
     # fallback
     static = {
-        "breakout":     "等待量能確認，量比需 ≥ 1.0x 且收在突破位以上",
+        "breakout": "等待量能確認，量比需 ≥ 1.0x 且收在突破位以上",
         "near_breakout": "等待放量突破確認，收盤站上近20日高點",
         "pullback_buy": "等待支撐守穩確認，量縮止跌後可考慮進場",
         "pullback_hold": "等待 MA20 支撐守穩確認",
-        "trending":     "趨勢延伸中，等待型態確認或下一個回測進場點",
+        "trending": "趨勢延伸中，等待型態確認或下一個回測進場點",
     }
     return static.get(st, "持續觀察各項技術指標")
 
@@ -174,7 +179,9 @@ def _build_change_notes(cand, ar, rec) -> str:
     old_score = cand.latest_total_score or 0.0
     if abs(new_score - old_score) >= 5.0:
         sign = "+" if new_score >= old_score else ""
-        notes.append(f"總分 {old_score:.0f} → {new_score:.0f}（{sign}{new_score - old_score:.0f}）")
+        notes.append(
+            f"總分 {old_score:.0f} → {new_score:.0f}（{sign}{new_score - old_score:.0f}）"
+        )
 
     return "，".join(notes) if notes else "各項指標穩定，無重大變化"
 
@@ -188,7 +195,9 @@ def _count_trading_days(session, start_date: date, end_date: date) -> int:
     使用 TaiwanTradingCalendar 而非依賴 0050 DailyPrice 資料存在性。
     """
     from datetime import timedelta
+
     from src.core.trading_calendar import TaiwanTradingCalendar
+
     cal = TaiwanTradingCalendar()
     count = 0
     d = start_date + timedelta(days=1)
@@ -207,7 +216,8 @@ def _find_triggered_buy(session, stock_id: str, first_seen_date: date):
     檢查自候選入池日起是否有正式 ForwardSignal BUY。
     僅查詢當前 MODEL_VERSION，避免跨版本污染。
     """
-    from src.database import ForwardSignal, MODEL_VERSION
+    from src.database import MODEL_VERSION, ForwardSignal
+
     return (
         session.query(ForwardSignal)
         .filter(
@@ -238,11 +248,11 @@ def update_candidate_pool(session, check_date: date) -> dict:
     Raises: RuntimeError — 任何 DB 寫入失敗都拋出，不靜默忽略。
     """
     from src.database import (
+        MODEL_VERSION,
         AnalysisResult,
         CandidatePool,
         CandidatePoolHistory,
         ForwardSignal,
-        MODEL_VERSION,
         Recommendation,
     )
 
@@ -286,7 +296,9 @@ def update_candidate_pool(session, check_date: date) -> dict:
     active_candidates = (
         session.query(CandidatePool)
         .filter(
-            CandidatePool.status.in_(["watching", "near_entry", "wait_pullback", "overdue"]),
+            CandidatePool.status.in_(
+                ["watching", "near_entry", "wait_pullback", "overdue"]
+            ),
             CandidatePool.pool_version == CANDIDATE_POOL_VERSION,
             CandidatePool.model_version == MODEL_VERSION,
         )
@@ -348,7 +360,10 @@ def update_candidate_pool(session, check_date: date) -> dict:
                 change_notes = _build_change_notes(cand, ar, rec)
                 new_status = _determine_status(ar, rec)
                 # watching → overdue（near_entry / wait_pullback 不降級：已有明確進場方向）
-                if days >= OVERDUE_TRADING_DAYS and new_status not in ("near_entry", "wait_pullback"):
+                if days >= OVERDUE_TRADING_DAYS and new_status not in (
+                    "near_entry",
+                    "wait_pullback",
+                ):
                     new_status = "overdue"
                     if old_status != "overdue":
                         change_notes += f"（第 {days} 交易日，標記觀察逾期）"
@@ -370,24 +385,28 @@ def update_candidate_pool(session, check_date: date) -> dict:
         cand.last_checked_date = check_date
         cand.updated_at = datetime.utcnow()
 
-        session.add(CandidatePoolHistory(
-            candidate_id=cand.id,
-            check_date=check_date,
-            status=cand.status,
-            setup_type=(ar.setup_type if ar else cand.latest_setup_type),
-            total_score=(ar.total_score if ar else cand.latest_total_score),
-            decision_code=(rec.decision_code if rec else cand.latest_decision_code),
-            trade_signal=(ar.trade_signal if ar else cand.latest_trade_signal),
-            missing_conditions=cand.current_missing_conditions,
-            change_notes=change_notes,
-        ))
+        session.add(
+            CandidatePoolHistory(
+                candidate_id=cand.id,
+                check_date=check_date,
+                status=cand.status,
+                setup_type=(ar.setup_type if ar else cand.latest_setup_type),
+                total_score=(ar.total_score if ar else cand.latest_total_score),
+                decision_code=(rec.decision_code if rec else cand.latest_decision_code),
+                trade_signal=(ar.trade_signal if ar else cand.latest_trade_signal),
+                missing_conditions=cand.current_missing_conditions,
+                change_notes=change_notes,
+            )
+        )
 
     # ── Step 2: 新增今日符合條件的候選 ──────────────────────────
     active_stock_ids = {
         c.stock_id
         for c in session.query(CandidatePool.stock_id)
         .filter(
-            CandidatePool.status.in_(["watching", "near_entry", "wait_pullback", "overdue"]),
+            CandidatePool.status.in_(
+                ["watching", "near_entry", "wait_pullback", "overdue"]
+            ),
             CandidatePool.pool_version == CANDIDATE_POOL_VERSION,
             CandidatePool.model_version == MODEL_VERSION,
         )
@@ -449,17 +468,19 @@ def update_candidate_pool(session, check_date: date) -> dict:
         session.add(cand)
         session.flush()  # 取得 id
 
-        session.add(CandidatePoolHistory(
-            candidate_id=cand.id,
-            check_date=check_date,
-            status=status,
-            setup_type=ar.setup_type,
-            total_score=ar.total_score,
-            decision_code=(rec.decision_code if rec else None),
-            trade_signal=ar.trade_signal,
-            missing_conditions=missing,
-            change_notes="新進候選追蹤池",
-        ))
+        session.add(
+            CandidatePoolHistory(
+                candidate_id=cand.id,
+                check_date=check_date,
+                status=status,
+                setup_type=ar.setup_type,
+                total_score=ar.total_score,
+                decision_code=(rec.decision_code if rec else None),
+                trade_signal=ar.trade_signal,
+                missing_conditions=missing,
+                change_notes="新進候選追蹤池",
+            )
+        )
         stats["new_entries"] += 1
 
     try:
@@ -483,6 +504,7 @@ def update_candidate_pool(session, check_date: date) -> dict:
 def _resolve_stock_name(session, stock_id: str) -> str:
     """從歷史 Recommendation 取得股票名稱，fallback 為 stock_id。"""
     from src.database import Recommendation
+
     row = (
         session.query(Recommendation.stock_name)
         .filter_by(stock_id=stock_id)
@@ -497,12 +519,14 @@ def _resolve_stock_name(session, stock_id: str) -> str:
 
 def get_active_candidates(session, pool_version: str = CANDIDATE_POOL_VERSION) -> list:
     """返回所有 active 候選（watching / near_entry / wait_pullback / overdue）。"""
-    from src.database import CandidatePool, MODEL_VERSION
+    from src.database import MODEL_VERSION, CandidatePool
 
     rows = (
         session.query(CandidatePool)
         .filter(
-            CandidatePool.status.in_(["watching", "near_entry", "wait_pullback", "overdue"]),
+            CandidatePool.status.in_(
+                ["watching", "near_entry", "wait_pullback", "overdue"]
+            ),
             CandidatePool.pool_version == pool_version,
             CandidatePool.model_version == MODEL_VERSION,
         )
@@ -515,10 +539,13 @@ def get_active_candidates(session, pool_version: str = CANDIDATE_POOL_VERSION) -
     return rows
 
 
-def get_recent_exits(session, days: int = 7, pool_version: str = CANDIDATE_POOL_VERSION) -> list:
+def get_recent_exits(
+    session, days: int = 7, pool_version: str = CANDIDATE_POOL_VERSION
+) -> list:
     """返回最近 N 天退出的候選（triggered_buy 或 exited）。"""
     from datetime import timedelta
-    from src.database import CandidatePool, MODEL_VERSION
+
+    from src.database import MODEL_VERSION, CandidatePool
 
     since = datetime.utcnow().date() - timedelta(days=days)
     return (
@@ -537,7 +564,7 @@ def get_recent_exits(session, days: int = 7, pool_version: str = CANDIDATE_POOL_
 
 def get_pool_stats(session, pool_version: str = CANDIDATE_POOL_VERSION) -> dict:
     """返回候選池累計統計。樣本不足時標注「資料累積中」。"""
-    from src.database import CandidatePool, MODEL_VERSION
+    from src.database import MODEL_VERSION, CandidatePool
 
     all_rows = (
         session.query(CandidatePool)
@@ -549,13 +576,20 @@ def get_pool_stats(session, pool_version: str = CANDIDATE_POOL_VERSION) -> dict:
     )
 
     n_total = len(all_rows)
-    n_active = sum(1 for r in all_rows if r.status in ("watching", "near_entry", "wait_pullback", "overdue"))
+    n_active = sum(
+        1
+        for r in all_rows
+        if r.status in ("watching", "near_entry", "wait_pullback", "overdue")
+    )
     n_buy = sum(1 for r in all_rows if r.status == "triggered_buy")
     n_exited = sum(1 for r in all_rows if r.status == "exited")
 
     # 平均等待交易日數（僅計算已觸發 BUY 的）
-    buy_days = [r.trading_days_watched for r in all_rows
-                if r.status == "triggered_buy" and r.trading_days_watched]
+    buy_days = [
+        r.trading_days_watched
+        for r in all_rows
+        if r.status == "triggered_buy" and r.trading_days_watched
+    ]
     avg_days = round(sum(buy_days) / len(buy_days), 1) if buy_days else None
 
     # 轉換率：分母 = 已完成週期（buy + exited），不含仍在觀察的
@@ -576,6 +610,7 @@ def get_pool_stats(session, pool_version: str = CANDIDATE_POOL_VERSION) -> dict:
 def get_today_history(session, candidate_id: int, check_date: date):
     """取得某候選今日歷史快照（顯示「今日變化」用）。"""
     from src.database import CandidatePoolHistory
+
     return (
         session.query(CandidatePoolHistory)
         .filter_by(candidate_id=candidate_id, check_date=check_date)

@@ -32,7 +32,7 @@ def _revenue_published_by(year: int, month: int) -> date:
     Example: May 2025 revenue → available from 2025-06-10.
     """
     pub_month = month + 1 if month < 12 else 1
-    pub_year  = year if month < 12 else year + 1
+    pub_year = year if month < 12 else year + 1
     return date(pub_year, pub_month, 10)
 
 
@@ -302,7 +302,8 @@ def build_financial_summary(
             #      April 2025 (published ~May 10) IS available.
             rev_df = rev_df[
                 rev_df.apply(
-                    lambda r: cutoff >= _revenue_published_by(int(r["year"]), int(r["month"])),
+                    lambda r: cutoff
+                    >= _revenue_published_by(int(r["year"]), int(r["month"])),
                     axis=1,
                 )
             ]

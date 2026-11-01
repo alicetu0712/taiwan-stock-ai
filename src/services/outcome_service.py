@@ -36,7 +36,7 @@ def compute_foe_outcomes(session, as_of_date: date) -> int:
     Processes all BUY ForwardSignals with execution_price filled.
     Returns number of rows created or updated.
     """
-    from src.database import ForwardSignal, MODEL_VERSION
+    from src.database import MODEL_VERSION, ForwardSignal
 
     # Load signals eligible for foe_v1 evaluation — scoped to current model version
     signals = (

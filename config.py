@@ -38,11 +38,13 @@ FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 #   本機連 Neon   → .env 加  USE_NEON=true
 #   本機用 SQLite → .env 移除 USE_NEON（或設 USE_NEON=false）
 _raw_db_url = os.getenv("DATABASE_URL", "")
-_neon_url    = os.getenv("NEON_URL", "")
-_use_neon    = os.getenv("USE_NEON", "").strip().lower() in ("1", "true", "yes")
+_neon_url = os.getenv("NEON_URL", "")
+_use_neon = os.getenv("USE_NEON", "").strip().lower() in ("1", "true", "yes")
+
 
 def _normalize_pg_url(url: str) -> str:
     return url.replace("postgres://", "postgresql://", 1)
+
 
 if _use_neon and _neon_url:
     DATABASE_URL = _normalize_pg_url(_neon_url)
@@ -106,11 +108,11 @@ TA_CONFIG = {
 # price_trend（45%）+ momentum（15%）= 60% 純技術面
 # quality（20%）：基本面為次要評分因子＋品質控制（第二大成分，非純過濾器）
 SCORE_WEIGHTS = {
-    "price_trend":  0.45,  # PriceTrendAnalyzer：MA結構/斜率/乖離/型態/量能
-    "timing":       0.15,  # TechnicalAnalyzer.momentum_score：RSI/MACD/KD
-    "behavior":     0.15,  # MarketBehaviorAnalyzer：籌碼/法人
-    "quality":      0.20,  # FundamentalAnalyzer：基本面評分（次要評分軸）
-    "risk":         0.05,  # RiskAnalyzer：風險評分（正向，高分代表低風險）
+    "price_trend": 0.45,  # PriceTrendAnalyzer：MA結構/斜率/乖離/型態/量能
+    "timing": 0.15,  # TechnicalAnalyzer.momentum_score：RSI/MACD/KD
+    "behavior": 0.15,  # MarketBehaviorAnalyzer：籌碼/法人
+    "quality": 0.20,  # FundamentalAnalyzer：基本面評分（次要評分軸）
+    "risk": 0.05,  # RiskAnalyzer：風險評分（正向，高分代表低風險）
     "intelligence": 0.00,  # 已移除直接計分，改為警示/說明用
 }
 
@@ -246,8 +248,8 @@ EXCLUDE_PATTERNS = [
 #              在確認實際宇宙大小後再調整，不要盲目設定。
 #              建議啟用範例：min_ratio = 0.80（表示當日須有 80% 的標的有收盤價）。
 FORWARD_MARKET_COVERAGE = {
-    "min_count": 200,    # 絕對下限（任何時候都要過）
-    "min_ratio": None,   # 比例下限（None = 停用；確認宇宙大小後啟用）
+    "min_count": 200,  # 絕對下限（任何時候都要過）
+    "min_ratio": None,  # 比例下限（None = 停用；確認宇宙大小後啟用）
 }
 
 # DataValidator 用：收盤資料至少需有幾檔才視為有效（排除 API 回傳殘缺資料）
@@ -257,15 +259,15 @@ DATA_VALIDATOR_MIN_STOCKS = 100
 # ENTRY_QUALITY: entry quality check for UI display only.
 # chase_gap_pct is NOT a validated signal threshold — it is a presentation heuristic.
 ENTRY_QUALITY = {
-    "chase_gap_pct": 5.0,   # ma20_gap > 5% → show "WAIT FOR PULLBACK" warning
+    "chase_gap_pct": 5.0,  # ma20_gap > 5% → show "WAIT FOR PULLBACK" warning
 }
 
 # ── Position Sizing 預設值（個人風控設定）────────────────────────────────────
 # 個人資金管理參數，不是策略參數，不影響選股邏輯。
 # 可在「設定」頁面覆蓋，暫存於 st.session_state。
 POSITION_SIZING = {
-    "capital_ntd":    1_000_000,  # 總投資資金（新台幣）
-    "max_risk_pct":   1.0,        # 單筆最大風險（佔資金 %）
-    "max_single_pct": 20.0,       # 單一股票最大曝險上限（佔資金 %）
-    "lot_size":       1000,       # 台股每張股數
+    "capital_ntd": 1_000_000,  # 總投資資金（新台幣）
+    "max_risk_pct": 1.0,  # 單筆最大風險（佔資金 %）
+    "max_single_pct": 20.0,  # 單一股票最大曝險上限（佔資金 %）
+    "lot_size": 1000,  # 台股每張股數
 }

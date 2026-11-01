@@ -111,8 +111,8 @@ def create_pending_position(
         stock_name=stock_name,
         signal_date=signal_date,
         expected_execution_date=expected_execution_date,
-        entry_price=None,        # 未執行，不得填收盤價
-        date_entered=None,       # 未執行
+        entry_price=None,  # 未執行，不得填收盤價
+        date_entered=None,  # 未執行
         target_price=target_price,
         stop_loss_price=stop_loss_price,
         target_pct=target_pct,
@@ -187,7 +187,9 @@ def activate_pending_positions(session, as_of_date: date) -> int:
             if rec is not None:
                 if getattr(rec, "is_valid", True) is False:
                     pos.status = "cancelled"
-                    logger.info(f"[Position] {pos.stock_id} signal is_valid=False → cancelled")
+                    logger.info(
+                        f"[Position] {pos.stock_id} signal is_valid=False → cancelled"
+                    )
                     continue
                 lifecycle = getattr(rec, "lifecycle_status", None)
                 if lifecycle is not None and lifecycle not in ("active", None, ""):
@@ -217,13 +219,13 @@ def activate_pending_positions(session, as_of_date: date) -> int:
         # 注意：pipeline 在收盤後執行，open 為已知資訊（歷史模擬語意）。
         # 欲取得 LIVE_PREOPEN_OBSERVED，需在盤前單獨建立 pre-open execution 流程。
         now = datetime.utcnow()
-        pos.entry_price            = dp.open
-        pos.date_entered           = exec_date
-        pos.entry_source           = "NEXT_OPEN"
-        pos.shadow_trading_type    = "NEXT_OPEN_HISTORICAL"
-        pos.execution_recorded_at  = now
-        pos.status                 = "active"
-        pos.updated_at             = now
+        pos.entry_price = dp.open
+        pos.date_entered = exec_date
+        pos.entry_source = "NEXT_OPEN"
+        pos.shadow_trading_type = "NEXT_OPEN_HISTORICAL"
+        pos.execution_recorded_at = now
+        pos.status = "active"
+        pos.updated_at = now
         activated += 1
         logger.info(
             f"[Position] 激活 {pos.stock_id}  進場價 {dp.open:.2f}（{exec_date}）"

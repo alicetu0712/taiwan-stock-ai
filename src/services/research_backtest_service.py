@@ -27,9 +27,12 @@ from src.utils.dedup_utils import dedup_by_trading_days
 
 logger = logging.getLogger(__name__)
 
+
 def _get_cutoff():
     from src.database import RESEARCH_CUTOFF_DATE
+
     return RESEARCH_CUTOFF_DATE
+
 
 ROUND_TRIP_COST = 0.585  # conservative assumed round-trip cost (%)
 # Derivation: standard broker fee (buy+sell) ~0.285% + securities transaction tax 0.3%
@@ -37,23 +40,35 @@ ROUND_TRIP_COST = 0.585  # conservative assumed round-trip cost (%)
 # and intraday/swing distinction. Do NOT treat as precise per-trade cost.
 
 # ── 排序順序 ──────────────────────────────────────────────────
-PT_BUCKET_ORDER   = ["<40", "40-50", "50-60", "60-70", "70-80", "80+"]
-MA20_BRACKET_ORDER = ["< -10%", "-10% to -5%", "-5% to 0%",
-                      "0% to 5%", "5% to 10%", "> 10%"]
+PT_BUCKET_ORDER = ["<40", "40-50", "50-60", "60-70", "70-80", "80+"]
+MA20_BRACKET_ORDER = [
+    "< -10%",
+    "-10% to -5%",
+    "-5% to 0%",
+    "0% to 5%",
+    "5% to 10%",
+    "> 10%",
+]
 MA60_BRACKET_ORDER = ["< -5%", "-5% to 0%", "0% to 3%", "3% to 5%", "> 5%"]
 
 
 # ── 分組輔助函數（模組層級，供 tests 直接呼叫）──────────────────
 
+
 def pt_bucket(score) -> str:
     if score is None or (isinstance(score, float) and np.isnan(score)):
         return "N/A"
     s = float(score)
-    if s < 40:  return "<40"
-    if s < 50:  return "40-50"
-    if s < 60:  return "50-60"
-    if s < 70:  return "60-70"
-    if s < 80:  return "70-80"
+    if s < 40:
+        return "<40"
+    if s < 50:
+        return "40-50"
+    if s < 60:
+        return "50-60"
+    if s < 70:
+        return "60-70"
+    if s < 80:
+        return "70-80"
     return "80+"
 
 
@@ -61,11 +76,16 @@ def ma20_bracket(gap) -> str:
     if gap is None or (isinstance(gap, float) and np.isnan(gap)):
         return "N/A"
     g = float(gap)
-    if g <= -10: return "< -10%"
-    if g <= -5:  return "-10% to -5%"
-    if g <= 0:   return "-5% to 0%"
-    if g <= 5:   return "0% to 5%"
-    if g <= 10:  return "5% to 10%"
+    if g <= -10:
+        return "< -10%"
+    if g <= -5:
+        return "-10% to -5%"
+    if g <= 0:
+        return "-5% to 0%"
+    if g <= 5:
+        return "0% to 5%"
+    if g <= 10:
+        return "5% to 10%"
     return "> 10%"
 
 
@@ -73,15 +93,20 @@ def ma60_bracket(gap) -> str:
     if gap is None or (isinstance(gap, float) and np.isnan(gap)):
         return "N/A"
     g = float(gap)
-    if g <= -5: return "< -5%"
-    if g < 0:   return "-5% to 0%"
-    if g < 3:   return "0% to 3%"
-    if g < 5:   return "3% to 5%"
+    if g <= -5:
+        return "< -5%"
+    if g < 0:
+        return "-5% to 0%"
+    if g < 3:
+        return "0% to 3%"
+    if g < 5:
+        return "3% to 5%"
     return "> 5%"
 
 
-def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict,
-                       market_calendar: list = None) -> pd.DataFrame:
+def dedup_observations(
+    df: pd.DataFrame, n_days: int, sorted_dates: dict, market_calendar: list = None
+) -> pd.DataFrame:
     """
     同股票在 n_days 個「交易日」內只保留第一筆 signal，消除前向報酬重疊。
 
@@ -93,8 +118,9 @@ def dedup_observations(df: pd.DataFrame, n_days: int, sorted_dates: dict,
         return df.copy()
     df_sorted = df.sort_values(["stock_id", "date"]).reset_index(drop=True)
     signals = list(zip(df_sorted["stock_id"].tolist(), df_sorted["date"].tolist()))
-    kept = dedup_by_trading_days(signals, n_days, sorted_dates_map=sorted_dates,
-                                  market_calendar=market_calendar)
+    kept = dedup_by_trading_days(
+        signals, n_days, sorted_dates_map=sorted_dates, market_calendar=market_calendar
+    )
     # kept is a subsequence of signals; recover row indices via pointer scan
     keep_mask = [False] * len(signals)
     ki = 0
@@ -119,9 +145,17 @@ def compute_stats(alpha_list: list) -> dict:
     )
     n = len(arr)
     empty = {
-        "n": n, "mean": None, "median": None, "std": None,
-        "ci_low": None, "ci_high": None, "p_value": None, "win_rate": None,
-        "cohens_d": None, "boot_ci_low": None, "boot_ci_high": None,
+        "n": n,
+        "mean": None,
+        "median": None,
+        "std": None,
+        "ci_low": None,
+        "ci_high": None,
+        "p_value": None,
+        "win_rate": None,
+        "cohens_d": None,
+        "boot_ci_low": None,
+        "boot_ci_high": None,
     }
     if n < 2:
         return empty
@@ -141,27 +175,29 @@ def compute_stats(alpha_list: list) -> dict:
     rng = np.random.default_rng(42)
     boot_means = np.fromiter(
         (np.mean(rng.choice(arr, size=n, replace=True)) for _ in range(2000)),
-        dtype=float, count=2000,
+        dtype=float,
+        count=2000,
     )
-    boot_ci_low  = round(float(np.percentile(boot_means, 2.5)), 2)
+    boot_ci_low = round(float(np.percentile(boot_means, 2.5)), 2)
     boot_ci_high = round(float(np.percentile(boot_means, 97.5)), 2)
 
     return {
-        "n":            n,
-        "mean":         round(mean, 2),
-        "median":       round(median, 2),
-        "std":          round(std, 2),
-        "ci_low":       round(float(ci[0]), 2),
-        "ci_high":      round(float(ci[1]), 2),
-        "p_value":      round(float(p_val), 3),
-        "win_rate":     round(win_rate, 1),
-        "cohens_d":     cohens_d,
-        "boot_ci_low":  boot_ci_low,
+        "n": n,
+        "mean": round(mean, 2),
+        "median": round(median, 2),
+        "std": round(std, 2),
+        "ci_low": round(float(ci[0]), 2),
+        "ci_high": round(float(ci[1]), 2),
+        "p_value": round(float(p_val), 3),
+        "win_rate": round(win_rate, 1),
+        "cohens_d": cohens_d,
+        "boot_ci_low": boot_ci_low,
         "boot_ci_high": boot_ci_high,
     }
 
 
 # ── 主服務 ────────────────────────────────────────────────────
+
 
 class ResearchBacktestService:
     """
@@ -196,12 +232,14 @@ class ResearchBacktestService:
         usable = raw_df[raw_df["alpha_20d"].notna()].copy()
 
         # PT coverage — NULL 保持 NULL，不估算、不填 0
-        n_with_pt    = int(usable["pt_score"].notna().sum())
+        n_with_pt = int(usable["pt_score"].notna().sum())
         n_without_pt = int(usable["pt_score"].isna().sum())
-        pt_coverage  = round(n_with_pt / len(usable) * 100, 1) if len(usable) > 0 else 0.0
+        pt_coverage = (
+            round(n_with_pt / len(usable) * 100, 1) if len(usable) > 0 else 0.0
+        )
 
         # PT bucket 統計只含有真實 pt_score 的列，N/A 不得納入績效比較
-        pt_usable = usable[usable["pt_bucket"] != "N/A"]
+        pt_usable = usable[usable["pt_bucket"] != "N/A"]  # noqa: F841
 
         # ── Dedup cohorts ──────────────────────────────────────
         # All grouped statistics use their respective dedup cohort.
@@ -220,33 +258,35 @@ class ResearchBacktestService:
             }
 
         sample_independence = {
-            "raw":      {"n": len(usable),  **_si_stats(usable)},
+            "raw": {"n": len(usable), **_si_stats(usable)},
             "dedup_20": {"n": len(dedup_20), **_si_stats(dedup_20)},
             "dedup_60": {"n": len(dedup_60), **_si_stats(dedup_60)},
         }
 
         return {
-            "raw_df":             usable,
-            "by_pt_bucket":       self._group_stats(pt_dedup_20, "pt_bucket", PT_BUCKET_ORDER,
-                                                    df_60=pt_dedup_60),
-            "by_setup":           self._group_stats(dedup_20, "setup_type",   None,
-                                                    df_60=dedup_60),
-            "by_ma20":            self._group_stats(dedup_20, "ma20_bracket", MA20_BRACKET_ORDER,
-                                                    df_60=dedup_60),
-            "by_ma60":            self._group_stats(dedup_20, "ma60_bracket", MA60_BRACKET_ORDER,
-                                                    df_60=dedup_60),
-            "by_month":           self._group_stats(dedup_20, "ym",           None,
-                                                    df_60=dedup_60),
-            "by_regime":          self._group_stats(dedup_20, "regime",       ["bull", "neutral", "bear"],
-                                                    df_60=dedup_60),
-            "cutoff":             _get_cutoff(),
+            "raw_df": usable,
+            "by_pt_bucket": self._group_stats(
+                pt_dedup_20, "pt_bucket", PT_BUCKET_ORDER, df_60=pt_dedup_60
+            ),
+            "by_setup": self._group_stats(dedup_20, "setup_type", None, df_60=dedup_60),
+            "by_ma20": self._group_stats(
+                dedup_20, "ma20_bracket", MA20_BRACKET_ORDER, df_60=dedup_60
+            ),
+            "by_ma60": self._group_stats(
+                dedup_20, "ma60_bracket", MA60_BRACKET_ORDER, df_60=dedup_60
+            ),
+            "by_month": self._group_stats(dedup_20, "ym", None, df_60=dedup_60),
+            "by_regime": self._group_stats(
+                dedup_20, "regime", ["bull", "neutral", "bear"], df_60=dedup_60
+            ),
+            "cutoff": _get_cutoff(),
             "n_total_candidates": n_total,
-            "n_usable":           len(usable),
-            "n_dedup_20":         len(dedup_20),
-            "n_dedup_60":         len(dedup_60),
-            "n_with_pt":          n_with_pt,
-            "n_without_pt":       n_without_pt,
-            "pt_coverage_pct":    pt_coverage,
+            "n_usable": len(usable),
+            "n_dedup_20": len(dedup_20),
+            "n_dedup_60": len(dedup_60),
+            "n_with_pt": n_with_pt,
+            "n_without_pt": n_without_pt,
+            "pt_coverage_pct": pt_coverage,
             "sample_independence": sample_independence,
         }
 
@@ -254,6 +294,7 @@ class ResearchBacktestService:
 
     def _build_raw_df(self):
         import bisect
+
         from src.database import AnalysisResult, DailyPrice, get_session
 
         cutoff = _get_cutoff()
@@ -291,8 +332,8 @@ class ResearchBacktestService:
         # price_dict[sid][d] = close
         # open_dict[sid][d]  = open
         sorted_dates: dict = defaultdict(list)
-        price_dict: dict   = defaultdict(dict)
-        open_dict: dict    = defaultdict(dict)
+        price_dict: dict = defaultdict(dict)
+        open_dict: dict = defaultdict(dict)
         for p in prices_q:
             if p.close and p.close > 0:
                 price_dict[p.stock_id][p.date] = p.close
@@ -304,19 +345,19 @@ class ResearchBacktestService:
         # ── 預計算 MA60 與 MA60 slope ──────────────────────────
         # ma60_map[sid][d]       = (close, ma60_val_or_None)
         # ma60_slope_map[sid][d] = "up"/"down"/"flat"
-        ma60_map: dict       = {}
+        ma60_map: dict = {}
         ma60_slope_map: dict = {}
         for sid, dates in sorted_dates.items():
             closes = [price_dict[sid][d] for d in dates]
-            n = len(closes)
-            d2ma60  = {}
+            n = len(closes)  # noqa: F841
+            d2ma60 = {}
             d2slope = {}
             for i, d in enumerate(dates):
                 if i >= 59:
-                    ma60_now = float(np.mean(closes[i - 59: i + 1]))
+                    ma60_now = float(np.mean(closes[i - 59 : i + 1]))
                     d2ma60[d] = (closes[i], ma60_now)
                     if i >= 64:
-                        ma60_5ago = float(np.mean(closes[i - 64: i - 4]))
+                        ma60_5ago = float(np.mean(closes[i - 64 : i - 4]))
                         if ma60_now > ma60_5ago * 1.005:
                             d2slope[d] = "up"
                         elif ma60_now < ma60_5ago * 0.995:
@@ -326,9 +367,9 @@ class ResearchBacktestService:
                     else:
                         d2slope[d] = "flat"
                 else:
-                    d2ma60[d]  = (closes[i], None)
+                    d2ma60[d] = (closes[i], None)
                     d2slope[d] = "flat"
-            ma60_map[sid]       = d2ma60
+            ma60_map[sid] = d2ma60
             ma60_slope_map[sid] = d2slope
 
         # ── 0050 regime（當日 0050 close + MA60 slope）────────────
@@ -385,11 +426,15 @@ class ResearchBacktestService:
 
             ret20_raw, _ = _fwd(ar.stock_id, d, 20)
             ret60_raw, _ = _fwd(ar.stock_id, d, 60)
-            b20, _       = _fwd("0050",      d, 20)   # benchmark: no cost
-            b60, _       = _fwd("0050",      d, 60)   # benchmark: no cost
+            b20, _ = _fwd("0050", d, 20)  # benchmark: no cost
+            b60, _ = _fwd("0050", d, 60)  # benchmark: no cost
             # Alpha = (stock_net - cost) - benchmark_raw  (foe_v1 consistent)
-            ret20 = round(ret20_raw - ROUND_TRIP_COST, 2) if ret20_raw is not None else None
-            ret60 = round(ret60_raw - ROUND_TRIP_COST, 2) if ret60_raw is not None else None
+            ret20 = (
+                round(ret20_raw - ROUND_TRIP_COST, 2) if ret20_raw is not None else None
+            )
+            ret60 = (
+                round(ret60_raw - ROUND_TRIP_COST, 2) if ret60_raw is not None else None
+            )
 
             # MA60 gap（no look-ahead: 使用到 d 為止的 MA60）
             m60_info = ma60_map.get(ar.stock_id, {}).get(d)
@@ -397,53 +442,67 @@ class ResearchBacktestService:
                 close_val, ma60_val = m60_info
                 ma60_gap_v = (
                     round((close_val - ma60_val) / ma60_val * 100, 2)
-                    if ma60_val else None
+                    if ma60_val
+                    else None
                 )
             else:
                 ma60_gap_v = None
 
             slope_v = ma60_slope_map.get(ar.stock_id, {}).get(d, "flat")
 
-            a20 = round(ret20 - b20, 2) if (ret20 is not None and b20 is not None) else None
-            a60 = round(ret60 - b60, 2) if (ret60 is not None and b60 is not None) else None
+            a20 = (
+                round(ret20 - b20, 2)
+                if (ret20 is not None and b20 is not None)
+                else None
+            )
+            a60 = (
+                round(ret60 - b60, 2)
+                if (ret60 is not None and b60 is not None)
+                else None
+            )
 
             ym = d.strftime("%Y-%m") if hasattr(d, "strftime") else str(d)[:7]
 
-            rows.append({
-                "date":         d,
-                "stock_id":     ar.stock_id,
-                "pt_score":     ar.price_trend_score,
-                "setup_type":   ar.setup_type or "none",
-                "trade_signal": ar.trade_signal or "",
-                "ma20_gap":     ar.ma20_gap,
-                "ma60_gap":     ma60_gap_v,
-                "ma60_slope":   slope_v,
-                "vol_ratio":    ar.volume_ratio,
-                "total_score":  ar.total_score,
-                "timing_score": ar.timing_score,
-                "behavior_score": ar.behavior_score,
-                "rec_level":    ar.rec_level,
-                "ret_20d":      ret20,
-                "ret_60d":      ret60,
-                "b0050_20":     b20,
-                "b0050_60":     b60,
-                "alpha_20d":    a20,
-                "alpha_60d":    a60,
-                "pt_bucket":    pt_bucket(ar.price_trend_score),
-                "ma20_bracket": ma20_bracket(ar.ma20_gap),
-                "ma60_bracket": ma60_bracket(ma60_gap_v),
-                "regime":       regime_map.get(d, "unknown"),
-                "ym":           ym,
-            })
+            rows.append(
+                {
+                    "date": d,
+                    "stock_id": ar.stock_id,
+                    "pt_score": ar.price_trend_score,
+                    "setup_type": ar.setup_type or "none",
+                    "trade_signal": ar.trade_signal or "",
+                    "ma20_gap": ar.ma20_gap,
+                    "ma60_gap": ma60_gap_v,
+                    "ma60_slope": slope_v,
+                    "vol_ratio": ar.volume_ratio,
+                    "total_score": ar.total_score,
+                    "timing_score": ar.timing_score,
+                    "behavior_score": ar.behavior_score,
+                    "rec_level": ar.rec_level,
+                    "ret_20d": ret20,
+                    "ret_60d": ret60,
+                    "b0050_20": b20,
+                    "b0050_60": b60,
+                    "alpha_20d": a20,
+                    "alpha_60d": a60,
+                    "pt_bucket": pt_bucket(ar.price_trend_score),
+                    "ma20_bracket": ma20_bracket(ar.ma20_gap),
+                    "ma60_bracket": ma60_bracket(ma60_gap_v),
+                    "regime": regime_map.get(d, "unknown"),
+                    "ym": ym,
+                }
+            )
 
         return pd.DataFrame(rows), n_total, sorted_dates
 
     # ── 分組統計 ──────────────────────────────────────────────
 
     @staticmethod
-    def _group_stats(df_20: pd.DataFrame, group_col: str,
-                     order: Optional[list],
-                     df_60: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    def _group_stats(
+        df_20: pd.DataFrame,
+        group_col: str,
+        order: Optional[list],
+        df_60: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
         """
         Compute grouped statistics with cohort isolation.
 
@@ -457,14 +516,37 @@ class ResearchBacktestService:
         if df_60 is None:
             df_60 = df_20
 
-        _empty_s20 = {k: None for k in (
-            "n", "mean", "median", "std", "ci_low", "ci_high",
-            "p_value", "win_rate", "cohens_d", "boot_ci_low", "boot_ci_high",
-        )}
-        _empty_s60 = {k: None for k in (
-            "mean", "median", "std", "ci_low", "ci_high",
-            "p_value", "win_rate", "cohens_d", "boot_ci_low", "boot_ci_high",
-        )}
+        _empty_s20 = {
+            k: None
+            for k in (
+                "n",
+                "mean",
+                "median",
+                "std",
+                "ci_low",
+                "ci_high",
+                "p_value",
+                "win_rate",
+                "cohens_d",
+                "boot_ci_low",
+                "boot_ci_high",
+            )
+        }
+        _empty_s60 = {
+            k: None
+            for k in (
+                "mean",
+                "median",
+                "std",
+                "ci_low",
+                "ci_high",
+                "p_value",
+                "win_rate",
+                "cohens_d",
+                "boot_ci_low",
+                "boot_ci_high",
+            )
+        }
         _empty_s20["n"] = 0
 
         # Per-group stats from each dedup cohort
@@ -472,54 +554,54 @@ class ResearchBacktestService:
             k: compute_stats(g["alpha_20d"].tolist())
             for k, g in df_20.groupby(group_col, sort=False)
         }
-        grp60 = {
-            k: compute_stats(g["alpha_60d"].tolist())
-            for k, g in df_60.groupby(group_col, sort=False)
-            if group_col in df_60.columns
-        } if not df_60.empty else {}
+        grp60 = (
+            {
+                k: compute_stats(g["alpha_60d"].tolist())
+                for k, g in df_60.groupby(group_col, sort=False)
+                if group_col in df_60.columns
+            }
+            if not df_60.empty
+            else {}
+        )
 
-        all_keys = list(dict.fromkeys(
-            list(grp20.keys()) + list(grp60.keys())
-        ))
+        all_keys = list(dict.fromkeys(list(grp20.keys()) + list(grp60.keys())))
 
         rows = []
         for k in all_keys:
             s20 = grp20.get(k, _empty_s20)
             s60 = grp60.get(k, _empty_s60)
-            rows.append({
-                group_col:          k,
-                "n":                s20["n"],
-                "20D均Alpha%":      s20["mean"],
-                "20D中位Alpha%":    s20["median"],
-                "20D Std":          s20["std"],
-                "20D CI低":         s20["ci_low"],
-                "20D CI高":         s20["ci_high"],
-                "20D p值":          s20["p_value"],
-                "20D勝率%":         s20["win_rate"],
-                "20D Cohen'd":      s20["cohens_d"],
-                "20D Boot CI低":    s20["boot_ci_low"],
-                "20D Boot CI高":    s20["boot_ci_high"],
-                "60D均Alpha%":      s60["mean"],
-                "60D中位Alpha%":    s60["median"],
-                "60D Std":          s60["std"],
-                "60D CI低":         s60["ci_low"],
-                "60D CI高":         s60["ci_high"],
-                "60D p值":          s60["p_value"],
-                "60D勝率%":         s60["win_rate"],
-                "60D Cohen'd":      s60["cohens_d"],
-                "60D Boot CI低":    s60["boot_ci_low"],
-                "60D Boot CI高":    s60["boot_ci_high"],
-            })
+            rows.append(
+                {
+                    group_col: k,
+                    "n": s20["n"],
+                    "20D均Alpha%": s20["mean"],
+                    "20D中位Alpha%": s20["median"],
+                    "20D Std": s20["std"],
+                    "20D CI低": s20["ci_low"],
+                    "20D CI高": s20["ci_high"],
+                    "20D p值": s20["p_value"],
+                    "20D勝率%": s20["win_rate"],
+                    "20D Cohen'd": s20["cohens_d"],
+                    "20D Boot CI低": s20["boot_ci_low"],
+                    "20D Boot CI高": s20["boot_ci_high"],
+                    "60D均Alpha%": s60["mean"],
+                    "60D中位Alpha%": s60["median"],
+                    "60D Std": s60["std"],
+                    "60D CI低": s60["ci_low"],
+                    "60D CI高": s60["ci_high"],
+                    "60D p值": s60["p_value"],
+                    "60D勝率%": s60["win_rate"],
+                    "60D Cohen'd": s60["cohens_d"],
+                    "60D Boot CI低": s60["boot_ci_low"],
+                    "60D Boot CI高": s60["boot_ci_high"],
+                }
+            )
 
         out = pd.DataFrame(rows)
         if order and not out.empty:
-            in_order  = [x for x in order if x in out[group_col].values]
+            in_order = [x for x in order if x in out[group_col].values]
             remainder = [x for x in out[group_col].values if x not in order]
-            out = (
-                out.set_index(group_col)
-                .reindex(in_order + remainder)
-                .reset_index()
-            )
+            out = out.set_index(group_col).reindex(in_order + remainder).reset_index()
         return out
 
 
@@ -552,11 +634,19 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
                             若缺失則 skip 該筆訊號（不中止整批）
     L5 Analysis Date      : 由 L1 Trading Calendar 覆蓋（非交易日不會有正常分析）
     """
-    from src.database import DailyPrice, ForwardSignal, MODEL_VERSION, Recommendation, Stock
-    from src.core.trading_calendar import TaiwanTradingCalendar
-    from sqlalchemy import func
     from datetime import timedelta
+
+    from sqlalchemy import func
+
     from config import FORWARD_MARKET_COVERAGE
+    from src.core.trading_calendar import TaiwanTradingCalendar
+    from src.database import (
+        MODEL_VERSION,
+        DailyPrice,
+        ForwardSignal,
+        Recommendation,
+        Stock,
+    )
 
     global _last_fs_diagnosis
     _last_fs_diagnosis = {}
@@ -566,9 +656,15 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
 
     n_ars = len(today_ars)
     if not today_ars:
-        _last_fs_diagnosis = {"status": "no_ars", "inserted": 0, "n_ars": 0,
-                               "gate_rejected_by": None, "gate_detail": None,
-                               "n_existing": 0, "l4_skipped": 0}
+        _last_fs_diagnosis = {
+            "status": "no_ars",
+            "inserted": 0,
+            "n_ars": 0,
+            "gate_rejected_by": None,
+            "gate_detail": None,
+            "n_existing": 0,
+            "l4_skipped": 0,
+        }
         return 0
 
     # ── L1: Trading Calendar ─────────────────────────────────────────
@@ -576,9 +672,15 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     if not cal.is_trading_day(trade_date):
         detail = f"{trade_date} 非交易日"
         logger.warning(f"[write_forward_signals] REJECTED L1: {detail}")
-        _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
-                               "gate_rejected_by": "L1", "gate_detail": detail,
-                               "n_existing": 0, "l4_skipped": 0}
+        _last_fs_diagnosis = {
+            "status": "gate_rejected",
+            "inserted": 0,
+            "n_ars": n_ars,
+            "gate_rejected_by": "L1",
+            "gate_detail": detail,
+            "n_existing": 0,
+            "l4_skipped": 0,
+        }
         return 0
 
     # ── L2: Market Coverage ──────────────────────────────────────────
@@ -609,25 +711,39 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
             f"[write_forward_signals] REJECTED L2a: {trade_date} {detail}，"
             f"疑似資料抓取失敗，不寫入 Forward signals"
         )
-        _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
-                               "gate_rejected_by": "L2a", "gate_detail": detail,
-                               "n_existing": 0, "l4_skipped": 0}
+        _last_fs_diagnosis = {
+            "status": "gate_rejected",
+            "inserted": 0,
+            "n_ars": n_ars,
+            "gate_rejected_by": "L2a",
+            "gate_detail": detail,
+            "n_existing": 0,
+            "l4_skipped": 0,
+        }
         return 0
 
     # L2b: coverage ratio (disabled when min_ratio is None)
     if _min_ratio is not None:
         actual_ratio = market_count / expected_universe
         if actual_ratio < _min_ratio:
-            detail = (f"市場覆蓋率不足 "
-                      f"({market_count}/{expected_universe} = {actual_ratio:.1%} "
-                      f"< 門檻 {_min_ratio:.0%})")
+            detail = (
+                f"市場覆蓋率不足 "
+                f"({market_count}/{expected_universe} = {actual_ratio:.1%} "
+                f"< 門檻 {_min_ratio:.0%})"
+            )
             logger.warning(
                 f"[write_forward_signals] REJECTED L2b: {trade_date} {detail}，"
                 f"不寫入 Forward signals"
             )
-            _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
-                                   "gate_rejected_by": "L2b", "gate_detail": detail,
-                                   "n_existing": 0, "l4_skipped": 0}
+            _last_fs_diagnosis = {
+                "status": "gate_rejected",
+                "inserted": 0,
+                "n_ars": n_ars,
+                "gate_rejected_by": "L2b",
+                "gate_detail": detail,
+                "n_existing": 0,
+                "l4_skipped": 0,
+            }
             return 0
 
     # ── L3: Benchmark (0050) Exact Date ─────────────────────────────
@@ -645,9 +761,15 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         logger.warning(
             f"[write_forward_signals] REJECTED L3: {detail}，不寫入 Forward signals"
         )
-        _last_fs_diagnosis = {"status": "gate_rejected", "inserted": 0, "n_ars": n_ars,
-                               "gate_rejected_by": "L3", "gate_detail": detail,
-                               "n_existing": 0, "l4_skipped": 0}
+        _last_fs_diagnosis = {
+            "status": "gate_rejected",
+            "inserted": 0,
+            "n_ars": n_ars,
+            "gate_rejected_by": "L3",
+            "gate_detail": detail,
+            "n_existing": 0,
+            "l4_skipped": 0,
+        }
         return 0
     # ── End Global Gates ─────────────────────────────────────────────
 
@@ -666,8 +788,8 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         .order_by(DailyPrice.stock_id, DailyPrice.date)
         .all()
     )
-    hist_map: dict   = defaultdict(list)
-    close_on_day: dict = {}     # close_at_signal: 當日收盤
+    hist_map: dict = defaultdict(list)
+    close_on_day: dict = {}  # close_at_signal: 當日收盤
     for sid, d, c in hist_rows:
         if c and c > 0:
             hist_map[sid].append(c)
@@ -682,9 +804,11 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         gap = round((closes[-1] - ma60_now) / ma60_now * 100, 2)
         if len(closes) >= 65:
             ma60_5ago = float(np.mean(closes[-65:-5]))
-            slope = ("up"   if ma60_now > ma60_5ago * 1.005
-                     else "down" if ma60_now < ma60_5ago * 0.995
-                     else "flat")
+            slope = (
+                "up"
+                if ma60_now > ma60_5ago * 1.005
+                else "down" if ma60_now < ma60_5ago * 0.995 else "flat"
+            )
         else:
             slope = "flat"
         return gap, slope
@@ -699,9 +823,11 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         slope = "flat"
         if len(closes) >= 65:
             ma60_5ago = float(np.mean(closes[-65:-5]))
-            slope = ("up"   if ma60_now > ma60_5ago * 1.005
-                     else "down" if ma60_now < ma60_5ago * 0.995
-                     else "flat")
+            slope = (
+                "up"
+                if ma60_now > ma60_5ago * 1.005
+                else "down" if ma60_now < ma60_5ago * 0.995 else "flat"
+            )
         if close_now > ma60_now and slope == "up":
             return "bull"
         if close_now < ma60_now and slope == "down":
@@ -716,7 +842,7 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         .filter(Stock.stock_id.in_(stock_ids))
         .all()
     )
-    name_map     = {r.stock_id: r.name     for r in stock_rows}
+    name_map = {r.stock_id: r.name for r in stock_rows}
     industry_map = {r.stock_id: r.industry for r in stock_rows}
 
     # candidate_rank: 當日所有 candidates 按 total_score 排名
@@ -737,12 +863,15 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
     def _decision_label_for(ar) -> str | None:
         try:
             from src.engines.decision import decision_label as _dl
-            label_result = _dl({
-                "trade_signal": ar.trade_signal,
-                "setup_type":   ar.setup_type,
-                "ma20_gap":     ar.ma20_gap,
-            })
-            return label_result.get("code")   # store stable code, not display string
+
+            label_result = _dl(
+                {
+                    "trade_signal": ar.trade_signal,
+                    "setup_type": ar.setup_type,
+                    "ma20_gap": ar.ma20_gap,
+                }
+            )
+            return label_result.get("code")  # store stable code, not display string
         except Exception:
             return None
 
@@ -775,38 +904,40 @@ def write_forward_signals(session, trade_date: date, today_ars: list) -> int:
         rec = rec_snap.get(ar.stock_id)
 
         _sig_close = close_on_day.get(ar.stock_id)
-        session.add(ForwardSignal(
-            trade_date              = trade_date,
-            stock_id                = ar.stock_id,
-            stock_name              = name_map.get(ar.stock_id, ""),
-            pt_score                = ar.price_trend_score,
-            setup_type              = ar.setup_type,
-            trade_signal            = ar.trade_signal,
-            ma20_gap                = ar.ma20_gap,
-            ma60_gap                = ma60_gap_v,
-            ma60_slope              = ma60_slope_v,
-            vol_ratio               = ar.volume_ratio,
-            total_score             = ar.total_score,
-            timing_score            = ar.timing_score,
-            behavior_score          = ar.behavior_score,
-            rec_level               = ar.rec_level,
-            model_version           = MODEL_VERSION,
-            confidence              = ar.confidence,
-            industry                = industry_map.get(ar.stock_id),
-            market_regime_at_signal = regime_today,
-            close_at_signal         = _sig_close,
-            signal_close            = _sig_close,
-            execution_price_type    = "NEXT_OPEN",
-            # execution_date / execution_price filled later by fill_execution_prices()
-            candidate_rank          = rank_map.get(ar.stock_id),
-            # ── 決策快照 ─────────────────────────────────────────
-            entry_low               = rec.entry_low   if rec else None,
-            entry_high              = rec.entry_high  if rec else None,
-            stop_price              = rec.stop_price  if rec else None,
-            target1                 = rec.target1     if rec else None,
-            target2                 = rec.target2     if rec else None,
-            decision_label          = _decision_label_for(ar),
-        ))
+        session.add(
+            ForwardSignal(
+                trade_date=trade_date,
+                stock_id=ar.stock_id,
+                stock_name=name_map.get(ar.stock_id, ""),
+                pt_score=ar.price_trend_score,
+                setup_type=ar.setup_type,
+                trade_signal=ar.trade_signal,
+                ma20_gap=ar.ma20_gap,
+                ma60_gap=ma60_gap_v,
+                ma60_slope=ma60_slope_v,
+                vol_ratio=ar.volume_ratio,
+                total_score=ar.total_score,
+                timing_score=ar.timing_score,
+                behavior_score=ar.behavior_score,
+                rec_level=ar.rec_level,
+                model_version=MODEL_VERSION,
+                confidence=ar.confidence,
+                industry=industry_map.get(ar.stock_id),
+                market_regime_at_signal=regime_today,
+                close_at_signal=_sig_close,
+                signal_close=_sig_close,
+                execution_price_type="NEXT_OPEN",
+                # execution_date / execution_price filled later by fill_execution_prices()
+                candidate_rank=rank_map.get(ar.stock_id),
+                # ── 決策快照 ─────────────────────────────────────────
+                entry_low=rec.entry_low if rec else None,
+                entry_high=rec.entry_high if rec else None,
+                stop_price=rec.stop_price if rec else None,
+                target1=rec.target1 if rec else None,
+                target2=rec.target2 if rec else None,
+                decision_label=_decision_label_for(ar),
+            )
+        )
         inserted += 1
 
     if inserted:
@@ -850,7 +981,7 @@ def fill_execution_prices(session, as_of_date: date) -> int:
     import bisect
     from datetime import timedelta
 
-    from src.database import DailyPrice, ForwardSignal, MODEL_VERSION
+    from src.database import MODEL_VERSION, DailyPrice, ForwardSignal
 
     pending = (
         session.query(ForwardSignal)
@@ -904,7 +1035,8 @@ def fill_execution_prices(session, as_of_date: date) -> int:
         if idx >= len(market_cal):
             logger.warning(
                 "[fill_execution_prices] %s %s: no 0050 trading day after trade_date",
-                fs.stock_id, fs.trade_date,
+                fs.stock_id,
+                fs.trade_date,
             )
             continue
         exec_date = market_cal[idx]
@@ -912,10 +1044,12 @@ def fill_execution_prices(session, as_of_date: date) -> int:
         if not open_price or open_price <= 0:
             logger.debug(
                 "[fill_execution_prices] %s %s: no open price on execution_date %s",
-                fs.stock_id, fs.trade_date, exec_date,
+                fs.stock_id,
+                fs.trade_date,
+                exec_date,
             )
             continue
-        fs.execution_date  = exec_date
+        fs.execution_date = exec_date
         fs.execution_price = open_price
         updated += 1
 
@@ -935,7 +1069,7 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
     """
     from datetime import datetime, timedelta
 
-    from src.database import DailyPrice, ForwardSignal, MODEL_VERSION
+    from src.database import MODEL_VERSION, DailyPrice, ForwardSignal
 
     cutoff = as_of_date - timedelta(days=30)
 
@@ -958,8 +1092,14 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
     max_date = max(r.trade_date for r in pending) + timedelta(days=150)
 
     price_rows = (
-        session.query(DailyPrice.stock_id, DailyPrice.date, DailyPrice.close,
-                      DailyPrice.low, DailyPrice.high, DailyPrice.open)
+        session.query(
+            DailyPrice.stock_id,
+            DailyPrice.date,
+            DailyPrice.close,
+            DailyPrice.low,
+            DailyPrice.high,
+            DailyPrice.open,
+        )
         .filter(
             DailyPrice.stock_id.in_(stock_ids + ["0050"]),
             DailyPrice.date >= min_date,
@@ -970,19 +1110,19 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         .all()
     )
 
-    price_map: dict = {}   # close prices (for return calc and 0050)
-    low_map:   dict = {}   # intraday low  (for stop detection)
-    high_map:  dict = {}   # intraday high (for T1 detection)
-    open_map:  dict = {}   # open prices (for NEXT_OPEN execution price & 0050 benchmark)
+    price_map: dict = {}  # close prices (for return calc and 0050)
+    low_map: dict = {}  # intraday low  (for stop detection)
+    high_map: dict = {}  # intraday high (for T1 detection)
+    open_map: dict = {}  # open prices (for NEXT_OPEN execution price & 0050 benchmark)
     for sid, d, c, lo, hi, op in price_rows:
         if sid not in price_map:
             price_map[sid] = {}
-            low_map[sid]   = {}
-            high_map[sid]  = {}
-            open_map[sid]  = {}
+            low_map[sid] = {}
+            high_map[sid] = {}
+            open_map[sid] = {}
         price_map[sid][d] = c
         if lo is not None:
-            low_map[sid][d]  = lo
+            low_map[sid][d] = lo
         if hi is not None:
             high_map[sid][d] = hi
         if op is not None:
@@ -1010,16 +1150,19 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
             if idx_s >= len(sdates) or sdates[idx_s] != exec_date:
                 continue
             idx_exec_0050 = bisect.bisect_left(sorted_0050, exec_date)
-            if idx_exec_0050 >= len(sorted_0050) or sorted_0050[idx_exec_0050] != exec_date:
+            if (
+                idx_exec_0050 >= len(sorted_0050)
+                or sorted_0050[idx_exec_0050] != exec_date
+            ):
                 continue
             p0_entry = open_0050.get(exec_date)
             if not p0_entry:
                 continue
             entry = fs.execution_price
 
-            def _return_at(n_days,
-                           _idx_s=idx_s, _idx_b=idx_exec_0050,
-                           _entry=entry, _p0=p0_entry):
+            def _return_at(
+                n_days, _idx_s=idx_s, _idx_b=idx_exec_0050, _entry=entry, _p0=p0_entry
+            ):
                 target_idx = _idx_s + n_days  # exit n_days AFTER execution_date
                 if target_idx >= len(sdates):
                     return None, None
@@ -1032,9 +1175,10 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                 fwd_0050 = p0050.get(sorted_0050[t0050_idx])
                 if not fwd_0050:
                     return None, None
-                ret   = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
+                ret = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
                 b_ret = round((fwd_0050 - _p0) / _p0 * 100, 2)  # benchmark: no cost
                 return ret, round(ret - b_ret, 2)
+
         else:
             # NEXT_OPEN records must never fall back to signal_close execution.
             # If execution_price is not yet filled, skip — will retry on next pipeline run.
@@ -1056,10 +1200,12 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                 continue
             entry = fs.close_at_signal
 
-            def _return_at(n_days,
-                           _idx_s=idx_s, _idx_b=idx_0050,
-                           _entry=entry, _p0=p0_entry):
-                target_idx = _idx_s + n_days - 1  # legacy: exit on nth day counting exec as day 1
+            def _return_at(
+                n_days, _idx_s=idx_s, _idx_b=idx_0050, _entry=entry, _p0=p0_entry
+            ):
+                target_idx = (
+                    _idx_s + n_days - 1
+                )  # legacy: exit on nth day counting exec as day 1
                 if target_idx >= len(sdates):
                     return None, None
                 fwd_close = price_map.get(fs.stock_id, {}).get(sdates[target_idx])
@@ -1071,12 +1217,12 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                 fwd_0050 = p0050.get(sorted_0050[t0050_idx])
                 if not fwd_0050:
                     return None, None
-                ret   = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
+                ret = round((fwd_close - _entry) / _entry * 100 - ROUND_TRIP_COST, 2)
                 b_ret = round((fwd_0050 - _p0) / _p0 * 100, 2)  # benchmark: no cost
                 return ret, round(ret - b_ret, 2)
 
-        stop  = fs.stop_price
-        t1    = fs.target1
+        stop = fs.stop_price
+        t1 = fs.target1
 
         ret_20, alpha_20 = _return_at(20)
         ret_60, alpha_60 = _return_at(60)
@@ -1085,7 +1231,9 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         # Uses low price so that a stop-limit order placed at `stop` would have
         # triggered intraday, consistent with swing-trade execution semantics.
         # Falls back to close if low is unavailable for that day.
-        used_close_fallback = False  # tracks whether any day lacked H/L, lowering outcome reliability
+        used_close_fallback = (
+            False  # tracks whether any day lacked H/L, lowering outcome reliability
+        )
 
         stop_day = None
         if stop and stop > 0:
@@ -1133,13 +1281,13 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
         else:
             note = None  # not enough data yet
 
-        fs.fwd_return_20d      = ret_20
-        fs.alpha_20d           = alpha_20
-        fs.fwd_return_60d      = ret_60
-        fs.alpha_60d           = alpha_60
-        fs.stop_triggered_day  = stop_day
-        fs.t1_hit_day          = t1_day
-        fs.outcome_note        = note
+        fs.fwd_return_20d = ret_20
+        fs.alpha_20d = alpha_20
+        fs.fwd_return_60d = ret_60
+        fs.alpha_60d = alpha_60
+        fs.stop_triggered_day = stop_day
+        fs.t1_hit_day = t1_day
+        fs.outcome_note = note
         fs.outcome_price_quality = "CLOSE_ONLY" if used_close_fallback else "OHLC"
         if note:  # only mark computed when we got a result
             fs.outcomes_computed_at = datetime.utcnow()

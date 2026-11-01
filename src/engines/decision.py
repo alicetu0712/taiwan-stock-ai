@@ -40,11 +40,11 @@ class StockRecommendation:
     name: str = ""
     date: Optional[date] = None
     # 各模組分數
-    quality_score: float = 0.0      # Fundamental（0-100）
-    timing_score: float = 0.0       # Price/Technical（0-100）
-    behavior_score: float = 0.0     # Momentum/Behavior（0-100）
+    quality_score: float = 0.0  # Fundamental（0-100）
+    timing_score: float = 0.0  # Price/Technical（0-100）
+    behavior_score: float = 0.0  # Momentum/Behavior（0-100）
     intelligence_score: float = 0.0  # Institutional/Flow（0-100）
-    risk_score: float = 100.0        # Risk（0-100，越高越安全）
+    risk_score: float = 100.0  # Risk（0-100，越高越安全）
     total_score: float = 0.0
     # 推薦等級與信心
     rec_level: str = "D"
@@ -76,12 +76,14 @@ class StockRecommendation:
     on_cooldown: bool = False
     cooldown_override: bool = False
     # ── V2 Price Trend 欄位 ──────────────────────────────────
-    price_trend_score: float = 0.0    # PriceTrend 0-100（V2: 45%）
-    setup_type: str = "none"          # breakout/near_breakout/failed_breakout/pullback_buy/pullback_hold/trending/breakdown/none
+    price_trend_score: float = 0.0  # PriceTrend 0-100（V2: 45%）
+    setup_type: str = (
+        "none"  # breakout/near_breakout/failed_breakout/pullback_buy/pullback_hold/trending/breakdown/none
+    )
     ma20_gap: Optional[float] = None  # (close−MA20)/MA20 × 100%
-    trade_signal: str = "wait"        # strong_buy/buy/wait/reduce/sell
+    trade_signal: str = "wait"  # strong_buy/buy/wait/reduce/sell
     # ── 短線交易關鍵欄位 ─────────────────────────────────────
-    atr: Optional[float] = None       # 14日 ATR（止損/目標計算用）
+    atr: Optional[float] = None  # 14日 ATR（止損/目標計算用）
     entry_low: Optional[float] = None
     entry_high: Optional[float] = None
     stop_price: Optional[float] = None
@@ -89,15 +91,20 @@ class StockRecommendation:
     target2: Optional[float] = None
     expected_holding: str = ""
     vol_ratio: Optional[float] = None
-    ma60_gap:  Optional[float] = None    # (close − MA60) / MA60 × 100%, frozen at signal time
+    ma60_gap: Optional[float] = (
+        None  # (close − MA60) / MA60 × 100%, frozen at signal time
+    )
     # Data completeness: which scoring dimensions lacked real data
-    missing_data_factors: Optional[str] = None  # comma-separated e.g. "quality,behavior"; None = complete
+    missing_data_factors: Optional[str] = (
+        None  # comma-separated e.g. "quality,behavior"; None = complete
+    )
 
 
 # ── Decision Center（Presentation layer）────────────────────────────────────
 # These functions translate V2 engine output (trade_signal + setup_type)
 # into plain-language decisions. They do NOT recompute scores or create
 # a parallel selection model.
+
 
 def decision_label(r: dict) -> dict:
     """
@@ -110,24 +117,32 @@ def decision_label(r: dict) -> dict:
     """
     from config import ENTRY_QUALITY
 
-    signal          = r.get("trade_signal") or "wait"
-    setup           = r.get("setup_type") or "none"
-    ma20_gap        = r.get("ma20_gap") or 0.0
+    signal = r.get("trade_signal") or "wait"
+    setup = r.get("setup_type") or "none"
+    ma20_gap = r.get("ma20_gap") or 0.0
     chase_threshold = ENTRY_QUALITY["chase_gap_pct"]
 
-    from src.core.decision_codes import DecisionCode, to_display, to_color
+    from src.core.decision_codes import DecisionCode, to_color, to_display
 
     # Thesis invalidated: sell signal OR confirmed breakdown
     if signal == "sell" or setup == "breakdown":
         reason = "技術結構已破壞" if setup == "breakdown" else "賣出訊號確立"
         code = DecisionCode.SELL.value
-        return {"code": code, "label": to_display(code), "color": to_color(code), "reason": reason, "is_override": False}
+        return {
+            "code": code,
+            "label": to_display(code),
+            "color": to_color(code),
+            "reason": reason,
+            "is_override": False,
+        }
 
     # Deteriorating signal (thesis not failed)
     if signal == "reduce":
         code = DecisionCode.REDUCE.value
         return {
-            "code": code, "label": to_display(code), "color": to_color(code),
+            "code": code,
+            "label": to_display(code),
+            "color": to_color(code),
             "reason": "訊號轉弱，動能減退，考慮縮減部位",
             "is_override": False,
         }
@@ -137,31 +152,60 @@ def decision_label(r: dict) -> dict:
         if ma20_gap > chase_threshold:
             code = DecisionCode.WAIT_PULLBACK.value
             return {
-                "code": code, "label": to_display(code), "color": to_color(code),
+                "code": code,
+                "label": to_display(code),
+                "color": to_color(code),
                 "reason": f"模型看多，但現價偏離 MA20 達 {ma20_gap:.1f}%（>{chase_threshold:.0f}%），建議等回測",
                 "is_override": True,
             }
-        code = DecisionCode.STRONG_BUY.value if signal == "strong_buy" else DecisionCode.BUY.value
+        code = (
+            DecisionCode.STRONG_BUY.value
+            if signal == "strong_buy"
+            else DecisionCode.BUY.value
+        )
         vol_r = r.get("vol_ratio") or 0.0
         if setup == "pullback_buy":
-            reason = "回測量縮，支撐確認，進場條件成立" if signal == "strong_buy" else "回測至支撐，進場條件成立"
+            reason = (
+                "回測量縮，支撐確認，進場條件成立"
+                if signal == "strong_buy"
+                else "回測至支撐，進場條件成立"
+            )
         elif setup == "breakout":
-            reason = (f"突破放量（量比 {vol_r:.1f}x），買進訊號確立" if vol_r >= 1.0
-                      else f"突破成立（量比 {vol_r:.1f}x，待確認），型態偏多")
+            reason = (
+                f"突破放量（量比 {vol_r:.1f}x），買進訊號確立"
+                if vol_r >= 1.0
+                else f"突破成立（量比 {vol_r:.1f}x，待確認），型態偏多"
+            )
         elif setup == "near_breakout":
             reason = "接近突破關鍵壓力，等待放量確認"
         elif setup == "trending":
-            reason = "多頭趨勢延伸，動能持續，符合買進條件" if signal == "strong_buy" else "趨勢向上，進場條件成立"
+            reason = (
+                "多頭趨勢延伸，動能持續，符合買進條件"
+                if signal == "strong_buy"
+                else "趨勢向上，進場條件成立"
+            )
         elif setup == "pullback_hold":
             reason = "上升趨勢健康回測，MA20 支撐守穩"
         else:
-            reason = "強烈買進訊號，技術面與籌碼面同步偏多" if signal == "strong_buy" else "買進訊號，進場條件成立"
-        return {"code": code, "label": to_display(code), "color": to_color(code), "reason": reason, "is_override": False}
+            reason = (
+                "強烈買進訊號，技術面與籌碼面同步偏多"
+                if signal == "strong_buy"
+                else "買進訊號，進場條件成立"
+            )
+        return {
+            "code": code,
+            "label": to_display(code),
+            "color": to_color(code),
+            "reason": reason,
+            "is_override": False,
+        }
 
     # Default: wait
     code = DecisionCode.WAIT.value
     return {
-        "code": code, "label": to_display(code), "color": to_color(code),
+        "code": code,
+        "label": to_display(code),
+        "color": to_color(code),
         "reason": "尚無明確進場訊號，持續觀察",
         "is_override": False,
     }
@@ -171,9 +215,9 @@ def entry_quality_label(r: dict) -> str:
     """Return plain-language entry quality: 理想 / 追高 / 回檔機會 / 觀望."""
     from config import ENTRY_QUALITY
 
-    signal          = r.get("trade_signal") or "wait"
-    setup           = r.get("setup_type") or "none"
-    ma20_gap        = r.get("ma20_gap") or 0.0
+    signal = r.get("trade_signal") or "wait"
+    setup = r.get("setup_type") or "none"
+    ma20_gap = r.get("ma20_gap") or 0.0
     chase_threshold = ENTRY_QUALITY["chase_gap_pct"]
 
     if signal in ("strong_buy", "buy"):
@@ -195,14 +239,16 @@ def entry_quality_label(r: dict) -> str:
 
 def tomorrow_triggers(r: dict) -> list:
     """Return list of plain-language trigger conditions to watch for tomorrow."""
-    setup  = r.get("setup_type") or "none"
+    setup = r.get("setup_type") or "none"
     signal = r.get("trade_signal") or "wait"
 
     triggers = []
     if setup == "breakout":
         vol = r.get("vol_ratio")
         if vol is not None and vol < 1.0:
-            triggers.append(f"⚠️ 突破成立但量比偏低（{vol:.1f}x），等明日放量確認後再考慮進場")
+            triggers.append(
+                f"⚠️ 突破成立但量比偏低（{vol:.1f}x），等明日放量確認後再考慮進場"
+            )
             triggers.append("若明日量比 ≥ 1.0x 且收在突破位以上 → 訊號轉強")
         else:
             triggers.append("突破後若量能同步增強且收在高位 → 買進條件增強")
@@ -217,7 +263,9 @@ def tomorrow_triggers(r: dict) -> list:
         if signal in ("strong_buy", "buy"):
             # BUY 已確立 → 執行框架：維持 / 不追 / 取消
             triggers.append("✓ 守住 MA10 支撐且量縮整理 → 維持 BUY，可依交易計畫進場")
-            triggers.append("⚠ 開高明顯脫離進場區（乖離 MA10 > 3%）→ 不追價，等待下次回測")
+            triggers.append(
+                "⚠ 開高明顯脫離進場區（乖離 MA10 > 3%）→ 不追價，等待下次回測"
+            )
             triggers.append("❌ 跌破 MA10 / MA20 且收盤無法收復 → 取消 BUY，訊號失效")
         else:
             # 尚未達 BUY → 確認框架
@@ -245,24 +293,28 @@ def trade_thesis(r: dict) -> dict:
     Pure translation from setup_type + stop_price. Display only — does NOT affect decision.
     """
     signal = r.get("trade_signal") or "wait"
-    setup  = r.get("setup_type") or "none"
+    setup = r.get("setup_type") or "none"
     stop_p = r.get("stop_price")
-    price  = r.get("price")
+    price = r.get("price")
 
     if signal not in ("strong_buy", "buy"):
         return {"assumption": "", "invalidations": []}
 
-    vol_r    = r.get("vol_ratio") or 0.0
+    vol_r = r.get("vol_ratio") or 0.0
     ma20_gap = r.get("ma20_gap") or 0.0
     ma60_gap = r.get("ma60_gap") or 0.0
 
     # Evidence-based assumption text per setup
     if setup == "pullback_buy":
-        vol_str  = f"量縮（量比 {vol_r:.1f}x）" if vol_r and vol_r <= 1.2 else "量能正常"
+        vol_str = f"量縮（量比 {vol_r:.1f}x）" if vol_r and vol_r <= 1.2 else "量能正常"
         ma20_str = f"收在 MA20 上方 {ma20_gap:.1f}%" if ma20_gap > 0 else "近 MA20 支撐"
         assumption = f"多頭排列，回踩 MA10，{vol_str}，{ma20_str}，支撐確認待轉強。"
     elif setup == "breakout":
-        vol_str = f"放量突破（量比 {vol_r:.1f}x）" if vol_r and vol_r >= 1.0 else f"量比 {vol_r:.1f}x，量能待確認"
+        vol_str = (
+            f"放量突破（量比 {vol_r:.1f}x）"
+            if vol_r and vol_r >= 1.0
+            else f"量比 {vol_r:.1f}x，量能待確認"
+        )
         assumption = f"股價突破前20日高點，{vol_str}，預期延續上升趨勢。"
     elif setup == "near_breakout":
         assumption = "股價接近前高壓力區，量能若配合有機會向上突破。"
@@ -322,30 +374,30 @@ def position_sizing(
     risk_per_share = entry - stop
     if risk_per_share <= 0:
         return {}
-    max_risk_ntd     = capital * max_risk_pct / 100
-    risk_based_ntd   = (max_risk_ntd / risk_per_share) * entry
+    max_risk_ntd = capital * max_risk_pct / 100
+    risk_based_ntd = (max_risk_ntd / risk_per_share) * entry
     max_exposure_ntd = capital * max_single_pct / 100
-    capped           = risk_based_ntd > max_exposure_ntd
-    final_ntd        = min(risk_based_ntd, max_exposure_ntd)
+    capped = risk_based_ntd > max_exposure_ntd
+    final_ntd = min(risk_based_ntd, max_exposure_ntd)
     final_lots = int(final_ntd / (lot_size * entry))
     if final_lots <= 0:
         # One lot costs more than the exposure cap — cannot size a position
         return {
             "lots": 0,
-            "min_lot_ntd":     round(lot_size * entry),
+            "min_lot_ntd": round(lot_size * entry),
             "max_exposure_ntd": round(max_exposure_ntd),
         }
-    actual_ntd       = final_lots * lot_size * entry
-    actual_risk      = final_lots * lot_size * risk_per_share
+    actual_ntd = final_lots * lot_size * entry
+    actual_risk = final_lots * lot_size * risk_per_share
     return {
-        "lots":             final_lots,
-        "shares":           final_lots * lot_size,
-        "position_ntd":     round(actual_ntd),
-        "actual_risk_ntd":  round(actual_risk),
-        "actual_risk_pct":  round(actual_risk / capital * 100, 2),
-        "risk_per_share":   round(risk_per_share, 2),
-        "max_risk_ntd":     round(max_risk_ntd),
-        "capped":           capped,
+        "lots": final_lots,
+        "shares": final_lots * lot_size,
+        "position_ntd": round(actual_ntd),
+        "actual_risk_ntd": round(actual_risk),
+        "actual_risk_pct": round(actual_risk / capital * 100, 2),
+        "risk_per_share": round(risk_per_share, 2),
+        "max_risk_ntd": round(max_risk_ntd),
+        "capped": capped,
     }
 
 
@@ -368,7 +420,7 @@ class DecisionEngine:
         technical_result=None,
         behavior_result=None,
         risk_result=None,
-        price_trend_result=None,      # V2 新增
+        price_trend_result=None,  # V2 新增
         intelligence_score: float = 60.0,
         has_real_intelligence: bool = False,
         name: str = "",
@@ -393,28 +445,31 @@ class DecisionEngine:
         )
 
         # ── 提取各模組分數 ──────────────────────────────────────
-        q_score  = quality_result.quality_score if quality_result else 0.0
+        q_score = quality_result.quality_score if quality_result else 0.0
         # V2: timing_score 改為 momentum_score (RSI+MACD)；若無 V2 欄位則 fallback 舊 timing_score
-        t_score  = getattr(technical_result, "momentum_score",
-                           (technical_result.timing_score if technical_result else 0.0))
-        b_score  = behavior_result.behavior_score if behavior_result else 50.0
-        r_score  = risk_result.risk_score if risk_result else 100.0
+        t_score = getattr(
+            technical_result,
+            "momentum_score",
+            (technical_result.timing_score if technical_result else 0.0),
+        )
+        b_score = behavior_result.behavior_score if behavior_result else 50.0
+        r_score = risk_result.risk_score if risk_result else 100.0
         pt_score = price_trend_result.price_trend_score if price_trend_result else 0.0
         has_chip = behavior_result.has_real_chip_data if behavior_result else False
 
-        rec.quality_score      = q_score
-        rec.timing_score       = t_score   # momentum
-        rec.behavior_score     = b_score
-        rec.risk_score         = r_score
-        rec.price_trend_score  = pt_score
-        rec.quality_grade      = quality_result.quality_grade if quality_result else "D"
+        rec.quality_score = q_score
+        rec.timing_score = t_score  # momentum
+        rec.behavior_score = b_score
+        rec.risk_score = r_score
+        rec.price_trend_score = pt_score
+        rec.quality_grade = quality_result.quality_grade if quality_result else "D"
 
         # ── V2 Price Trend 細節 ─────────────────────────────────
         # setup_type is owned exclusively by PriceTrendAnalyzer; no fallback to TechnicalResult
         if price_trend_result:
-            rec.setup_type   = price_trend_result.setup_type
-            rec.ma20_gap     = price_trend_result.ma20_gap
-            rec.vol_ratio    = price_trend_result.volume_ratio
+            rec.setup_type = price_trend_result.setup_type
+            rec.ma20_gap = price_trend_result.ma20_gap
+            rec.vol_ratio = price_trend_result.volume_ratio
             rec.trade_signal = price_trend_result.trade_signal
             rec.expected_holding = self._estimate_holding(rec.setup_type)
 
@@ -423,11 +478,11 @@ class DecisionEngine:
             rec.atr = getattr(technical_result, "atr", None)
             if close and rec.atr:
                 atr = rec.atr
-                rec.entry_low  = round(close - 0.3 * atr, 2)
+                rec.entry_low = round(close - 0.3 * atr, 2)
                 rec.entry_high = round(close + 0.3 * atr, 2)
                 rec.stop_price = round(close - 2.0 * atr, 2)
-                rec.target1    = round(close + 2.5 * atr, 2)
-                rec.target2    = round(close + 5.0 * atr, 2)
+                rec.target1 = round(close + 2.5 * atr, 2)
+                rec.target2 = round(close + 5.0 * atr, 2)
 
         # ── 計算綜合評分（Dynamic Weighting）─────────────────────
         # V2 weights: price_trend(45%) + timing/momentum(15%) + behavior(15%) + quality(20%) + risk(5%)
@@ -435,8 +490,11 @@ class DecisionEngine:
 
         if q_score == 0.0:
             # 無基本面資料：把 quality 等比分給 price_trend / timing / behavior
-            active = {k: v for k, v in w.items()
-                      if k not in ("quality", "risk", "intelligence") and v > 0}
+            active = {
+                k: v
+                for k, v in w.items()
+                if k not in ("quality", "risk", "intelligence") and v > 0
+            }
             active_sum = sum(active.values())
             if active_sum > 0:
                 extra = w["quality"]
@@ -446,8 +504,9 @@ class DecisionEngine:
 
         if not has_chip:
             # 無真實籌碼資料：把 behavior 分給 price_trend / timing
-            active = {k: v for k, v in w.items()
-                      if k in ("price_trend", "timing") and v > 0}
+            active = {
+                k: v for k, v in w.items() if k in ("price_trend", "timing") and v > 0
+            }
             active_sum = sum(active.values())
             if active_sum > 0:
                 extra = w["behavior"]
@@ -467,13 +526,20 @@ class DecisionEngine:
         # intelligence 在 V2 中為 0，不影響計算
         # Risk is a weighted component (positive), not a penalty deducted from base.
         # Old formula (pre-v7): base - (100-r)*0.05 → max score 95, systematic -5 bias.
-        total_score = round(max(0.0, min(100.0,
-            pt_score * w.get("price_trend", 0)
-            + t_score  * w["timing"]
-            + b_score  * w["behavior"]
-            + q_score  * w["quality"]
-            + r_score  * w["risk"]
-        )), 1)
+        total_score = round(
+            max(
+                0.0,
+                min(
+                    100.0,
+                    pt_score * w.get("price_trend", 0)
+                    + t_score * w["timing"]
+                    + b_score * w["behavior"]
+                    + q_score * w["quality"]
+                    + r_score * w["risk"],
+                ),
+            ),
+            1,
+        )
         rec.total_score = total_score
 
         # ── 推薦等級 ──────────────────────────────────────────
@@ -481,7 +547,10 @@ class DecisionEngine:
 
         # ── 信心分數 ──────────────────────────────────────────
         rec.confidence = self._calc_confidence(
-            quality_result, technical_result, behavior_result, risk_result,
+            quality_result,
+            technical_result,
+            behavior_result,
+            risk_result,
             price_trend_result=price_trend_result,
         )
 
@@ -516,7 +585,9 @@ class DecisionEngine:
         rec.advantages = list(dict.fromkeys(advantages))[:5]  # 去重，最多5條
         rec.risks = list(dict.fromkeys(risks))[:5]
         rec.watch_points = self._build_watch_points(
-            quality_result, technical_result, trade_date,
+            quality_result,
+            technical_result,
+            trade_date,
             price_trend_result=price_trend_result,
         )
         rec.summary = self._build_summary(rec)
@@ -591,7 +662,9 @@ class DecisionEngine:
                 logger.warning(f"{r.stock_id}: DQ Gate — no valid close price")
                 return False
             if r.entry_low is None or r.stop_price is None or r.target1 is None:
-                logger.warning(f"{r.stock_id}: DQ Gate — trading plan not computed (ATR missing)")
+                logger.warning(
+                    f"{r.stock_id}: DQ Gate — trading plan not computed (ATR missing)"
+                )
                 return False
             if not (r.stop_price < r.close < r.target1):
                 logger.warning(
@@ -602,7 +675,8 @@ class DecisionEngine:
             return True
 
         qualified = [
-            r for r in candidates
+            r
+            for r in candidates
             if r.confidence >= min_conf
             and r.rec_level in allowed_levels
             and _passes_v2_gate(r)
@@ -666,8 +740,11 @@ class DecisionEngine:
                 continue
             # 至少一個分項也有明顯改善
             component_rising = (
-                (r.timing_change_5d is not None and r.timing_change_5d >= min_component_change)
-                or (r.behavior_change_5d is not None and r.behavior_change_5d >= min_component_change)
+                r.timing_change_5d is not None
+                and r.timing_change_5d >= min_component_change
+            ) or (
+                r.behavior_change_5d is not None
+                and r.behavior_change_5d >= min_component_change
             )
             if not component_rising:
                 continue
@@ -810,12 +887,12 @@ class DecisionEngine:
         # 基本面：只在明顯惡化時扣分（D = 惡化，C = 小扣）
         if quality_result and quality_result.has_sufficient_data:
             if quality_result.quality_grade == "D":
-                confidence -= 20   # 基本面明顯惡化
+                confidence -= 20  # 基本面明顯惡化
             elif quality_result.quality_grade == "C":
                 confidence -= 8
             # A/A+/B：不扣分（技術優先，基本面只負責排除惡化）
         else:
-            confidence -= 8    # 無財務資料：小幅扣（不確定因素）
+            confidence -= 8  # 無財務資料：小幅扣（不確定因素）
 
         # 籌碼缺失
         if behavior_result is None:
@@ -837,34 +914,38 @@ class DecisionEngine:
 
     def _estimate_holding(self, setup_type: str) -> str:
         return {
-            "breakout":        "15–30 交易日",
-            "near_breakout":   "等突破確認後評估",
+            "breakout": "15–30 交易日",
+            "near_breakout": "等突破確認後評估",
             "failed_breakout": "考慮降低持倉",
-            "pullback_hold":   "20–40 交易日",
-            "trending":        "20–50 交易日",
-            "none":            "20–40 交易日",
+            "pullback_hold": "20–40 交易日",
+            "trending": "20–50 交易日",
+            "none": "20–40 交易日",
         }.get(setup_type, "20–40 交易日")
 
     def _build_summary(self, rec: StockRecommendation) -> str:
         """一句話推薦摘要（短線版）。"""
         setup_desc = {
-            "breakout":        "突破型，今日收盤站上20日新高",
-            "near_breakout":   "接近前高，等待突破確認",
+            "breakout": "突破型，今日收盤站上20日新高",
+            "near_breakout": "接近前高，等待突破確認",
             "failed_breakout": "突破失敗，多頭陷阱警示",
-            "pullback_hold":   "回踩守穩，回踩均線後支撐有效",
-            "trending":        "趨勢延伸，均線多頭排列中",
-            "none":            "等待更明確的進場訊號",
+            "pullback_hold": "回踩守穩，回踩均線後支撐有效",
+            "trending": "趨勢延伸，均線多頭排列中",
+            "none": "等待更明確的進場訊號",
         }
         level_desc = {
             "A+": "Short-term Bullish（強勢）",
-            "A":  "Short-term Bullish",
-            "B":  "Watch（接近條件）",
-            "C":  "觀望",
-            "D":  "不建議",
+            "A": "Short-term Bullish",
+            "B": "Watch（接近條件）",
+            "C": "觀望",
+            "D": "不建議",
         }
         setup = setup_desc.get(rec.setup_type, "")
         level = level_desc.get(rec.rec_level, "")
-        return f"{level}；{setup}" if setup and rec.rec_level in ("A+", "A", "B") else level
+        return (
+            f"{level}；{setup}"
+            if setup and rec.rec_level in ("A+", "A", "B")
+            else level
+        )
 
     def _build_conclusion(self, rec: StockRecommendation) -> str:
         """短線決策結論：技術面為主，基本面確認。"""
@@ -882,7 +963,7 @@ class DecisionEngine:
         if rec.quality_grade in ("A+", "A"):
             parts.append(f"基本面確認無惡化（{rec.quality_grade}）")
         elif rec.quality_grade == "D":
-            parts.append(f"注意：基本面出現惡化訊號，需謹慎")
+            parts.append("注意：基本面出現惡化訊號，需謹慎")
 
         # 法人
         if rec.behavior_score >= 70:
@@ -926,7 +1007,9 @@ class DecisionEngine:
             elif st == "trending":
                 points.append("確認均線多頭排列持續，量不萎縮")
             if technical_result and technical_result.resistance:
-                points.append(f"關注前波壓力 {technical_result.resistance:.2f} 是否有效突破")
+                points.append(
+                    f"關注前波壓力 {technical_result.resistance:.2f} 是否有效突破"
+                )
         if quality_result and quality_result.factors_minus:
             points.append(f"基本面注意：{quality_result.factors_minus[0]}")
         points.append("法人籌碼是否連續買超")

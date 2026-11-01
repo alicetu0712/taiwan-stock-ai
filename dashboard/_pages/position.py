@@ -291,11 +291,11 @@ def page_positions() -> None:
             prices_now = load_stock_prices()
 
             for pos in positions:
-                sid   = pos["stock_id"]
-                name  = pos["name"]
-                curr  = prices_now.get(sid)
+                sid = pos["stock_id"]
+                name = pos["name"]
+                curr = prices_now.get(sid)
                 level = pos["rec_level"] or "B"
-                card  = _POSITION_PRESENTER.present(pos, curr)
+                card = _POSITION_PRESENTER.present(pos, curr)
                 with st.expander(
                     f"{card.pnl_icon} {name}（{sid}）  "
                     f"{card.pnl_str}  ｜  {level}級  ｜  建倉 {pos['date_entered']}",
@@ -323,7 +323,11 @@ def page_positions() -> None:
                                     p.exit_date = date.today()
                                     p.exit_price = curr
                                     p.exit_reason = "MANUAL"
-                                    p.pnl_pct = round(card.pnl, 2) if card.pnl is not None else None
+                                    p.pnl_pct = (
+                                        round(card.pnl, 2)
+                                        if card.pnl is not None
+                                        else None
+                                    )
                                     s2.commit()
                                 s2.close()
                                 st.cache_data.clear()
@@ -346,7 +350,11 @@ def page_positions() -> None:
                         c1.metric("進場價", f"{pos['entry_price']:.2f}")
                         c2.metric(
                             "目標價",
-                            f"{pos['target_price']:.2f}" if pos["target_price"] else "—",
+                            (
+                                f"{pos['target_price']:.2f}"
+                                if pos["target_price"]
+                                else "—"
+                            ),
                             delta=(
                                 f"+{pos['target_pct']:.1f}%"
                                 if pos["target_pct"]
@@ -369,7 +377,11 @@ def page_positions() -> None:
                         )
                         c4.metric(
                             "建議倉位",
-                            f"{pos['position_pct']:.0f}%" if pos["position_pct"] else "—",
+                            (
+                                f"{pos['position_pct']:.0f}%"
+                                if pos["position_pct"]
+                                else "—"
+                            ),
                         )
 
     with tab_closed:

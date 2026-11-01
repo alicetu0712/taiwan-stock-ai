@@ -11,8 +11,6 @@ Tests the 5 specified dates:
 
 from datetime import date
 
-import pytest
-
 from src.core.trading_calendar import (
     MarketStatus,
     TaiwanTradingCalendar,
@@ -142,56 +140,68 @@ class TestDataValidatorWithCalendar:
 
     def test_holiday_rejected_even_with_data(self):
         import pandas as pd
+
         from src.validators.data_validator import DataValidator
 
         validator = DataValidator()
         # Fake a 200-row dataframe to bypass count check
-        df = pd.DataFrame({
-            "stock_id": [str(i).zfill(4) for i in range(200)],
-            "close":    [100.0] * 200,
-            "volume":   [10000.0] * 200,
-        })
+        df = pd.DataFrame(
+            {
+                "stock_id": [str(i).zfill(4) for i in range(200)],
+                "close": [100.0] * 200,
+                "volume": [10000.0] * 200,
+            }
+        )
         valid, msg = validator.validate_price_data(df, date(2026, 10, 9))
         assert not valid, "Holiday should be rejected regardless of data count"
         assert "MARKET_CLOSED" in msg
 
     def test_weekend_rejected(self):
         import pandas as pd
+
         from src.validators.data_validator import DataValidator
 
         validator = DataValidator()
-        df = pd.DataFrame({
-            "stock_id": [str(i).zfill(4) for i in range(200)],
-            "close":    [100.0] * 200,
-            "volume":   [10000.0] * 200,
-        })
+        df = pd.DataFrame(
+            {
+                "stock_id": [str(i).zfill(4) for i in range(200)],
+                "close": [100.0] * 200,
+                "volume": [10000.0] * 200,
+            }
+        )
         valid, msg = validator.validate_price_data(df, date(2026, 10, 10))
         assert not valid
         assert "MARKET_CLOSED" in msg
 
     def test_trading_day_passes_with_good_data(self):
         import pandas as pd
+
         from src.validators.data_validator import DataValidator
 
         validator = DataValidator()
-        df = pd.DataFrame({
-            "stock_id": [str(i).zfill(4) for i in range(200)],
-            "close":    [100.0] * 200,
-            "volume":   [10000.0] * 200,
-        })
+        df = pd.DataFrame(
+            {
+                "stock_id": [str(i).zfill(4) for i in range(200)],
+                "close": [100.0] * 200,
+                "volume": [10000.0] * 200,
+            }
+        )
         valid, msg = validator.validate_price_data(df, date(2026, 10, 8))
         assert valid
 
     def test_trading_day_low_count_is_data_incomplete(self):
         import pandas as pd
+
         from src.validators.data_validator import DataValidator
 
         validator = DataValidator()
-        df = pd.DataFrame({
-            "stock_id": ["0050", "0051"],
-            "close":    [100.0, 200.0],
-            "volume":   [10000.0, 5000.0],
-        })
+        df = pd.DataFrame(
+            {
+                "stock_id": ["0050", "0051"],
+                "close": [100.0, 200.0],
+                "volume": [10000.0, 5000.0],
+            }
+        )
         valid, msg = validator.validate_price_data(df, date(2026, 10, 8))
         assert not valid
         assert "DATA_INCOMPLETE" in msg
@@ -216,8 +226,13 @@ class TestCalendarUnknownFailClosed:
     def test_pipeline_guard_blocks_unknown(self):
         """run_pipeline guard must block CALENDAR_UNKNOWN (fail-closed)."""
         from src.core.trading_calendar import MarketStatus
-        blocked_statuses = {MarketStatus.WEEKEND, MarketStatus.HOLIDAY, MarketStatus.CALENDAR_UNKNOWN}
+
+        blocked_statuses = {
+            MarketStatus.WEEKEND,
+            MarketStatus.HOLIDAY,
+            MarketStatus.CALENDAR_UNKNOWN,
+        }
         status = market_status(self._UNCOVERED_WEEKDAY)
-        assert status in blocked_statuses, (
-            f"Expected CALENDAR_UNKNOWN to be in blocked set, got {status}"
-        )
+        assert (
+            status in blocked_statuses
+        ), f"Expected CALENDAR_UNKNOWN to be in blocked set, got {status}"

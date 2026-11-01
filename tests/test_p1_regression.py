@@ -14,7 +14,7 @@ tests/test_p1_regression.py — P1 Bug Regression Tests
 """
 
 from datetime import date, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -27,10 +27,11 @@ ROUND_TRIP_COST = 0.585
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
+
 def _make_session(positions=None, daily_prices=None, recommendations=None):
     """SQLAlchemy session mock that supports query(...).filter(...).first() pattern."""
-    positions       = positions or []
-    daily_prices    = daily_prices or {}   # {(stock_id, date): open_price}
+    positions = positions or []
+    daily_prices = daily_prices or {}  # {(stock_id, date): open_price}
     recommendations = recommendations or {}  # {(stock_id, date): mock_rec}
 
     session = MagicMock()
@@ -41,6 +42,7 @@ def _make_session(positions=None, daily_prices=None, recommendations=None):
         q = MagicMock()
 
         if model is PositionMonitor:
+
             def filter_side(*args, **kwargs):
                 fq = MagicMock()
 
@@ -54,7 +56,8 @@ def _make_session(positions=None, daily_prices=None, recommendations=None):
                 fq.first.side_effect = first_side
                 fq.all.return_value = positions
                 fq.with_entities.return_value.all.return_value = [
-                    (p.position_pct,) for p in positions
+                    (p.position_pct,)
+                    for p in positions
                     if getattr(p, "status", "") == "active"
                 ]
                 return fq
@@ -62,6 +65,7 @@ def _make_session(positions=None, daily_prices=None, recommendations=None):
             q.filter.side_effect = filter_side
 
         elif model is DailyPrice:
+
             def filter_dp(*args, **kwargs):
                 fq = MagicMock()
                 fq.first.return_value = None  # default
@@ -70,6 +74,7 @@ def _make_session(positions=None, daily_prices=None, recommendations=None):
             q.filter.side_effect = filter_dp
 
         elif model is Recommendation:
+
             def filter_rec(*args, **kwargs):
                 fq = MagicMock()
                 fq.first.return_value = None
@@ -85,8 +90,9 @@ def _make_session(positions=None, daily_prices=None, recommendations=None):
     return session
 
 
-def _base_kwargs(signal_date=date(2026, 10, 10),
-                 expected_execution_date=date(2026, 10, 13)):
+def _base_kwargs(
+    signal_date=date(2026, 10, 10), expected_execution_date=date(2026, 10, 13)
+):
     return dict(
         stock_id="2330",
         stock_name="台積電",
@@ -105,6 +111,7 @@ def _base_kwargs(signal_date=date(2026, 10, 10),
 
 # ── T1: Signal Date 無次日 Open → 不得建立 active 持倉 ───────────────────────
 
+
 class TestT1NoPendingWhenOpenMissing:
     """create_pending_position 建立 pending_open（無 entry_price），不是 active。"""
 
@@ -112,7 +119,9 @@ class TestT1NoPendingWhenOpenMissing:
         """create_pending_position 建立的持倉 entry_price 必須為 None。"""
         session = MagicMock()
         session.query.return_value.filter.return_value.first.return_value = None
-        session.query.return_value.filter.return_value.with_entities.return_value.all.return_value = []
+        session.query.return_value.filter.return_value.with_entities.return_value.all.return_value = (
+            []
+        )
         session.add = MagicMock()
         session.flush = MagicMock()
 
@@ -128,7 +137,7 @@ class TestT1NoPendingWhenOpenMissing:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, PositionMonitor, init_db
+        from src.database import PositionMonitor, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -137,13 +146,18 @@ class TestT1NoPendingWhenOpenMissing:
 
         # 建一筆 pending_open（無 DailyPrice）
         pos = PositionMonitor(
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             status="pending_open",
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.add(pos)
         s.commit()
@@ -160,12 +174,13 @@ class TestT1NoPendingWhenOpenMissing:
 
 # ── T2: 次日 Open 到位後正確激活 ──────────────────────────────────────────────
 
+
 class TestT2ActivatesWhenOpenAvailable:
     def test_activates_with_real_open(self, tmp_path):
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, DailyPrice, PositionMonitor, Stock, init_db
+        from src.database import DailyPrice, PositionMonitor, Stock, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -174,19 +189,28 @@ class TestT2ActivatesWhenOpenAvailable:
 
         # 建 Stock（外鍵需求）+ DailyPrice
         s.add(Stock(stock_id="2330", name="台積電"))
-        s.add(DailyPrice(
-            stock_id="2330", date=date(2026, 10, 13),
-            open=950.0, close=960.0,
-        ))
+        s.add(
+            DailyPrice(
+                stock_id="2330",
+                date=date(2026, 10, 13),
+                open=950.0,
+                close=960.0,
+            )
+        )
         # pending_open
         pos = PositionMonitor(
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             status="pending_open",
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.add(pos)
         s.commit()
@@ -203,13 +227,14 @@ class TestT2ActivatesWhenOpenAvailable:
 
 # ── T3: 不得 fallback 到 signal close ─────────────────────────────────────────
 
+
 class TestT3NoFallbackToClose:
     def test_open_none_stays_pending(self, tmp_path):
         """DailyPrice 存在但 open=None → 不得 fallback 到 close，持倉維持 pending_open。"""
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, DailyPrice, PositionMonitor, Stock, init_db
+        from src.database import DailyPrice, PositionMonitor, Stock, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -218,18 +243,27 @@ class TestT3NoFallbackToClose:
 
         s.add(Stock(stock_id="2330", name="台積電"))
         # open=None，只有 close
-        s.add(DailyPrice(
-            stock_id="2330", date=date(2026, 10, 13),
-            open=None, close=960.0,
-        ))
+        s.add(
+            DailyPrice(
+                stock_id="2330",
+                date=date(2026, 10, 13),
+                open=None,
+                close=960.0,
+            )
+        )
         pos = PositionMonitor(
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             status="pending_open",
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.add(pos)
         s.commit()
@@ -245,12 +279,13 @@ class TestT3NoFallbackToClose:
 
 # ── T4: 同一訊號不得重複建立持倉 ──────────────────────────────────────────────
 
+
 class TestT4NoDuplicatePosition:
     def test_second_create_returns_false(self, tmp_path):
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, PositionMonitor, init_db
+        from src.database import PositionMonitor, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -259,12 +294,17 @@ class TestT4NoDuplicatePosition:
 
         kwargs = dict(
             session=s,
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         r1 = position_manager.create_pending_position(**kwargs)
         s.commit()
@@ -273,9 +313,9 @@ class TestT4NoDuplicatePosition:
         assert r1 is True
         assert r2 is False, "重複建倉應回傳 False"
 
-        count = s.query(PositionMonitor).filter(
-            PositionMonitor.stock_id == "2330"
-        ).count()
+        count = (
+            s.query(PositionMonitor).filter(PositionMonitor.stock_id == "2330").count()
+        )
         assert count == 1
         s.close()
 
@@ -284,7 +324,7 @@ class TestT4NoDuplicatePosition:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, DailyPrice, PositionMonitor, Stock, init_db
+        from src.database import DailyPrice, Stock, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -292,17 +332,28 @@ class TestT4NoDuplicatePosition:
         s = Session()
 
         s.add(Stock(stock_id="2330", name="台積電"))
-        s.add(DailyPrice(
-            stock_id="2330", date=date(2026, 10, 13),
-            open=950.0, close=960.0,
-        ))
+        s.add(
+            DailyPrice(
+                stock_id="2330",
+                date=date(2026, 10, 13),
+                open=950.0,
+                close=960.0,
+            )
+        )
         # 第一次建立 pending → 激活
         position_manager.create_pending_position(
-            session=s, stock_id="2330", stock_name="台積電",
-            signal_date=date(2026, 10, 10), expected_execution_date=date(2026, 10, 13),
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            session=s,
+            stock_id="2330",
+            stock_name="台積電",
+            signal_date=date(2026, 10, 10),
+            expected_execution_date=date(2026, 10, 13),
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.commit()
         position_manager.activate_pending_positions(s, date(2026, 10, 13))
@@ -310,11 +361,18 @@ class TestT4NoDuplicatePosition:
 
         # 再次推薦同一股票 → 應被拒絕
         result = position_manager.create_pending_position(
-            session=s, stock_id="2330", stock_name="台積電",
-            signal_date=date(2026, 10, 14), expected_execution_date=date(2026, 10, 15),
-            rec_level="A+", rec_score=90.0, confidence=85.0,
-            target_price=1150.0, stop_loss_price=920.0,
-            target_pct=15.0, stop_loss_pct=-8.0,
+            session=s,
+            stock_id="2330",
+            stock_name="台積電",
+            signal_date=date(2026, 10, 14),
+            expected_execution_date=date(2026, 10, 15),
+            rec_level="A+",
+            rec_score=90.0,
+            confidence=85.0,
+            target_price=1150.0,
+            stop_loss_price=920.0,
+            target_pct=15.0,
+            stop_loss_pct=-8.0,
         )
         assert result is False
         s.close()
@@ -322,37 +380,41 @@ class TestT4NoDuplicatePosition:
 
 # ── T5 / T6: A+ 不得超過 max_single_pct ──────────────────────────────────────
 
+
 class TestT5T6PositionSizingCap:
     def test_a_plus_capped_at_max_single_pct(self):
         """A+ 等級（base 20%）+ 最高信心（90%）→ position_pct ≤ max_single_pct。"""
         max_cap = _cfg.POSITION_SIZING["max_single_pct"]
         pct = position_manager._compute_position_pct("A+", 90.0)
-        assert pct <= max_cap, (
-            f"A+ 信心 90% 計算出 {pct:.0f}%，超過 config 上限 {max_cap:.0f}%"
-        )
+        assert (
+            pct <= max_cap
+        ), f"A+ 信心 90% 計算出 {pct:.0f}%，超過 config 上限 {max_cap:.0f}%"
 
-    @pytest.mark.parametrize("level,confidence", [
-        ("A+", 100.0),
-        ("A+",  90.0),
-        ("A+",  80.0),
-        ("A",   90.0),
-        ("B",   90.0),
-    ])
+    @pytest.mark.parametrize(
+        "level,confidence",
+        [
+            ("A+", 100.0),
+            ("A+", 90.0),
+            ("A+", 80.0),
+            ("A", 90.0),
+            ("B", 90.0),
+        ],
+    )
     def test_all_levels_capped(self, level, confidence):
         max_cap = _cfg.POSITION_SIZING["max_single_pct"]
         pct = position_manager._compute_position_pct(level, confidence)
-        assert pct <= max_cap, (
-            f"level={level} conf={confidence:.0f}% → {pct:.0f}% 超過上限 {max_cap:.0f}%"
-        )
+        assert (
+            pct <= max_cap
+        ), f"level={level} conf={confidence:.0f}% → {pct:.0f}% 超過上限 {max_cap:.0f}%"
 
     def test_risk_per_trade_1_pct(self):
         """單筆最大風險不超過 config.POSITION_SIZING['max_risk_pct']。"""
-        capital    = _cfg.POSITION_SIZING["capital_ntd"]
-        max_risk   = _cfg.POSITION_SIZING["max_risk_pct"]  # 1.0 %
+        capital = _cfg.POSITION_SIZING["capital_ntd"]  # noqa: F841
+        max_risk = _cfg.POSITION_SIZING["max_risk_pct"]  # 1.0 %
         max_single = _cfg.POSITION_SIZING["max_single_pct"]  # 20.0 %
         # 持倉 20% × 停損假設 5%（最壞情況）
         stop_pct = 5.0
-        risk_pct = (max_single / 100.0) * stop_pct
+        risk_pct = (max_single / 100.0) * stop_pct  # noqa: F841
         # risk_pct 僅超過 max_risk 時才是問題（此測試確認設定值合理）
         # 注意：這不是 1% rule 的完整實作，只驗證 config 數值本身不矛盾
         assert max_risk > 0, "max_risk_pct 必須大於 0"
@@ -360,6 +422,7 @@ class TestT5T6PositionSizingCap:
 
 
 # ── T7: Research Alpha 定義與 foe_v1 一致 ──────────────────────────────────────
+
 
 class TestT7AlphaDefinitionConsistency:
     def test_stock_bears_cost_benchmark_does_not(self):
@@ -369,7 +432,7 @@ class TestT7AlphaDefinitionConsistency:
 
         # New formula (foe_v1 consistent)
         stock_net = round(stock_raw - ROUND_TRIP_COST, 4)
-        alpha     = round(stock_net - bench_raw, 4)
+        alpha = round(stock_net - bench_raw, 4)
 
         expected = round(stock_raw - ROUND_TRIP_COST - bench_raw, 4)
         assert alpha == pytest.approx(expected, abs=1e-6)
@@ -412,15 +475,16 @@ class TestT7AlphaDefinitionConsistency:
 
         # research_backtest (after fix) calculation
         stock_ret_rb = round((exit_stock - entry) / entry * 100 - ROUND_TRIP_COST, 4)
-        bench_ret_rb = round((exit_bench - entry) / entry * 100, 4)   # no cost
+        bench_ret_rb = round((exit_bench - entry) / entry * 100, 4)  # no cost
         alpha_rb = round(stock_ret_rb - bench_ret_rb, 4)
 
-        assert alpha_foe == pytest.approx(alpha_rb, abs=1e-6), (
-            f"foe_v1 alpha={alpha_foe:.4f} ≠ research alpha={alpha_rb:.4f}"
-        )
+        assert alpha_foe == pytest.approx(
+            alpha_rb, abs=1e-6
+        ), f"foe_v1 alpha={alpha_foe:.4f} ≠ research alpha={alpha_rb:.4f}"
 
 
 # ── T8: ForwardOutcomeEvaluation horizon 不可覆寫（foe_v1 immutability）────────
+
 
 class TestT8FoeImmutability:
     def test_matured_20d_horizon_not_overwritten(self, tmp_path):
@@ -428,7 +492,7 @@ class TestT8FoeImmutability:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, ForwardOutcomeEvaluation, init_db
+        from src.database import ForwardOutcomeEvaluation, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/foe_test.db")
         init_db(engine)
@@ -443,7 +507,7 @@ class TestT8FoeImmutability:
             stock_id="2330",
             signal_date=date(2026, 10, 10),
             horizon_20d_matured_at=matured_ts,
-            alpha_20d=4.415,   # locked value
+            alpha_20d=4.415,  # locked value
             return_20d=9.415,
         )
         s.add(row)
@@ -454,13 +518,14 @@ class TestT8FoeImmutability:
         from src.services.outcome_service import _fill_horizons_guard
 
         already_matured = _fill_horizons_guard(row, "horizon_20d_matured_at")
-        assert already_matured is True, (
-            "_fill_horizons_guard should return True (skip) when 20D is already matured"
-        )
+        assert (
+            already_matured is True
+        ), "_fill_horizons_guard should return True (skip) when 20D is already matured"
         s.close()
 
 
 # ── T9: Shadow Trading 完整性 — 錯過執行窗口不得補成交 ───────────────────────
+
 
 class TestT9MissedExecutionWindow:
     def test_late_pipeline_marks_missed_execution(self, tmp_path):
@@ -468,7 +533,7 @@ class TestT9MissedExecutionWindow:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, DailyPrice, PositionMonitor, Stock, init_db
+        from src.database import DailyPrice, PositionMonitor, Stock, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -477,18 +542,27 @@ class TestT9MissedExecutionWindow:
 
         s.add(Stock(stock_id="2330", name="台積電"))
         # Open price IS available — but pipeline runs late (day after exec_date)
-        s.add(DailyPrice(
-            stock_id="2330", date=date(2026, 10, 13),
-            open=950.0, close=960.0,
-        ))
+        s.add(
+            DailyPrice(
+                stock_id="2330",
+                date=date(2026, 10, 13),
+                open=950.0,
+                close=960.0,
+            )
+        )
         pos = PositionMonitor(
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             status="pending_open",
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.add(pos)
         s.commit()
@@ -499,9 +573,9 @@ class TestT9MissedExecutionWindow:
         assert n == 0, "不得激活（pipeline 晚了 1 天）"
 
         s.refresh(pos)
-        assert pos.status == "missed_execution", (
-            f"Expected 'missed_execution', got '{pos.status}'"
-        )
+        assert (
+            pos.status == "missed_execution"
+        ), f"Expected 'missed_execution', got '{pos.status}'"
         assert pos.entry_price is None, "missed_execution 不得有 entry_price"
         s.close()
 
@@ -510,7 +584,7 @@ class TestT9MissedExecutionWindow:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, DailyPrice, PositionMonitor, Stock, init_db
+        from src.database import DailyPrice, PositionMonitor, Stock, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -518,18 +592,27 @@ class TestT9MissedExecutionWindow:
         s = Session()
 
         s.add(Stock(stock_id="2330", name="台積電"))
-        s.add(DailyPrice(
-            stock_id="2330", date=date(2026, 10, 13),
-            open=950.0, close=960.0,
-        ))
+        s.add(
+            DailyPrice(
+                stock_id="2330",
+                date=date(2026, 10, 13),
+                open=950.0,
+                close=960.0,
+            )
+        )
         pos = PositionMonitor(
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             status="pending_open",
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.add(pos)
         s.commit()
@@ -546,12 +629,13 @@ class TestT9MissedExecutionWindow:
 
     def test_max_execution_lag_constant_is_zero(self):
         """MAX_EXECUTION_LAG_DAYS 必須為 0（最保守），確保 Shadow Trading 完整性。"""
-        assert MAX_EXECUTION_LAG_DAYS == 0, (
-            f"MAX_EXECUTION_LAG_DAYS={MAX_EXECUTION_LAG_DAYS}，Shadow Trading 要求 0"
-        )
+        assert (
+            MAX_EXECUTION_LAG_DAYS == 0
+        ), f"MAX_EXECUTION_LAG_DAYS={MAX_EXECUTION_LAG_DAYS}，Shadow Trading 要求 0"
 
 
 # ── T10: Pending 不參與 P&L、停損、追蹤停損 ─────────────────────────────────
+
 
 class TestT10PendingExcludedFromPnL:
     def test_pending_not_in_exit_signals(self, tmp_path):
@@ -559,7 +643,7 @@ class TestT10PendingExcludedFromPnL:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, PositionMonitor, init_db
+        from src.database import PositionMonitor, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -568,26 +652,36 @@ class TestT10PendingExcludedFromPnL:
 
         # 一個 pending_open（無 entry_price）
         pos_pending = PositionMonitor(
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             status="pending_open",
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         # 一個 active（正常持倉，在停損點之上，不應觸發）
         pos_active = PositionMonitor(
-            stock_id="2412", stock_name="中華電",
+            stock_id="2412",
+            stock_name="中華電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             date_entered=date(2026, 10, 13),
             entry_price=100.0,
             entry_source="NEXT_OPEN",
             status="active",
-            rec_level="A", rec_score=80.0, confidence=80.0,
-            target_price=120.0, stop_loss_price=90.0,
-            target_pct=20.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=80.0,
+            confidence=80.0,
+            target_price=120.0,
+            stop_loss_price=90.0,
+            target_pct=20.0,
+            stop_loss_pct=-10.0,
         )
         s.add(pos_pending)
         s.add(pos_active)
@@ -600,9 +694,9 @@ class TestT10PendingExcludedFromPnL:
             price_map=price_map,
         )
         triggered_ids = {sig.stock_id for sig in signals}
-        assert "2330" not in triggered_ids, (
-            "pending_open 持倉不得觸發停損（entry_price=None）"
-        )
+        assert (
+            "2330" not in triggered_ids
+        ), "pending_open 持倉不得觸發停損（entry_price=None）"
         assert "2412" not in triggered_ids, "2412 在停損點之上，不應觸發"
         s.close()
 
@@ -611,7 +705,7 @@ class TestT10PendingExcludedFromPnL:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, DailyPrice, PositionMonitor, Stock, init_db
+        from src.database import DailyPrice, PositionMonitor, Stock, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -620,16 +714,23 @@ class TestT10PendingExcludedFromPnL:
 
         # 兩個 pending_open（合計 position_pct = 40%）
         for sid, name in [("2330", "台積電"), ("2412", "中華電")]:
-            s.add(PositionMonitor(
-                stock_id=sid, stock_name=name,
-                signal_date=date(2026, 10, 10),
-                expected_execution_date=date(2026, 10, 13),
-                status="pending_open",
-                rec_level="A", rec_score=80.0, confidence=80.0,
-                target_price=100.0, stop_loss_price=80.0,
-                target_pct=10.0, stop_loss_pct=-10.0,
-                position_pct=20.0,
-            ))
+            s.add(
+                PositionMonitor(
+                    stock_id=sid,
+                    stock_name=name,
+                    signal_date=date(2026, 10, 10),
+                    expected_execution_date=date(2026, 10, 13),
+                    status="pending_open",
+                    rec_level="A",
+                    rec_score=80.0,
+                    confidence=80.0,
+                    target_price=100.0,
+                    stop_loss_price=80.0,
+                    target_pct=10.0,
+                    stop_loss_pct=-10.0,
+                    position_pct=20.0,
+                )
+            )
         s.commit()
 
         # 建立第三個 active 持倉，總用量只算 active 的 20%
@@ -637,13 +738,24 @@ class TestT10PendingExcludedFromPnL:
         # 2330 和 2412 都是 pending_open，total_used = 0
         # 因此 20% 新倉應該可以建立
         s.add(Stock(stock_id="2454", name="聯發科"))
-        s.add(DailyPrice(stock_id="2454", date=date(2026, 10, 13), open=1000.0, close=1010.0))
+        s.add(
+            DailyPrice(
+                stock_id="2454", date=date(2026, 10, 13), open=1000.0, close=1010.0
+            )
+        )
         result = position_manager.open_position(
-            session=s, stock_id="2454", stock_name="聯發科",
-            entry_date=date(2026, 10, 13), entry_price=1000.0,
-            rec_level="A", rec_score=80.0, confidence=80.0,
-            target_price=1200.0, stop_loss_price=900.0,
-            target_pct=20.0, stop_loss_pct=-10.0,
+            session=s,
+            stock_id="2454",
+            stock_name="聯發科",
+            entry_date=date(2026, 10, 13),
+            entry_price=1000.0,
+            rec_level="A",
+            rec_score=80.0,
+            confidence=80.0,
+            target_price=1200.0,
+            stop_loss_price=900.0,
+            target_pct=20.0,
+            stop_loss_pct=-10.0,
         )
         assert result is True, "pending_open 不應計入資金使用率，新倉應可建立"
         s.close()
@@ -651,13 +763,14 @@ class TestT10PendingExcludedFromPnL:
 
 # ── T11: entry_source 標記驗證 ───────────────────────────────────────────────
 
+
 class TestT11EntrySourceMarking:
     def test_next_open_entry_source_set(self, tmp_path):
         """activate_pending_positions 激活後，entry_source 必須為 'NEXT_OPEN'。"""
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, DailyPrice, PositionMonitor, Stock, init_db
+        from src.database import DailyPrice, PositionMonitor, Stock, init_db
 
         engine = create_engine(f"sqlite:///{tmp_path}/test.db")
         init_db(engine)
@@ -665,18 +778,27 @@ class TestT11EntrySourceMarking:
         s = Session()
 
         s.add(Stock(stock_id="2330", name="台積電"))
-        s.add(DailyPrice(
-            stock_id="2330", date=date(2026, 10, 13),
-            open=950.0, close=960.0,
-        ))
+        s.add(
+            DailyPrice(
+                stock_id="2330",
+                date=date(2026, 10, 13),
+                open=950.0,
+                close=960.0,
+            )
+        )
         pos = PositionMonitor(
-            stock_id="2330", stock_name="台積電",
+            stock_id="2330",
+            stock_name="台積電",
             signal_date=date(2026, 10, 10),
             expected_execution_date=date(2026, 10, 13),
             status="pending_open",
-            rec_level="A", rec_score=85.0, confidence=80.0,
-            target_price=1100.0, stop_loss_price=900.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            rec_level="A",
+            rec_score=85.0,
+            confidence=80.0,
+            target_price=1100.0,
+            stop_loss_price=900.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.add(pos)
         s.commit()
@@ -696,7 +818,11 @@ class TestT11EntrySourceMarking:
         from sqlalchemy import create_engine, text
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import Base, PositionMonitor, _migrate_position_monitor, init_db
+        from src.database import (
+            PositionMonitor,
+            _migrate_position_monitor,
+            init_db,
+        )
         from src.engines import position_manager
 
         engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
@@ -706,19 +832,28 @@ class TestT11EntrySourceMarking:
 
         # 建立 active 持倉（使用 open_position backward-compat path）
         position_manager.open_position(
-            session=s, stock_id="2330", stock_name="台積電",
-            entry_date=date(2026, 10, 8), entry_price=56.0,
-            rec_level="B", rec_score=75.0, confidence=75.0,
-            target_price=70.0, stop_loss_price=50.0,
-            target_pct=10.0, stop_loss_pct=-10.0,
+            session=s,
+            stock_id="2330",
+            stock_name="台積電",
+            entry_date=date(2026, 10, 8),
+            entry_price=56.0,
+            rec_level="B",
+            rec_score=75.0,
+            confidence=75.0,
+            target_price=70.0,
+            stop_loss_price=50.0,
+            target_pct=10.0,
+            stop_loss_pct=-10.0,
         )
         s.commit()
 
         # 模擬 pre-fix 狀態：清除 entry_source（就像舊 DB 一樣）
         with engine.begin() as conn:
-            conn.execute(text(
-                "UPDATE position_monitor SET entry_source = NULL WHERE stock_id = '2330'"
-            ))
+            conn.execute(
+                text(
+                    "UPDATE position_monitor SET entry_source = NULL WHERE stock_id = '2330'"
+                )
+            )
 
         pos = s.query(PositionMonitor).filter_by(stock_id="2330").first()
         s.refresh(pos)
@@ -728,13 +863,14 @@ class TestT11EntrySourceMarking:
         _migrate_position_monitor(engine)
 
         s.refresh(pos)
-        assert pos.entry_source == "SIGNAL_CLOSE_LEGACY", (
-            f"Expected SIGNAL_CLOSE_LEGACY, got '{pos.entry_source}'"
-        )
+        assert (
+            pos.entry_source == "SIGNAL_CLOSE_LEGACY"
+        ), f"Expected SIGNAL_CLOSE_LEGACY, got '{pos.entry_source}'"
         s.close()
 
 
 # ── T12: sync_table does not include explicit id in INSERT ────────────────────
+
 
 class TestT12SyncTableNoExplicitId:
     """T12: sync_table INSERT 不帶 explicit id，防止 PG sequence lag。
@@ -748,7 +884,7 @@ class TestT12SyncTableNoExplicitId:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        from src.database import AnalysisResult, Base, init_db
+        from src.database import AnalysisResult, Base
 
         src_engine = create_engine("sqlite:///:memory:")
         dst_engine = create_engine("sqlite:///:memory:")
@@ -784,9 +920,12 @@ class TestT12SyncTableNoExplicitId:
 
         # Now sync — this is the function under test
         from scripts.sync_to_neon import sync_table
+
         src_s2 = SrcSession()
         dst_s2 = DstSession()
-        sync_table(src_s2, dst_s2, AnalysisResult, key_fields=["stock_id", "date"], days=365)
+        sync_table(
+            src_s2, dst_s2, AnalysisResult, key_fields=["stock_id", "date"], days=365
+        )
         src_s2.close()
 
         # Verify: the synced row has a dst-assigned id (not the src id)
@@ -819,10 +958,14 @@ class TestT12SyncTableNoExplicitId:
         DstSession = sessionmaker(bind=dst_engine)
 
         src_s = SrcSession()
-        src_s.add(AnalysisResult(
-            stock_id="2330", date=date(2026, 10, 29),
-            total_score=75.0, rec_level="A",
-        ))
+        src_s.add(
+            AnalysisResult(
+                stock_id="2330",
+                date=date(2026, 10, 29),
+                total_score=75.0,
+                rec_level="A",
+            )
+        )
         src_s.commit()
         src_s.close()
 
@@ -831,12 +974,14 @@ class TestT12SyncTableNoExplicitId:
         # First sync
         s1, d1 = SrcSession(), DstSession()
         sync_table(s1, d1, AnalysisResult, key_fields=["stock_id", "date"], days=365)
-        s1.close(); d1.close()
+        s1.close()
+        d1.close()
 
         # Second sync — must not create a duplicate
         s2, d2 = SrcSession(), DstSession()
         sync_table(s2, d2, AnalysisResult, key_fields=["stock_id", "date"], days=365)
-        s2.close(); d2.close()
+        s2.close()
+        d2.close()
 
         dst_s = DstSession()
         count = (
@@ -844,7 +989,7 @@ class TestT12SyncTableNoExplicitId:
             .filter_by(stock_id="2330", date=date(2026, 10, 29))
             .count()
         )
-        assert count == 1, (
-            f"Expected 1 row after two syncs, got {count} — duplicate INSERT on second sync."
-        )
+        assert (
+            count == 1
+        ), f"Expected 1 row after two syncs, got {count} — duplicate INSERT on second sync."
         dst_s.close()

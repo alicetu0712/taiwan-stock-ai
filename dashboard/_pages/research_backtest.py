@@ -8,15 +8,15 @@ dashboard/_pages/research_backtest.py — Research Backtest & Forward Validation
 Forward 樣本尚未成熟時顯示「累積中」，不產生策略結論。
 """
 
-import streamlit as st
-import pandas as pd
 import numpy as np
-
+import pandas as pd
+import streamlit as st
 
 _CUTOFF_LABEL = "2026-10-09"
 
 
 # ── 統計欄位格式化 ────────────────────────────────────────────
+
 
 def _fmt_pct(v):
     if v is None or (isinstance(v, float) and np.isnan(v)):
@@ -37,7 +37,11 @@ def _fmt_p(v):
 def _fmt_d(v):
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return "—"
-    tag = " (L)" if abs(v) >= 0.8 else " (M)" if abs(v) >= 0.5 else " (S)" if abs(v) >= 0.2 else ""
+    tag = (
+        " (L)"
+        if abs(v) >= 0.8
+        else " (M)" if abs(v) >= 0.5 else " (S)" if abs(v) >= 0.2 else ""
+    )
     return f"{v:+.2f}{tag}"
 
 
@@ -49,17 +53,31 @@ def _render_stats_table(df: pd.DataFrame, group_col: str) -> None:
 
     display = df.copy()
 
-    for col in ["20D均Alpha%", "20D中位Alpha%", "20D CI低", "20D CI高",
-                "20D Boot CI低", "20D Boot CI高",
-                "60D均Alpha%", "60D中位Alpha%", "60D CI低", "60D CI高",
-                "60D Boot CI低", "60D Boot CI高"]:
+    for col in [
+        "20D均Alpha%",
+        "20D中位Alpha%",
+        "20D CI低",
+        "20D CI高",
+        "20D Boot CI低",
+        "20D Boot CI高",
+        "60D均Alpha%",
+        "60D中位Alpha%",
+        "60D CI低",
+        "60D CI高",
+        "60D Boot CI低",
+        "60D Boot CI高",
+    ]:
         if col in display.columns:
             display[col] = display[col].apply(_fmt_pct)
 
     for col in ["20D Std", "60D Std"]:
         if col in display.columns:
             display[col] = display[col].apply(
-                lambda v: f"{v:.2f}" if v is not None and not (isinstance(v, float) and np.isnan(v)) else "—"
+                lambda v: (
+                    f"{v:.2f}"
+                    if v is not None and not (isinstance(v, float) and np.isnan(v))
+                    else "—"
+                )
             )
 
     for col in ["20D p值", "60D p值"]:
@@ -69,7 +87,11 @@ def _render_stats_table(df: pd.DataFrame, group_col: str) -> None:
     for col in ["20D勝率%", "60D勝率%"]:
         if col in display.columns:
             display[col] = display[col].apply(
-                lambda v: f"{v:.1f}%" if v is not None and not (isinstance(v, float) and np.isnan(v)) else "—"
+                lambda v: (
+                    f"{v:.1f}%"
+                    if v is not None and not (isinstance(v, float) and np.isnan(v))
+                    else "—"
+                )
             )
 
     for col in ["20D Cohen'd", "60D Cohen'd"]:
@@ -88,13 +110,16 @@ def _render_stats_table(df: pd.DataFrame, group_col: str) -> None:
 
 # ── 主頁面 ────────────────────────────────────────────────────
 
+
 @st.cache_data(ttl=3600, show_spinner="計算 Research Backtest（首次約 30 秒）…")
 def _load_research():
     import traceback
+
     try:
         from src.services.research_backtest_service import ResearchBacktestService
+
         return ResearchBacktestService().compute()
-    except Exception as e:
+    except Exception:
         return {"_error": traceback.format_exc()}
 
 
@@ -102,16 +127,23 @@ def _load_forward():
     try:
         import os
         from pathlib import Path
+
         from dotenv import load_dotenv
-        load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env", override=True)
+
+        load_dotenv(
+            dotenv_path=Path(__file__).parent.parent.parent / ".env", override=True
+        )
 
         import psycopg
+
         url = os.getenv("NEON_URL") or os.getenv("DATABASE_URL") or ""
         if url.startswith("postgresql"):
             conn = psycopg.connect(url)
             cur = conn.cursor()
             from src.database import MODEL_VERSION as _MV
-            cur.execute("""
+
+            cur.execute(
+                """
                 SELECT trade_date, stock_id, stock_name,
                        pt_score, setup_type, trade_signal,
                        ma20_gap, ma60_gap, ma60_slope, vol_ratio,
@@ -119,39 +151,52 @@ def _load_forward():
                 FROM forward_signals
                 WHERE model_version = %s
                 ORDER BY trade_date DESC, stock_id
-            """, (_MV,))
+            """,
+                (_MV,),
+            )
             cols = [d[0] for d in cur.description]
             rows = cur.fetchall()
             cur.close()
             conn.close()
             return pd.DataFrame(rows, columns=cols)
         else:
-            from src.database import ForwardSignal, MODEL_VERSION, get_session
             from sqlalchemy import select
+
+            from src.database import MODEL_VERSION, ForwardSignal, get_session
+
             sess = get_session()
-            fs = sess.execute(
-                select(ForwardSignal)
-                .where(ForwardSignal.model_version == MODEL_VERSION)
-                .order_by(ForwardSignal.trade_date.desc(), ForwardSignal.stock_id)
-            ).scalars().all()
+            fs = (
+                sess.execute(
+                    select(ForwardSignal)
+                    .where(ForwardSignal.model_version == MODEL_VERSION)
+                    .order_by(ForwardSignal.trade_date.desc(), ForwardSignal.stock_id)
+                )
+                .scalars()
+                .all()
+            )
             sess.close()
-            return pd.DataFrame([{
-                "trade_date":    r.trade_date,
-                "stock_id":      r.stock_id,
-                "stock_name":    r.stock_name,
-                "pt_score":      r.pt_score,
-                "setup_type":    r.setup_type,
-                "trade_signal":  r.trade_signal,
-                "ma20_gap":      r.ma20_gap,
-                "ma60_gap":      r.ma60_gap,
-                "ma60_slope":    r.ma60_slope,
-                "vol_ratio":     r.vol_ratio,
-                "total_score":   r.total_score,
-                "rec_level":     r.rec_level,
-                "model_version": r.model_version,
-                "locked_at":     r.locked_at,
-            } for r in fs])
-    except Exception as e:
+            return pd.DataFrame(
+                [
+                    {
+                        "trade_date": r.trade_date,
+                        "stock_id": r.stock_id,
+                        "stock_name": r.stock_name,
+                        "pt_score": r.pt_score,
+                        "setup_type": r.setup_type,
+                        "trade_signal": r.trade_signal,
+                        "ma20_gap": r.ma20_gap,
+                        "ma60_gap": r.ma60_gap,
+                        "ma60_slope": r.ma60_slope,
+                        "vol_ratio": r.vol_ratio,
+                        "total_score": r.total_score,
+                        "rec_level": r.rec_level,
+                        "model_version": r.model_version,
+                        "locked_at": r.locked_at,
+                    }
+                    for r in fs
+                ]
+            )
+    except Exception:
         return pd.DataFrame()
 
 
@@ -170,9 +215,17 @@ def _credibility_badge(n_dedup: int, p_value, pass_threshold: float = 0.05) -> t
 
 def _overall_stats(si: dict | None, key: str = "dedup_20") -> dict:
     """Extract overall 20D/60D stats from sample_independence[key]."""
-    empty = {"n": 0, "mean": None, "win_rate": None, "p_value": None,
-             "ci_low": None, "ci_high": None, "cohens_d": None,
-             "boot_ci_low": None, "boot_ci_high": None}
+    empty = {
+        "n": 0,
+        "mean": None,
+        "win_rate": None,
+        "p_value": None,
+        "ci_low": None,
+        "ci_high": None,
+        "cohens_d": None,
+        "boot_ci_low": None,
+        "boot_ci_high": None,
+    }
     if not si or key not in si:
         return {"n": 0, "stats_20d": empty, "stats_60d": empty}
     return si[key]
@@ -201,16 +254,20 @@ def page_research_backtest() -> None:
   </div>
 </div>""")
 
-    tab_r, tab_f = st.tabs([
-        "🧪 歷史研究（Research / In-Sample）",
-        "🔒 未來驗證（Forward / Out-of-Sample）",
-    ])
+    tab_r, tab_f = st.tabs(
+        [
+            "🧪 歷史研究（Research / In-Sample）",
+            "🔒 未來驗證（Forward / Out-of-Sample）",
+        ]
+    )
 
     # ── 🧪 歷史研究（Research / In-Sample）──────────────────────
     with tab_r:
         res = _load_research()
         if not res:
-            st.error("Research Backtest 計算失敗（空結果）。請點側欄「🔄 重新整理資料」再試。")
+            st.error(
+                "Research Backtest 計算失敗（空結果）。請點側欄「🔄 重新整理資料」再試。"
+            )
             return
         if "_error" in res:
             st.error("Research Backtest 計算失敗，詳細錯誤如下：")
@@ -218,12 +275,12 @@ def page_research_backtest() -> None:
             st.info("請點側欄「🔄 重新整理資料」清除快取後再試。")
             return
 
-        n_total    = res.get("n_total_candidates", 0)
-        n_usable   = res.get("n_usable", 0)
+        n_total = res.get("n_total_candidates", 0)
+        n_usable = res.get("n_usable", 0)
         n_dedup_20 = res.get("n_dedup_20", 0)
         n_dedup_60 = res.get("n_dedup_60", 0)
-        raw_df     = res.get("raw_df", pd.DataFrame())
-        si         = res.get("sample_independence") or {}
+        raw_df = res.get("raw_df", pd.DataFrame())
+        si = res.get("sample_independence") or {}
 
         if raw_df.empty:
             st.info("無可用資料。請確認 cutoff 前有 analysis_results 記錄。")
@@ -231,16 +288,16 @@ def page_research_backtest() -> None:
 
         date_min = raw_df["date"].min() if not raw_df.empty else None
         date_max = raw_df["date"].max() if not raw_df.empty else None
-        n_dates  = raw_df["date"].nunique() if not raw_df.empty else 0
+        n_dates = raw_df["date"].nunique() if not raw_df.empty else 0
 
         # ── A. 研究目前進度與可信度 ──────────────────────────
         st.markdown("### A. 研究目前進度與可信度")
 
         overall = _overall_stats(si, "dedup_20")
-        s20     = overall.get("stats_20d", {})
-        s60     = overall.get("stats_60d", {})
-        p20     = s20.get("p_value")
-        p60     = s60.get("p_value")
+        s20 = overall.get("stats_20d", {})
+        s60 = overall.get("stats_60d", {})
+        p20 = s20.get("p_value")
+        p60 = s60.get("p_value")
 
         _badge20_icon, _badge20_lbl, _badge20_col = _credibility_badge(n_dedup_20, p20)
         _badge60_icon, _badge60_lbl, _badge60_col = _credibility_badge(n_dedup_60, p60)
@@ -250,7 +307,8 @@ def page_research_backtest() -> None:
         _dedup60_str = f"{n_dedup_60:,}" if isinstance(n_dedup_60, int) else "—"
         _date_str = (
             f"{str(date_min)[:10]} ～ {str(date_max)[:10]}"
-            if date_min is not None else "—"
+            if date_min is not None
+            else "—"
         )
         st.html(f"""
 <style>
@@ -307,16 +365,17 @@ def page_research_backtest() -> None:
             "Alpha = 超額報酬 = 股票報酬 − 0050 同期報酬。去重確保每檔股票每 20 個交易日最多計入一次。"
         )
 
-        _mean20  = s20.get("mean")
-        _wr20    = s20.get("win_rate")
-        _p20     = s20.get("p_value")
-        _d20     = s20.get("cohens_d")
-        _mean60  = s60.get("mean")
-        _wr60    = s60.get("win_rate")
-        _p60     = s60.get("p_value")
+        _mean20 = s20.get("mean")
+        _wr20 = s20.get("win_rate")
+        _p20 = s20.get("p_value")
+        _d20 = s20.get("cohens_d")
+        _mean60 = s60.get("mean")
+        _wr60 = s60.get("win_rate")
+        _p60 = s60.get("p_value")
 
         def _color_alpha(v):
-            if v is None: return "#888"
+            if v is None:
+                return "#888"
             return "#2e7d32" if v > 0 else "#c62828"
 
         st.html(f"""
@@ -365,7 +424,11 @@ def page_research_backtest() -> None:
                 _p_note = f"p={_p20:.3f}（< 0.05），統計上顯著。"
             else:
                 _p_note = f"p={_p20:.3f}（≥ 0.05），尚不顯著。"
-        _d_note = f"效應量 Cohen's d = {_fmt_d(_d20)}（S≥0.2 小、M≥0.5 中、L≥0.8 大）。" if _d20 else ""
+        _d_note = (
+            f"效應量 Cohen's d = {_fmt_d(_d20)}（S≥0.2 小、M≥0.5 中、L≥0.8 大）。"
+            if _d20
+            else ""
+        )
         if _p_note or _d_note:
             st.caption(f"📊 {_p_note} {_d_note}")
 
@@ -389,8 +452,12 @@ def page_research_backtest() -> None:
         # ── C. 研究資料量 ─────────────────────────────────────
         st.markdown("### C. 研究資料量")
 
-        _date_min_str = str(date_min)[:10].replace("-", "/") if date_min is not None else "—"
-        _date_max_str = str(date_max)[:10].replace("-", "/") if date_max is not None else "—"
+        _date_min_str = (
+            str(date_min)[:10].replace("-", "/") if date_min is not None else "—"
+        )
+        _date_max_str = (
+            str(date_max)[:10].replace("-", "/") if date_max is not None else "—"
+        )
 
         st.html(f"""
 <style>
@@ -480,39 +547,45 @@ def page_research_backtest() -> None:
                     ("20日去重（Dedup 20D）", "dedup_20"),
                     ("60日去重（Dedup 60D）", "dedup_60"),
                 ]:
-                    v   = si.get(ver, {})
+                    v = si.get(ver, {})
                     s20 = v.get("stats_20d", {})
                     s60 = v.get("stats_60d", {})
                     ci20 = (
                         f"[{s20['ci_low']:+.2f}%, {s20['ci_high']:+.2f}%]"
-                        if s20.get("ci_low") is not None else "—"
+                        if s20.get("ci_low") is not None
+                        else "—"
                     )
                     ci60 = (
                         f"[{s60['ci_low']:+.2f}%, {s60['ci_high']:+.2f}%]"
-                        if s60.get("ci_low") is not None else "—"
+                        if s60.get("ci_low") is not None
+                        else "—"
                     )
                     boot20 = (
                         f"[{s20['boot_ci_low']:+.2f}%, {s20['boot_ci_high']:+.2f}%]"
-                        if s20.get("boot_ci_low") is not None else "—"
+                        if s20.get("boot_ci_low") is not None
+                        else "—"
                     )
                     boot60 = (
                         f"[{s60['boot_ci_low']:+.2f}%, {s60['boot_ci_high']:+.2f}%]"
-                        if s60.get("boot_ci_low") is not None else "—"
+                        if s60.get("boot_ci_low") is not None
+                        else "—"
                     )
-                    si_rows.append({
-                        "版本":           label,
-                        "n":              v.get("n", 0),
-                        "20D均Alpha":     _fmt_pct(s20.get("mean")),
-                        "20D p值":        _fmt_p(s20.get("p_value")),
-                        "20D t CI":       ci20,
-                        "20D Boot CI":    boot20,
-                        "20D Cohen'd":    _fmt_d(s20.get("cohens_d")),
-                        "60D均Alpha":     _fmt_pct(s60.get("mean")),
-                        "60D p值":        _fmt_p(s60.get("p_value")),
-                        "60D t CI":       ci60,
-                        "60D Boot CI":    boot60,
-                        "60D Cohen'd":    _fmt_d(s60.get("cohens_d")),
-                    })
+                    si_rows.append(
+                        {
+                            "版本": label,
+                            "n": v.get("n", 0),
+                            "20D均Alpha": _fmt_pct(s20.get("mean")),
+                            "20D p值": _fmt_p(s20.get("p_value")),
+                            "20D t CI": ci20,
+                            "20D Boot CI": boot20,
+                            "20D Cohen'd": _fmt_d(s20.get("cohens_d")),
+                            "60D均Alpha": _fmt_pct(s60.get("mean")),
+                            "60D p值": _fmt_p(s60.get("p_value")),
+                            "60D t CI": ci60,
+                            "60D Boot CI": boot60,
+                            "60D Cohen'd": _fmt_d(s60.get("cohens_d")),
+                        }
+                    )
                 st.dataframe(
                     pd.DataFrame(si_rows).set_index("版本"),
                     use_container_width=True,
@@ -525,13 +598,15 @@ def page_research_backtest() -> None:
                 )
 
         # PT Score 分組
-        n_with_pt    = res.get("n_with_pt", 0)
+        n_with_pt = res.get("n_with_pt", 0)
         n_without_pt = res.get("n_without_pt", 0)
-        pt_cov       = res.get("pt_coverage_pct", 0.0)
-        pt_total     = n_with_pt + n_without_pt
+        pt_cov = res.get("pt_coverage_pct", 0.0)
+        pt_total = n_with_pt + n_without_pt
 
-        with st.expander(f"📊 PT 分數分組 (PT Score Buckets) — 主要假說 · Coverage {pt_cov:.1f}%",
-                         expanded=pt_cov >= 5.0):
+        with st.expander(
+            f"📊 PT 分數分組 (PT Score Buckets) — 主要假說 · Coverage {pt_cov:.1f}%",
+            expanded=pt_cov >= 5.0,
+        ):
             st.caption(
                 "假說：Price Trend Score（PT Score）越高的股票，未來報酬是否越好？  \n"
                 "PT ≥ 60 = 技術型態偏強；PT < 60 = 型態偏弱或無明顯方向。"
@@ -543,7 +618,9 @@ def page_research_backtest() -> None:
                     "cutoff（2026-10-09）後每日執行可逐步累積真實 PT Score。"
                 )
             else:
-                st.caption(f"僅含有真實 PT Score 的 {n_with_pt:,} 筆（NULL 不歸入任何 bucket）。")
+                st.caption(
+                    f"僅含有真實 PT Score 的 {n_with_pt:,} 筆（NULL 不歸入任何 bucket）。"
+                )
                 _render_stats_table(res.get("by_pt_bucket"), "pt_bucket")
 
         # Setup Type 分組
@@ -592,10 +669,21 @@ def page_research_backtest() -> None:
         # Raw data
         with st.expander("📋 原始資料（含所有欄位）", expanded=False):
             show_cols = [
-                "date", "stock_id", "pt_score", "setup_type", "trade_signal",
-                "ma20_gap", "ma60_gap", "vol_ratio", "total_score",
-                "ret_20d", "ret_60d", "alpha_20d", "alpha_60d",
-                "regime", "ym",
+                "date",
+                "stock_id",
+                "pt_score",
+                "setup_type",
+                "trade_signal",
+                "ma20_gap",
+                "ma60_gap",
+                "vol_ratio",
+                "total_score",
+                "ret_20d",
+                "ret_60d",
+                "alpha_20d",
+                "alpha_60d",
+                "regime",
+                "ym",
             ]
             st.dataframe(
                 raw_df[[c for c in show_cols if c in raw_df.columns]],
@@ -621,20 +709,32 @@ def page_research_backtest() -> None:
             return
 
         n_fwd = len(fwd_df)
-        n_fwd_dates = fwd_df["trade_date"].nunique() if "trade_date" in fwd_df.columns else 0
+        n_fwd_dates = (
+            fwd_df["trade_date"].nunique() if "trade_date" in fwd_df.columns else 0
+        )
 
         from datetime import date as _date_cls
+
         _today = _date_cls.today()
         mature_dates = (
-            fwd_df["trade_date"]
-            .apply(lambda d: (_today - d).days >= 28 if hasattr(d, "day") else False)
+            fwd_df["trade_date"].apply(
+                lambda d: (_today - d).days >= 28 if hasattr(d, "day") else False
+            )
             if "trade_date" in fwd_df.columns
             else pd.Series([], dtype=bool)
         )
         n_mature = int(mature_dates.sum())
 
-        _fwd_date_max = str(fwd_df["trade_date"].max())[:10].replace("-", "/") if "trade_date" in fwd_df.columns else "—"
-        _fwd_date_min = str(fwd_df["trade_date"].min())[:10].replace("-", "/") if "trade_date" in fwd_df.columns else "—"
+        _fwd_date_max = (
+            str(fwd_df["trade_date"].max())[:10].replace("-", "/")
+            if "trade_date" in fwd_df.columns
+            else "—"
+        )
+        _fwd_date_min = (
+            str(fwd_df["trade_date"].min())[:10].replace("-", "/")
+            if "trade_date" in fwd_df.columns
+            else "—"
+        )
 
         st.html(f"""
 <style>
@@ -673,19 +773,32 @@ def page_research_backtest() -> None:
                 "才能計算有意義的統計結果。目前尚不能對策略做出驗證結論，請繼續每日執行分析。"
             )
         else:
-            st.success(f"✅ 已有 {n_mature} 筆成熟 observation（>= 20D），可開始計算 Forward Alpha。")
+            st.success(
+                f"✅ 已有 {n_mature} 筆成熟 observation（>= 20D），可開始計算 Forward Alpha。"
+            )
             st.caption("Forward 統計計算功能將在此後版本啟用。")
 
         st.divider()
 
         with st.expander("📋 已凍結 Forward Signals 明細", expanded=False):
             show_fwd_cols = [
-                "trade_date", "stock_id", "stock_name",
-                "candidate_rank", "rec_level", "confidence",
-                "close_at_signal", "market_regime_at_signal",
-                "pt_score", "setup_type", "trade_signal",
-                "ma20_gap", "ma60_gap", "vol_ratio",
-                "total_score", "industry", "model_version",
+                "trade_date",
+                "stock_id",
+                "stock_name",
+                "candidate_rank",
+                "rec_level",
+                "confidence",
+                "close_at_signal",
+                "market_regime_at_signal",
+                "pt_score",
+                "setup_type",
+                "trade_signal",
+                "ma20_gap",
+                "ma60_gap",
+                "vol_ratio",
+                "total_score",
+                "industry",
+                "model_version",
             ]
             st.dataframe(
                 fwd_df[[c for c in show_fwd_cols if c in fwd_df.columns]],

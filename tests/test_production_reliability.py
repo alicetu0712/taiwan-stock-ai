@@ -15,31 +15,33 @@ Covers:
 """
 
 from datetime import date
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_sqlite(init: bool = True):
     """Return an in-memory SQLite engine, optionally initialised."""
     engine = create_engine("sqlite:///:memory:")
     if init:
-        from src.database import Base, init_db
+        from src.database import init_db
+
         init_db(engine)
     return engine
 
 
 # ── M1-M3: Migration Fail-Closed ─────────────────────────────────────────────
 
+
 class TestMigrationFailClosed:
 
     def test_M1_missing_required_column_raises(self):
         """M1: _verify_schema_integrity raises RuntimeError when required column absent."""
-        from src.database import _verify_schema_integrity, Base
+        from src.database import Base, _verify_schema_integrity
 
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
@@ -47,13 +49,15 @@ class TestMigrationFailClosed:
         # Recreate forward_signals without is_valid to simulate a migration gap.
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE IF EXISTS forward_signals"))
-            conn.execute(text(
-                "CREATE TABLE forward_signals ("
-                "id INTEGER PRIMARY KEY, "
-                "trade_date DATE NOT NULL, "
-                "stock_id VARCHAR(10) NOT NULL"
-                ")"
-            ))
+            conn.execute(
+                text(
+                    "CREATE TABLE forward_signals ("
+                    "id INTEGER PRIMARY KEY, "
+                    "trade_date DATE NOT NULL, "
+                    "stock_id VARCHAR(10) NOT NULL"
+                    ")"
+                )
+            )
 
         with pytest.raises(RuntimeError, match="is_valid"):
             _verify_schema_integrity(engine)
@@ -68,33 +72,38 @@ class TestMigrationFailClosed:
 
     def test_M3_safe_add_cols_idempotent(self):
         """M3: calling _safe_add_cols twice with the same column list is a no-op."""
-        from src.database import _safe_add_cols, Base
+        from src.database import Base, _safe_add_cols
 
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
 
         new_cols = [("test_col_idempotent", "INTEGER DEFAULT 0")]
         _safe_add_cols(engine, "analysis_results", new_cols)
-        _safe_add_cols(engine, "analysis_results", new_cols)  # second call — should not raise
+        _safe_add_cols(
+            engine, "analysis_results", new_cols
+        )  # second call — should not raise
 
         from sqlalchemy import inspect as _insp
+
         cols = {c["name"] for c in _insp(engine).get_columns("analysis_results")}
         assert "test_col_idempotent" in cols
 
     def test_M3_idempotent_does_not_destroy_data(self):
         """M3b: re-running migration does not alter existing rows."""
-        from src.database import Base, AnalysisResult
+        from src.database import AnalysisResult
 
         engine = _make_sqlite(init=True)
         Session = sessionmaker(bind=engine)
         s = Session()
         ar = AnalysisResult(stock_id="2330", date=date(2026, 10, 29), total_score=80.0)
-        s.add(ar); s.commit()
+        s.add(ar)
+        s.commit()
         row_id = ar.id
         s.close()
 
         # Re-run all migrations
         from src.database import init_db
+
         init_db(engine)
 
         s2 = Session()
@@ -105,6 +114,7 @@ class TestMigrationFailClosed:
 
 
 # ── S1-S3: Sequence Integrity ─────────────────────────────────────────────────
+
 
 class TestSequenceIntegrity:
 
@@ -150,8 +160,8 @@ class TestSequenceIntegrity:
 
     def test_S3_sync_no_duplicate_on_second_run(self):
         """S3: sync_table on the same data twice produces exactly 1 row in destination."""
-        from src.database import AnalysisResult, Base
         from scripts.sync_to_neon import sync_table
+        from src.database import AnalysisResult, Base
 
         src = create_engine("sqlite:///:memory:")
         dst = create_engine("sqlite:///:memory:")
@@ -162,21 +172,32 @@ class TestSequenceIntegrity:
         DstS = sessionmaker(bind=dst)
 
         s = SrcS()
-        s.add(AnalysisResult(stock_id="2330", date=date(2026, 10, 20), total_score=70.0))
-        s.commit(); s.close()
+        s.add(
+            AnalysisResult(stock_id="2330", date=date(2026, 10, 20), total_score=70.0)
+        )
+        s.commit()
+        s.close()
 
         for _ in range(2):
             ss, ds = SrcS(), DstS()
-            sync_table(ss, ds, AnalysisResult, key_fields=["stock_id", "date"], days=365)
-            ss.close(); ds.close()
+            sync_table(
+                ss, ds, AnalysisResult, key_fields=["stock_id", "date"], days=365
+            )
+            ss.close()
+            ds.close()
 
         ds = DstS()
-        cnt = ds.query(AnalysisResult).filter_by(stock_id="2330", date=date(2026, 10, 20)).count()
+        cnt = (
+            ds.query(AnalysisResult)
+            .filter_by(stock_id="2330", date=date(2026, 10, 20))
+            .count()
+        )
         assert cnt == 1, f"Expected 1 row after two syncs, got {cnt}"
         ds.close()
 
 
 # ── Mock helpers for sequence tests ─────────────────────────────────────────
+
 
 def _make_selective_pg_execute(existing_tables: set, fail_on_setval: bool):
     """
@@ -185,7 +206,7 @@ def _make_selective_pg_execute(existing_tables: set, fail_on_setval: bool):
     - Returns a scalar MAX(id) = 0 for SELECT COALESCE(MAX(id), 0)
     - Raises Exception for setval if fail_on_setval=True
     """
-    call_count = [0]
+    call_count = [0]  # noqa: F841
 
     def _execute(stmt, *args, **kwargs):
         stmt_str = str(stmt)
@@ -202,7 +223,9 @@ def _make_selective_pg_execute(existing_tables: set, fail_on_setval: bool):
         # setval
         if "setval" in stmt_str.lower():
             if fail_on_setval:
-                raise Exception("permission denied for sequence analysis_results_id_seq")
+                raise Exception(
+                    "permission denied for sequence analysis_results_id_seq"
+                )
             return MagicMock()
         return MagicMock()
 
@@ -210,6 +233,7 @@ def _make_selective_pg_execute(existing_tables: set, fail_on_setval: bool):
 
 
 # ── F1-F4: Forward Signal Integrity ──────────────────────────────────────────
+
 
 class TestForwardSignalDiagnosis:
     """Verify _last_fs_diagnosis is correctly populated for each write_forward_signals path."""
@@ -227,6 +251,7 @@ class TestForwardSignalDiagnosis:
         so we must add Stock rows alongside DailyPrice rows.
         """
         from src.database import DailyPrice, Stock
+
         for i in range(1, 250):
             sid = str(1000 + i)
             session.add(Stock(stock_id=sid, name=f"Seed_{sid}", market="TWSE"))
@@ -294,6 +319,7 @@ class TestForwardSignalDiagnosis:
         s.commit()
 
         from tests.test_forward_signal_integrity import _make_ar
+
         ar = _make_ar(stock_id="2330")
 
         svc.write_forward_signals(s, trade_date, [ar])  # first → inserts
@@ -320,6 +346,7 @@ class TestForwardSignalDiagnosis:
         s.commit()
 
         from tests.test_forward_signal_integrity import _make_ar
+
         svc.write_forward_signals(s, trade_date, [_make_ar(stock_id="2330")])
         diag = svc._last_fs_diagnosis
 
