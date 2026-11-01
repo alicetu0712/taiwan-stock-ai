@@ -214,30 +214,9 @@ jobs:
                   )
                   sys.exit(1)
 
-              # ── Step 9e: candidate_pool 完成確認 ─────────────
-              # 規則：只要 Step 9e 有執行（有 last_checked_date = exec_date 的記錄）
-              # 就算通過。候選數量為零是合法狀態（上線初期或無新符合條件個股）。
-              cp_checked = conn.execute(text(
-                  "SELECT COUNT(*) FROM candidate_pool "
-                  "WHERE last_checked_date = :d"
-              ), {"d": exec_date}).scalar()
-
-              cp_history = conn.execute(text(
-                  "SELECT COUNT(*) FROM candidate_pool_history "
-                  "WHERE check_date = :d"
-              ), {"d": exec_date}).scalar()
-
-              print(
-                  f"candidate_pool [{exec_date}]: "
-                  f"checked={cp_checked}  history_records={cp_history}"
-              )
-
-              if is_trading and cp_history == 0:
-                  print(
-                      f"WARNING: Trading day {exec_date} — candidate_pool_history has 0 records. "
-                      "Step 9e may have failed or pool is newly initialised. "
-                      "This is non-fatal; check pipeline logs for [Step 9e] entry."
-                  )
+              # Note: candidate_pool (Step 9e) is updated by the daily pipeline
+              # (run_daily.py), not this overnight pipeline. Step 9e verification
+              # is performed in daily-pipeline.yml Post-run verification instead.
 
               print(f"\nPost-run overnight verification PASS  [{exec_date}]")
           PYEOF

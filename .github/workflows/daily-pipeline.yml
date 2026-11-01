@@ -216,5 +216,109 @@ jobs:
                       "verify manually.",
                   )
 
+              # ── Step 9e: candidate_pool 完整驗收 ────────────────
+              #
+              # 設計原則：
+              #   1. execution_logs.status='success' 已隱含 Step 9e 成功執行
+              #      （Step 9e 失敗會 raise，導致 status='failed'，上方已 exit(1)）。
+              #   2. 候選數量為零是合法狀態（上線初期 / 當日無新符合條件個股）。
+              #   3. 只要 DB 寫入一致性與 FK integrity 通過，就算 PASS。
+              #
+              cp_active = conn.execute(text(
+                  "SELECT COUNT(*) FROM candidate_pool "
+                  "WHERE status NOT IN ('triggered_buy', 'exited')"
+              )).scalar()
+
+              cp_checked_today = conn.execute(text(
+                  "SELECT COUNT(*) FROM candidate_pool "
+                  "WHERE last_checked_date = :d"
+              ), {"d": today}).scalar()
+
+              cp_history_today = conn.execute(text(
+                  "SELECT COUNT(*) FROM candidate_pool_history "
+                  "WHERE check_date = :d"
+              ), {"d": today}).scalar()
+
+              print(
+                  f"candidate_pool: active={cp_active}  "
+                  f"checked_today={cp_checked_today}  "
+                  f"history_today={cp_history_today}"
+              )
+
+              # Step 9e 執行確認：execution_logs.status='success' 已是充分條件。
+              # 附加提示：若 active > 0 但 checked_today = 0，可能代表日期比較有問題。
+              if cp_active > 0 and cp_checked_today == 0:
+                  print(
+                      f"WARNING: {cp_active} active candidate(s) exist but none have "
+                      f"last_checked_date={today}. "
+                      "Pipeline ran successfully (status=success) so Step 9e completed — "
+                      "this may indicate a date mismatch. Check logs."
+                  )
+
+              # FK integrity: candidate_pool_history.candidate_id → candidate_pool.id
+              bad_fk_history = conn.execute(text(
+                  "SELECT COUNT(*) FROM candidate_pool_history cph "
+                  "WHERE NOT EXISTS ("
+                  "  SELECT 1 FROM candidate_pool cp WHERE cp.id = cph.candidate_id"
+                  ")"
+              )).scalar()
+              if bad_fk_history > 0:
+                  print(
+                      f"ERROR: {bad_fk_history} candidate_pool_history row(s) have "
+                      "invalid candidate_id (FK broken).",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              # Status enum check: no records with invalid status values
+              bad_status = conn.execute(text(
+                  "SELECT COUNT(*) FROM candidate_pool "
+                  "WHERE status NOT IN ("
+                  "  'watching','near_entry','wait_pullback','overdue',"
+                  "  'triggered_buy','exited'"
+                  ")"
+              )).scalar()
+              if bad_status > 0:
+                  print(
+                      f"ERROR: {bad_status} candidate_pool row(s) have unknown status values.",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              # model_version isolation: all active records must carry a model_version
+              null_mv = conn.execute(text(
+                  "SELECT COUNT(*) FROM candidate_pool WHERE model_version IS NULL"
+              )).scalar()
+              if null_mv > 0:
+                  print(
+                      f"ERROR: {null_mv} candidate_pool row(s) have NULL model_version.",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              # triggered_buy integrity: every triggered_buy record should reference a
+              # valid forward_signal on the same stock + entry_date.
+              bad_buy_link = conn.execute(text(
+                  "SELECT COUNT(*) FROM candidate_pool cp "
+                  "WHERE cp.status = 'triggered_buy' "
+                  "AND cp.triggered_signal_id IS NOT NULL "
+                  "AND NOT EXISTS ("
+                  "  SELECT 1 FROM forward_signals fs "
+                  "  WHERE fs.id = cp.triggered_signal_id"
+                  ")"
+              )).scalar()
+              if bad_buy_link > 0:
+                  print(
+                      f"ERROR: {bad_buy_link} triggered_buy candidate(s) reference a "
+                      "non-existent forward_signal (FK broken).",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              print(
+                  f"candidate_pool integrity OK  "
+                  f"(active={cp_active}, fk=OK, status_enum=OK, model_version=OK, buy_link=OK)"
+              )
+
               print(f"\nPost-run verification PASS  [{today}]")
           PYEOF
