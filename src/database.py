@@ -7,7 +7,7 @@ database.py — SQLite 資料庫與 SQLAlchemy 設定
 
 import logging
 from datetime import date as _date
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -906,8 +906,8 @@ class ActualPosition(Base):
     original_plan_snapshot = Column(Text, nullable=True)
 
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class TradeExecution(Base):
@@ -946,8 +946,8 @@ class TradeExecution(Base):
     cancel_reason = Column(String(200), nullable=True)
     cancelled_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class PositionPlanChange(Base):
@@ -963,13 +963,13 @@ class PositionPlanChange(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     # FK → actual_positions.id
     position_id = Column(Integer, nullable=False, index=True)
-    changed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    changed_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     # target_price / stop_price
     field_name = Column(String(30), nullable=False)
     old_value = Column(Numeric(10, 2, asdecimal=True), nullable=True)
     new_value = Column(Numeric(10, 2, asdecimal=True), nullable=True)
     reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 # ── 引擎與 Session ───────────────────────────────────────────

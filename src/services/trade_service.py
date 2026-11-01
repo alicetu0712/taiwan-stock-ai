@@ -14,7 +14,7 @@ trade_service.py — 使用者真實成交紀錄服務（ACTUAL 層）
 
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
@@ -210,8 +210,8 @@ def cancel_execution(session, execution_id: int, reason: str):
 
     exec_rec.is_cancelled = True
     exec_rec.cancel_reason = reason
-    exec_rec.cancelled_at = datetime.utcnow()
-    exec_rec.updated_at = datetime.utcnow()
+    exec_rec.cancelled_at = datetime.now(timezone.utc)
+    exec_rec.updated_at = datetime.now(timezone.utc)
     session.flush()
 
     pos = (
@@ -255,11 +255,11 @@ def update_plan(
 
     old_value = getattr(pos, field_name)
     setattr(pos, field_name, new_value)
-    pos.updated_at = datetime.utcnow()
+    pos.updated_at = datetime.now(timezone.utc)
 
     change = PositionPlanChange(
         position_id=position_id,
-        changed_at=datetime.utcnow(),
+        changed_at=datetime.now(timezone.utc),
         field_name=field_name,
         old_value=old_value,
         new_value=new_value,
@@ -322,7 +322,7 @@ def _validate_execution_inputs(side, shares, price, fee, tax):
 def _check_duplicate(session, position_id, side, exec_date, price, shares):
     from src.database import TradeExecution
 
-    cutoff = datetime.utcnow() - timedelta(seconds=_DUPLICATE_WINDOW_SECONDS)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_DUPLICATE_WINDOW_SECONDS)
     dup = (
         session.query(TradeExecution)
         .filter(
@@ -422,7 +422,7 @@ def _recalculate_position(session, pos) -> None:
     else:
         pos.status = "open"
 
-    pos.updated_at = datetime.utcnow()
+    pos.updated_at = datetime.now(timezone.utc)
     session.flush()
 
 
