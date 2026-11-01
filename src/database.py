@@ -746,7 +746,7 @@ class CandidatePool(Base):
     # ── 候選週期 ────────────────────────────────────────────────
     first_seen_date = Column(Date, nullable=False)
     last_checked_date = Column(Date, nullable=False)
-    # watching / near_entry / overdue / triggered_buy / exited
+    # watching / near_entry / wait_pullback / overdue / triggered_buy / exited
     status = Column(String(20), nullable=False)
     trading_days_watched = Column(Integer, default=0)
 
@@ -1182,6 +1182,13 @@ _SCHEMA_REQUIRED_COLS: dict = {
     }),
     "execution_logs": frozenset({
         "date", "status",
+    }),
+    "candidate_pool": frozenset({
+        "stock_id", "model_version", "pool_version",
+        "first_seen_date", "last_checked_date", "status",
+    }),
+    "candidate_pool_history": frozenset({
+        "candidate_id", "check_date", "status",
     }),
 }
 

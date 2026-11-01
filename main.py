@@ -797,13 +797,19 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
                 logger.warning(f"[Step 9c] 績效回填失敗（recoverable next run）：{oe}")
 
         # ── Step 9d: foe_v1 前向執行結果評估 ─────────────────
+        # 非致命：失敗時自動補算（compute_foe_outcomes 以 outcomes_computed_at IS NULL 過濾）
         try:
             from src.services.outcome_service import compute_foe_outcomes
             foe_updated = compute_foe_outcomes(session, trade_date)
             if foe_updated:
                 logger.info(f"[Step 9d] foe_v1 outcomes: {foe_updated} rows updated")
+            else:
+                logger.info("[Step 9d] foe_v1 outcomes: 無待計算列")
         except Exception as e:
-            logger.warning(f"[Step 9d] foe_v1 outcomes failed (非致命): {e}")
+            logger.error(
+                f"[Step 9d] foe_v1 outcomes failed: {e} "
+                f"— 下次執行將自動補算（outcomes_computed_at IS NULL filter）"
+            )
 
         # ── Step 9e: 候選追蹤池更新 ──────────────────────────
         try:

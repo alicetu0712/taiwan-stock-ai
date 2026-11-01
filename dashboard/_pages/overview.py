@@ -295,6 +295,12 @@ def _render_trading_reference(
 def _render_candidate_pool(stock_prices: dict) -> None:
     """進場候選追蹤池 UI（取代原 New Opportunities + Watch List）。"""
     pool_data = load_candidate_pool_data()
+
+    # Issue 3: 明確顯示 DB 錯誤，不以空清單掩蓋
+    if pool_data.get("error"):
+        st.error(f"候選資料讀取失敗：{pool_data['error']}")
+        return
+
     active = pool_data["active"]
     recent_exits = pool_data["recent_exits"]
     stats = pool_data["stats"]
@@ -304,47 +310,76 @@ def _render_candidate_pool(stock_prices: dict) -> None:
         st.info("候選追蹤池目前沒有記錄。系統正式上線後開始累積。")
         return
 
-    # ── 狀態分組 ───────────────────────────────────────────────
-    near_entry  = [c for c in active if c.status == "near_entry"]
-    watching    = [c for c in active if c.status in ("watching", "overdue")]
-    today_new   = [c for c in active if c.first_seen_date == c.last_checked_date]
-    today_exited = [c for c in recent_exits if c.exit_date == (
-        recent_exits[0].exit_date if recent_exits else None)]
+    # Issue 9: 最近一次成功分析的交易日（不用 date.today()）
+    as_of_date = None
+    if active:
+        as_of_date = max(c.last_checked_date for c in active)
+    elif recent_exits:
+        as_of_date = max(c.exit_date for c in recent_exits if c.exit_date)
+    as_of_label = f"{as_of_date} 分析日資料" if as_of_date else "最新分析日資料"
 
-    # ── 區塊標題 ───────────────────────────────────────────────
-    if near_entry:
+    # ── 狀態分組 ───────────────────────────────────────────────
+    # Issue 10: 加入 wait_pullback 群組
+    near_entry_group    = [c for c in active if c.status == "near_entry"]
+    wait_pullback_group = [c for c in active if c.status == "wait_pullback"]
+    watching_group      = [c for c in active if c.status in ("watching", "overdue")]
+
+    # Issue 9: 用 as_of_date 判斷「最新交易日新進」，不用 today()
+    new_entries = [c for c in active if as_of_date and c.first_seen_date == as_of_date]
+
+    # ── 接近進場（near_entry）──────────────────────────────────
+    if near_entry_group:
         st.markdown(
-            f'<div class="section-title">接近進場條件（{len(near_entry)} 檔）</div>',
+            f'<div class="section-title">接近進場（{len(near_entry_group)} 檔）'
+            f'<span style="font-size:0.75rem;font-weight:400;color:#90a4ae;margin-left:8px">'
+            f'型態接近突破確認，進場條件即將成立</span></div>',
             unsafe_allow_html=True,
         )
-        for c in near_entry:
+        for c in near_entry_group:
             _render_candidate_card(c, today_history, stock_prices, highlight=True)
 
-    if watching:
+    # ── 等待回檔（wait_pullback）─────────────────────────────
+    if wait_pullback_group:
         st.markdown(
-            f'<div class="section-title">觀察中（{len(watching)} 檔）</div>',
+            f'<div class="section-title">等待回檔（{len(wait_pullback_group)} 檔）'
+            f'<span style="font-size:0.75rem;font-weight:400;color:#90a4ae;margin-left:8px">'
+            f'現價偏高，等回測至合理進場區後再考慮進場</span></div>',
             unsafe_allow_html=True,
         )
-        for c in watching:
+        for c in wait_pullback_group:
             _render_candidate_card(c, today_history, stock_prices, highlight=False)
 
-    if today_new:
-        new_names = "、".join(
-            (c.stock_name or c.stock_id) for c in today_new[:5]
+    # ── 觀察中（watching / overdue）───────────────────────────
+    if watching_group:
+        st.markdown(
+            f'<div class="section-title">觀察中（{len(watching_group)} 檔）'
+            f'<span style="font-size:0.75rem;font-weight:400;color:#90a4ae;margin-left:8px">'
+            f'符合追蹤條件，尚未接近進場時機</span></div>',
+            unsafe_allow_html=True,
         )
-        extra = f"等 {len(today_new)} 檔" if len(today_new) > 5 else f"{len(today_new)} 檔"
-        st.caption(f"今日新進候選：{new_names}（{extra}）")
+        for c in watching_group:
+            _render_candidate_card(c, today_history, stock_prices, highlight=False)
+
+    # Issue 9: 標示最新交易日新進，不說「今日」
+    if new_entries:
+        new_names = "、".join(
+            (c.stock_name or c.stock_id) for c in new_entries[:5]
+        )
+        extra = f"等 {len(new_entries)} 檔" if len(new_entries) > 5 else f"{len(new_entries)} 檔"
+        st.caption(f"最新交易日新進候選（{as_of_label}）：{new_names}（{extra}）")
 
     if not active:
         st.info("目前沒有符合追蹤條件的候選股票。")
 
-    # ── 今日退出 ────────────────────────────────────────────────
+    # ── 最近退出 ──────────────────────────────────────────────
     if recent_exits:
         latest_exit_date = max(c.exit_date for c in recent_exits if c.exit_date)
-        today_exit_list  = [c for c in recent_exits if c.exit_date == latest_exit_date]
-        if today_exit_list:
-            with st.expander(f"今日退出與退出原因（{len(today_exit_list)} 檔）"):
-                for c in today_exit_list:
+        latest_exit_list = [c for c in recent_exits if c.exit_date == latest_exit_date]
+        if latest_exit_list:
+            with st.expander(
+                f"最近退出紀錄（{latest_exit_date} · {len(latest_exit_list)} 檔）"
+            ):
+                for c in latest_exit_list:
                     reason_map = {
                         "TRIGGERED_BUY":   "正式 BUY 觸發",
                         "THESIS_FAILED":   "技術型態失效或賣出訊號",
@@ -384,7 +419,7 @@ def _render_candidate_pool(stock_prices: dict) -> None:
             else:
                 st.caption("資料累積中（需 ≥ 5 個完成週期才計算轉換率）")
             st.caption(
-                "⚠️ 以上為候選池追蹤指標，不等於策略交易績效。"
+                "以上為候選池追蹤指標，不等於策略交易績效。"
                 "正式績效請見 Evidence Dashboard。"
             )
 
@@ -400,14 +435,20 @@ def _render_candidate_card(cand, today_history: dict, stock_prices: dict,
     days = cand.trading_days_watched or 0
     overdue = cand.status == "overdue"
 
-    # 狀態徽章
+    # 狀態徽章（Issue 10）
     status_badges = {
-        "near_entry": ('<span style="background:#e65100;color:#fff;border-radius:4px;'
-                       'padding:2px 8px;font-size:0.68rem;font-weight:700">接近進場</span>', "#1a1a2e", "#e65100"),
-        "watching":   ('<span style="background:#1565c0;color:#fff;border-radius:4px;'
-                       'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察中</span>', "#0d0d1a", "#1565c0"),
-        "overdue":    ('<span style="background:#5d4037;color:#fff;border-radius:4px;'
-                       'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察逾期</span>', "#0d0d1a", "#5d4037"),
+        "near_entry":    ('<span style="background:#e65100;color:#fff;border-radius:4px;'
+                          'padding:2px 8px;font-size:0.68rem;font-weight:700">接近進場</span>',
+                          "#1a1a2e", "#e65100"),
+        "wait_pullback": ('<span style="background:#6a1b9a;color:#fff;border-radius:4px;'
+                          'padding:2px 8px;font-size:0.68rem;font-weight:700">等待回檔</span>',
+                          "#0d0d1a", "#6a1b9a"),
+        "watching":      ('<span style="background:#1565c0;color:#fff;border-radius:4px;'
+                          'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察中</span>',
+                          "#0d0d1a", "#1565c0"),
+        "overdue":       ('<span style="background:#5d4037;color:#fff;border-radius:4px;'
+                          'padding:2px 8px;font-size:0.68rem;font-weight:700">觀察逾期</span>',
+                          "#0d0d1a", "#5d4037"),
     }
     badge_html, bg_color, border_color = status_badges.get(
         cand.status, ('', "#0d0d1a", "#444")

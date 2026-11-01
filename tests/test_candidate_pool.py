@@ -4,7 +4,7 @@ tests/test_candidate_pool.py — 候選追蹤池 regression tests
 覆蓋：
 1. DB schema：CandidatePool / CandidatePoolHistory 欄位與 UniqueConstraint
 2. 入池條件：eligible / not eligible（各種 setup_type / signal 組合）
-3. near_entry 判斷：wait_pullback + near_breakout
+3. 狀態判斷：wait_pullback / near_entry / watching（語意區分）
 4. 狀態機：watching → near_entry → overdue → exited / triggered_buy
 5. BUY 偵測：ForwardSignal 連結
 6. 退出條件：THESIS_FAILED / EXPIRED / TRIGGERED_BUY
@@ -175,13 +175,16 @@ def test_not_eligible_rec_sell_decision():
     assert _is_eligible_new_candidate(ar, rec) is False
 
 
-# ── 3. near_entry 判斷 ─────────────────────────────────────────────────────────
+# ── 3. 狀態判斷（wait_pullback / near_entry / watching 語意區分）─────────────────
 
-def test_near_entry_wait_pullback():
+def test_wait_pullback_status():
+    """decision_code == 'wait_pullback' → status 'wait_pullback'（不是 near_entry）。
+    等待回檔 ≠ 接近進場：前者現價偏高須等回測，後者型態已接近突破確認。
+    """
     from src.services.candidate_pool_service import _determine_status
     ar = _make_ar(setup_type="breakout", trade_signal="buy")
     rec = _make_rec(decision_code="wait_pullback")
-    assert _determine_status(ar, rec) == "near_entry"
+    assert _determine_status(ar, rec) == "wait_pullback"
 
 
 def test_near_entry_setup_near_breakout():
@@ -356,19 +359,20 @@ def test_expired_after_max_trading_days():
     engine = _make_engine()
     s = _make_session(engine)
 
-    d0 = date(2026, 11, 1)
-    # 建立 MAX_WATCH_TRADING_DAYS + 1 個交易日
-    trading_days = [d0 + timedelta(days=i) for i in range(MAX_WATCH_TRADING_DAYS + 2)]
-    _seed_0050_prices(s, trading_days)
-    _seed_analysis_result(s, "2330", trading_days[0])  # 入池日
+    d0 = date(2026, 11, 3)  # Monday
+    d1 = date(2026, 11, 24)  # arbitrary second run date (> d0)
+    _seed_analysis_result(s, "2330", d0)
 
     from src.services.candidate_pool_service import update_candidate_pool
-    update_candidate_pool(s, trading_days[0])
+    update_candidate_pool(s, d0)
 
-    # 模擬多天後（超過 MAX_WATCH_TRADING_DAYS）
-    check_day = trading_days[MAX_WATCH_TRADING_DAYS]
-    _seed_analysis_result(s, "2330", check_day, setup_type="near_breakout")
-    update_candidate_pool(s, check_day)
+    _seed_analysis_result(s, "2330", d1, setup_type="near_breakout")
+    # 強制交易日計數回傳 MAX_WATCH_TRADING_DAYS，與行事曆實作解耦
+    with patch(
+        "src.services.candidate_pool_service._count_trading_days",
+        return_value=MAX_WATCH_TRADING_DAYS,
+    ):
+        update_candidate_pool(s, d1)
 
     from src.database import CandidatePool
     cand = s.query(CandidatePool).filter_by(stock_id="2330").first()
@@ -465,24 +469,69 @@ def test_near_entry_not_downgraded_to_overdue():
     engine = _make_engine()
     s = _make_session(engine)
 
-    d0 = date(2026, 11, 1)
-    trading_days = [d0 + timedelta(days=i) for i in range(OVERDUE_TRADING_DAYS + 3)]
-    _seed_0050_prices(s, trading_days)
-    _seed_analysis_result(s, "2330", trading_days[0], setup_type="near_breakout")
+    d0 = date(2026, 11, 3)  # entry day
+    d1 = date(2026, 11, 17)  # check day (> d0, exact calendar not important with mock)
+    _seed_analysis_result(s, "2330", d0, setup_type="near_breakout")
 
     from src.services.candidate_pool_service import update_candidate_pool
-    update_candidate_pool(s, trading_days[0])
+    update_candidate_pool(s, d0)
 
-    # 在 OVERDUE 門檻後，仍維持 near_breakout → near_entry
-    check_day = trading_days[OVERDUE_TRADING_DAYS + 1]
-    _seed_analysis_result(s, "2330", check_day, setup_type="near_breakout")
-    update_candidate_pool(s, check_day)
+    _seed_analysis_result(s, "2330", d1, setup_type="near_breakout")
+    # 強制交易日計數回傳 OVERDUE 門檻 + 1，確認 near_entry 免疫
+    with patch(
+        "src.services.candidate_pool_service._count_trading_days",
+        return_value=OVERDUE_TRADING_DAYS + 1,
+    ):
+        update_candidate_pool(s, d1)
 
     from src.database import CandidatePool
     cand = s.query(CandidatePool).filter_by(stock_id="2330").first()
-    assert cand.status == "near_entry", (
-        "near_entry 狀態不應被降為 overdue"
+    assert cand.status == "near_entry", "near_entry 狀態不應被降為 overdue"
+    s.close()
+
+
+def test_wait_pullback_not_downgraded_to_overdue():
+    """wait_pullback 狀態（等待回檔）即使超過 OVERDUE_TRADING_DAYS 也不降為 overdue。"""
+    from src.services.candidate_pool_service import OVERDUE_TRADING_DAYS
+    engine = _make_engine()
+    s = _make_session(engine)
+
+    d0 = date(2026, 11, 3)
+    d1 = date(2026, 11, 17)
+    # 入池時 decision_code=wait_pullback → status wait_pullback
+    _seed_analysis_result(s, "2330", d0, setup_type="breakout")
+    from src.database import Recommendation
+    rec = Recommendation(
+        stock_id="2330", date=d0, decision_code="wait_pullback",
+        is_valid=True, total_score=65.0, stock_name="台積電",
     )
+    s.add(rec)
+    s.commit()
+
+    from src.services.candidate_pool_service import update_candidate_pool
+    update_candidate_pool(s, d0)
+
+    # 確認入池時狀態為 wait_pullback
+    from src.database import CandidatePool
+    cand = s.query(CandidatePool).filter_by(stock_id="2330").first()
+    assert cand.status == "wait_pullback"
+
+    _seed_analysis_result(s, "2330", d1, setup_type="breakout")
+    rec2 = Recommendation(
+        stock_id="2330", date=d1, decision_code="wait_pullback",
+        is_valid=True, total_score=65.0, stock_name="台積電",
+    )
+    s.add(rec2)
+    s.commit()
+
+    with patch(
+        "src.services.candidate_pool_service._count_trading_days",
+        return_value=OVERDUE_TRADING_DAYS + 1,
+    ):
+        update_candidate_pool(s, d1)
+
+    s.refresh(cand)
+    assert cand.status == "wait_pullback", "wait_pullback 狀態不應被降為 overdue"
     s.close()
 
 
@@ -589,3 +638,46 @@ def test_max_trading_days_constant():
 def test_overdue_is_less_than_max():
     from src.services.candidate_pool_service import OVERDUE_TRADING_DAYS, MAX_WATCH_TRADING_DAYS
     assert OVERDUE_TRADING_DAYS < MAX_WATCH_TRADING_DAYS
+
+
+# ── 15. total_score=None 拒絕入池 ───────────────────────────────────────────────
+
+def test_eligible_none_score_rejected():
+    """total_score=None 必須顯式拒絕，不依賴 'or 0.0' 的隱式處理。"""
+    from src.services.candidate_pool_service import _is_eligible_new_candidate
+    ar = _make_ar(setup_type="breakout", trade_signal="wait", total_score=None)
+    assert _is_eligible_new_candidate(ar, None) is False
+
+
+# ── 16. _count_trading_days 使用 TaiwanTradingCalendar ────────────────────────
+
+def test_count_trading_days_uses_calendar_not_0050():
+    """_count_trading_days 使用 TaiwanTradingCalendar，即使 DailyPrice 無 0050 資料也能計算。"""
+    engine = _make_engine()
+    s = _make_session(engine)
+    # 不插入任何 0050 DailyPrice rows
+
+    from src.services.candidate_pool_service import _count_trading_days
+
+    # 2026-11-02 (Mon) 到 2026-11-06 (Fri)：中間有 Tue～Fri = 4 個交易日
+    # Nov 1 = Sun, Nov 2 = Mon, Nov 3 = Tue, Nov 4 = Wed, Nov 5 = Thu, Nov 6 = Fri
+    count = _count_trading_days(s, date(2026, 11, 2), date(2026, 11, 6))
+    assert count > 0, "即使 0050 DailyPrice 為空，TaiwanTradingCalendar 仍應計算出交易日"
+    s.close()
+
+
+def test_count_trading_days_excludes_weekends():
+    """_count_trading_days 不計入週六日。"""
+    from src.services.candidate_pool_service import _count_trading_days
+
+    engine = _make_engine()
+    s = _make_session(engine)
+    # 2026-11-02 (Mon) 到 2026-11-08 (Sun)
+    # (excl Nov 2, incl up to Nov 8)
+    # Nov 3 (Tue)=1, Nov 4 (Wed)=2, Nov 5 (Thu)=3, Nov 6 (Fri)=4, Nov 7 (Sat)=skip, Nov 8 (Sun)=skip
+    count_with_weekend = _count_trading_days(s, date(2026, 11, 2), date(2026, 11, 8))
+    count_without_weekend = _count_trading_days(s, date(2026, 11, 2), date(2026, 11, 6))
+    assert count_with_weekend == count_without_weekend, (
+        "週六日不應計入交易日數"
+    )
+    s.close()

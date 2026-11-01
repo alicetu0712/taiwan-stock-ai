@@ -6,7 +6,10 @@ candidate_pool_service.py — 進場候選追蹤池
 
 設計原則：
 - 入池條件沿用現有 Decision Center 輸出，不新增選股門檻
-- near_entry 狀態直接映射 decision_code == 'wait_pullback' 或 setup_type == 'near_breakout'
+- 狀態語意明確區分「等待回檔」與「即將進場」：
+    near_entry   — setup_type == 'near_breakout'（型態接近突破確認）
+    wait_pullback — decision_code == 'wait_pullback'（現價偏高，等回測至進場區）
+    watching      — 其他符合條件但尚未接近進場時機的個股
 - triggered_buy 必須來自 ForwardSignal（唯一 BUY 來源）
 - Pipeline 冪等：重跑同日不重複建立記錄
 - 失敗必須拋出 RuntimeError（不得靜默忽略）
@@ -48,7 +51,7 @@ def _is_eligible_new_candidate(ar, rec) -> bool:
         return False
     if (ar.trade_signal or "wait") in ("sell", "reduce"):
         return False
-    if (ar.total_score or 0.0) < CANDIDATE_MIN_SCORE:
+    if ar.total_score is None or ar.total_score < CANDIDATE_MIN_SCORE:
         return False
     if rec and (rec.decision_code or "wait") in ("sell", "reduce"):
         return False
@@ -69,15 +72,16 @@ def _is_thesis_failed(ar, rec) -> bool:
 def _determine_status(ar, rec) -> str:
     """
     依現有 decision_label 邏輯判斷候選狀態。
-    near_entry 條件：
-      1. decision_code == 'wait_pullback'（模型看多，但現價偏離 MA20 > 門檻 → 等回測）
-      2. setup_type == 'near_breakout'（接近突破關鍵壓力位）
+    狀態語意：
+      wait_pullback — decision_code == 'wait_pullback'（現價偏高，等回測至進場區；≠ 接近進場）
+      near_entry    — setup_type == 'near_breakout'（型態接近突破確認，進場條件即將成立）
+      watching      — 符合條件但尚未接近進場時機
     """
     dc = (rec.decision_code if rec else None) or "wait"
     st = ar.setup_type or "none"
 
     if dc == "wait_pullback":
-        return "near_entry"
+        return "wait_pullback"
     if st == "near_breakout":
         return "near_entry"
     return "watching"
@@ -179,18 +183,20 @@ def _build_change_notes(cand, ar, rec) -> str:
 
 
 def _count_trading_days(session, start_date: date, end_date: date) -> int:
-    """計算 (start_date, end_date] 之間的台股交易日數（含 end_date，不含 start_date）。"""
-    from src.database import DailyPrice
-    return (
-        session.query(DailyPrice.date)
-        .filter(
-            DailyPrice.stock_id == "0050",
-            DailyPrice.date > start_date,
-            DailyPrice.date <= end_date,
-            DailyPrice.close.isnot(None),
-        )
-        .count()
-    )
+    """計算 (start_date, end_date] 之間的台股交易日數（含 end_date，不含 start_date）。
+
+    使用 TaiwanTradingCalendar 而非依賴 0050 DailyPrice 資料存在性。
+    """
+    from datetime import timedelta
+    from src.core.trading_calendar import TaiwanTradingCalendar
+    cal = TaiwanTradingCalendar()
+    count = 0
+    d = start_date + timedelta(days=1)
+    while d <= end_date:
+        if cal.is_trading_day(d):
+            count += 1
+        d += timedelta(days=1)
+    return count
 
 
 # ── ForwardSignal BUY 偵測 ────────────────────────────────────────────────────
@@ -280,7 +286,7 @@ def update_candidate_pool(session, check_date: date) -> dict:
     active_candidates = (
         session.query(CandidatePool)
         .filter(
-            CandidatePool.status.in_(["watching", "near_entry", "overdue"]),
+            CandidatePool.status.in_(["watching", "near_entry", "wait_pullback", "overdue"]),
             CandidatePool.pool_version == CANDIDATE_POOL_VERSION,
             CandidatePool.model_version == MODEL_VERSION,
         )
@@ -341,8 +347,8 @@ def update_candidate_pool(session, check_date: date) -> dict:
             elif ar:
                 change_notes = _build_change_notes(cand, ar, rec)
                 new_status = _determine_status(ar, rec)
-                # watching → overdue（near_entry 不降級）
-                if days >= OVERDUE_TRADING_DAYS and new_status == "watching":
+                # watching → overdue（near_entry / wait_pullback 不降級：已有明確進場方向）
+                if days >= OVERDUE_TRADING_DAYS and new_status not in ("near_entry", "wait_pullback"):
                     new_status = "overdue"
                     if old_status != "overdue":
                         change_notes += f"（第 {days} 交易日，標記觀察逾期）"
@@ -381,7 +387,7 @@ def update_candidate_pool(session, check_date: date) -> dict:
         c.stock_id
         for c in session.query(CandidatePool.stock_id)
         .filter(
-            CandidatePool.status.in_(["watching", "near_entry", "overdue"]),
+            CandidatePool.status.in_(["watching", "near_entry", "wait_pullback", "overdue"]),
             CandidatePool.pool_version == CANDIDATE_POOL_VERSION,
             CandidatePool.model_version == MODEL_VERSION,
         )
@@ -490,18 +496,18 @@ def _resolve_stock_name(session, stock_id: str) -> str:
 
 
 def get_active_candidates(session, pool_version: str = CANDIDATE_POOL_VERSION) -> list:
-    """返回所有 active 候選（watching / near_entry / overdue），附今日歷史快照。"""
-    from src.database import CandidatePool, CandidatePoolHistory, MODEL_VERSION
+    """返回所有 active 候選（watching / near_entry / wait_pullback / overdue）。"""
+    from src.database import CandidatePool, MODEL_VERSION
 
     rows = (
         session.query(CandidatePool)
         .filter(
-            CandidatePool.status.in_(["watching", "near_entry", "overdue"]),
+            CandidatePool.status.in_(["watching", "near_entry", "wait_pullback", "overdue"]),
             CandidatePool.pool_version == pool_version,
             CandidatePool.model_version == MODEL_VERSION,
         )
         .order_by(
-            CandidatePool.status,           # near_entry first (alphabetical)
+            CandidatePool.status,
             CandidatePool.first_seen_date,
         )
         .all()
@@ -543,7 +549,7 @@ def get_pool_stats(session, pool_version: str = CANDIDATE_POOL_VERSION) -> dict:
     )
 
     n_total = len(all_rows)
-    n_active = sum(1 for r in all_rows if r.status in ("watching", "near_entry", "overdue"))
+    n_active = sum(1 for r in all_rows if r.status in ("watching", "near_entry", "wait_pullback", "overdue"))
     n_buy = sum(1 for r in all_rows if r.status == "triggered_buy")
     n_exited = sum(1 for r in all_rows if r.status == "exited")
 

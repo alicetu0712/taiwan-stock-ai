@@ -546,7 +546,7 @@ def load_candidate_pool_data() -> dict:
     載入候選追蹤池完整資料（active 候選、近期退出、統計）。
 
     Returns dict:
-      active:       list of CandidatePool rows (watching/near_entry/overdue)
+      active:       list of CandidatePool rows (watching/near_entry/wait_pullback/overdue)
       recent_exits: list of CandidatePool rows (exited/triggered_buy last 7 days)
       stats:        dict from get_pool_stats()
       today_history: dict[candidate_id → CandidatePoolHistory] for change display
@@ -587,8 +587,9 @@ def load_candidate_pool_data() -> dict:
             "today_history": today_history,
         }
     except Exception as e:
-        logger.warning(f"load_candidate_pool_data failed: {e}")
+        logger.error(f"load_candidate_pool_data failed: {e}")
         return {
+            "error": f"候選資料讀取失敗：{e}",
             "active": [],
             "recent_exits": [],
             "stats": {"n_total": 0, "n_active": 0, "n_buy": 0, "n_exited": 0,
