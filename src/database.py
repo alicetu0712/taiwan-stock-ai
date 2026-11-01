@@ -17,6 +17,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -854,6 +855,123 @@ class CandidatePoolHistory(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# ── Trade Lifecycle — 真實成交紀錄（Phase 1）────────────────────
+#
+#  隔離原則：
+#    ACTUAL  → actual_positions + trade_executions（使用者手動確認）
+#    PAPER   → position_monitor（pipeline 自動建立）
+#    兩者不得混合計算損益，不得互相寫入。
+#
+#  金額欄位使用 Numeric(asdecimal=True) 避免 Float 累積誤差。
+#  所有成交永不實體刪除（is_cancelled 軟刪除）。
+
+
+class ActualPosition(Base):
+    """
+    使用者真實持倉主檔（ACTUAL 層）。
+
+    只由使用者手動建立，pipeline 不得寫入此表。
+    成本以移動加權平均成本法（MWAC）計算，由 trade_service 原子更新。
+    position_type 固定 'ACTUAL'，欄位保留供未來隔離驗證。
+    """
+
+    __tablename__ = "actual_positions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_id = Column(String(10), nullable=False, index=True)
+    stock_name = Column(String(50))
+
+    position_type = Column(String(10), nullable=False, default="ACTUAL")
+    # AI_SIGNAL（來自 BUY 卡片）或 MANUAL（手動新增，非平台推薦）
+    signal_source = Column(String(20), nullable=False)
+    # FK → forward_signals.id；僅 AI_SIGNAL 且 is_valid=True 時填入
+    forward_signal_id = Column(Integer, nullable=True)
+
+    # open / partially_closed / closed
+    status = Column(String(20), nullable=False, default="open")
+    open_date = Column(Date, nullable=False)
+    close_date = Column(Date, nullable=True)
+
+    # 移動加權平均成本（由 _recalculate_position 原子更新）
+    remaining_shares = Column(Integer, nullable=False, default=0)
+    avg_cost_per_share = Column(Numeric(12, 4, asdecimal=True), nullable=False, default=0)
+    total_cost_basis = Column(Numeric(14, 2, asdecimal=True), nullable=False, default=0)
+    realized_pnl = Column(Numeric(14, 2, asdecimal=True), nullable=False, default=0)
+
+    # 使用者設定的計畫（可修改，修改須留 PositionPlanChange 稽核）
+    target_price = Column(Numeric(10, 2, asdecimal=True), nullable=True)
+    stop_price = Column(Numeric(10, 2, asdecimal=True), nullable=True)
+
+    # 進場時凍結的 ForwardSignal 計畫快照（JSON string，immutable）
+    original_plan_snapshot = Column(Text, nullable=True)
+
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TradeExecution(Base):
+    """
+    逐筆成交明細（ACTUAL 層）。
+
+    不可實體刪除：取消用 is_cancelled=True + cancel_reason（可稽核）。
+    取消後，呼叫方必須重新呼叫 _recalculate_position 使持倉彙總一致。
+    execution_datetime 以 UTC 儲存，顯示時轉換為 Asia/Taipei。
+    """
+
+    __tablename__ = "trade_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # FK → actual_positions.id
+    position_id = Column(Integer, nullable=False, index=True)
+
+    side = Column(String(4), nullable=False)  # BUY / SELL
+    execution_date = Column(Date, nullable=False)
+    # Timezone-aware datetime（UTC）；若使用者只知道日期則為 NULL
+    execution_datetime = Column(DateTime, nullable=True)
+
+    execution_price = Column(Numeric(10, 2, asdecimal=True), nullable=False)
+    shares = Column(Integer, nullable=False)
+    # BUY：買方手續費；SELL：賣方手續費
+    actual_fee = Column(Numeric(10, 2, asdecimal=True), nullable=False, default=0)
+    # SELL：證交稅（0.003 × 成交金額）；BUY：通常 0
+    transaction_tax = Column(Numeric(10, 2, asdecimal=True), nullable=False, default=0)
+
+    # 此筆成交可獨立連結 ForwardSignal（加碼時的新訊號）
+    linked_forward_signal_id = Column(Integer, nullable=True)
+
+    notes = Column(Text, nullable=True)
+
+    is_cancelled = Column(Boolean, nullable=False, default=False)
+    cancel_reason = Column(String(200), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PositionPlanChange(Base):
+    """
+    持倉計畫修改稽核紀錄（目標價 / 停損價）。
+
+    只能 INSERT，不應 UPDATE 或 DELETE（事後稽核用）。
+    每次修改 actual_positions.target_price / stop_price 都必須在此留紀錄。
+    """
+
+    __tablename__ = "position_plan_changes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # FK → actual_positions.id
+    position_id = Column(Integer, nullable=False, index=True)
+    changed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    # target_price / stop_price
+    field_name = Column(String(30), nullable=False)
+    old_value = Column(Numeric(10, 2, asdecimal=True), nullable=True)
+    new_value = Column(Numeric(10, 2, asdecimal=True), nullable=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 # ── 引擎與 Session ───────────────────────────────────────────
 
 
@@ -1376,6 +1494,19 @@ def _migrate_forward_signals_unique_constraint(engine) -> None:
     )
 
 
+def _migrate_trade_lifecycle(engine) -> None:
+    """
+    Trade Lifecycle Phase 1 migration。
+
+    actual_positions / trade_executions / position_plan_changes 是全新資料表，
+    由 create_all() 在 init_db 開頭建立。此函式保留給未來加欄位使用。
+
+    不動任何現有資料表（user_trades / position_monitor / forward_signals）。
+    """
+    # Phase 1A: 新表由 create_all() 建立，此處暫無額外 ALTER 需求。
+    pass
+
+
 def init_db(engine: Optional[Engine] = None) -> Engine:
     if engine is None:
         engine = get_engine()
@@ -1390,6 +1521,7 @@ def init_db(engine: Optional[Engine] = None) -> Engine:
     _migrate_position_monitor(engine)
     _migrate_position_monitor_nullable(engine)
     _migrate_forward_signals_unique_constraint(engine)
+    _migrate_trade_lifecycle(engine)
 
     # Fail-closed: raise if required columns are still missing after all migrations.
     _verify_schema_integrity(engine)
