@@ -190,9 +190,9 @@ def main():
         sys.exit(1)
 
     # 在 Neon 建立所有資料表並執行 migration（若尚未建立或欠缺欄位）
-    # init_db 包含 Base.metadata.create_all + 所有 _migrate_* column additions
+    # allow_ddl=True: sync_to_neon 是有意為之的 DDL 工具，允許建立全部資料表。
     from src.database import Base, init_db, get_session
-    init_db(neon_engine)
+    init_db(neon_engine, allow_ddl=True)
     logger.info("✓ Neon 資料表及 schema migration 確認完成")
 
     from sqlalchemy.orm import sessionmaker

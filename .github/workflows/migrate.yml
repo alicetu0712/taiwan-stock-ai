@@ -1,0 +1,121 @@
+name: Schema Migration (Manual Only)
+
+# ── 觸發條件：僅手動 ──────────────────────────────────────────
+# 此 workflow 永遠不自動執行。
+# Production migration 需要 GitHub Environment "production" 的人工 Approve。
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: '目標環境'
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - production
+        default: dry-run
+      migration:
+        description: '執行的 Migration 腳本'
+        required: true
+        type: choice
+        options:
+          - migrate_trade_lifecycle
+        default: migrate_trade_lifecycle
+      confirm:
+        description: 'Production 執行請輸入 "MIGRATE_PRODUCTION"（dry-run 可留空）'
+        required: false
+        type: string
+        default: ''
+
+# ── 防止並行 Migration ────────────────────────────────────────
+concurrency:
+  group: schema-migration
+  cancel-in-progress: false
+
+jobs:
+  # ── Dry-run：無需 Approve ─────────────────────────────────
+  dry-run:
+    name: Migration Dry-run
+    if: ${{ inputs.env == 'dry-run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Migration Dry-run
+        run: |
+          python scripts/${{ inputs.migration }}.py --dry-run --env local
+          echo "Dry-run complete. Review the plan above before running production."
+
+  # ── Production：需要 Environment Approve ─────────────────
+  production:
+    name: Migration — Production (Requires Approval)
+    if: ${{ inputs.env == 'production' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # "production" Environment 需要在 GitHub Settings → Environments 設定
+    # Required reviewers（人工批准）才能繼續。
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify confirm token
+        run: |
+          if [ "${{ inputs.confirm }}" != "MIGRATE_PRODUCTION" ]; then
+            echo "ERROR: confirm 欄位必須輸入 'MIGRATE_PRODUCTION' 才能執行 Production Migration。"
+            exit 1
+          fi
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pre-flight dry-run
+        env:
+          NEON_URL: ${{ secrets.NEON_URL }}
+        run: |
+          python scripts/${{ inputs.migration }}.py --dry-run --env production
+          echo "Pre-flight dry-run complete."
+
+      - name: Run Production Migration
+        env:
+          NEON_URL: ${{ secrets.NEON_URL }}
+        run: |
+          # Migration 腳本需要互動式 'yes' 確認；
+          # 在 CI 中用 echo 管道注入（需 --env production 後的 stdin）。
+          echo "yes" | python scripts/${{ inputs.migration }}.py --env production
+
+      - name: Post-migration verification
+        env:
+          NEON_URL: ${{ secrets.NEON_URL }}
+        run: |
+          python - <<'PYEOF'
+          import os, sys
+          from sqlalchemy import create_engine, inspect
+          url = os.environ["NEON_URL"].replace("postgres://", "postgresql://", 1)
+          engine = create_engine(url, connect_args={"sslmode": "require"})
+          insp = inspect(engine)
+          tables = set(insp.get_table_names())
+          required = {"actual_positions", "trade_executions", "position_plan_changes"}
+          missing = required - tables
+          if missing:
+              print(f"FAIL: tables still missing: {missing}", file=sys.stderr)
+              sys.exit(1)
+          print(f"✅ All 3 tables verified: {sorted(required)}")
+          PYEOF

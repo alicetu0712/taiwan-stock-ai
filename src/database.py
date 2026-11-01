@@ -1498,23 +1498,75 @@ def _migrate_forward_signals_unique_constraint(engine) -> None:
     )
 
 
+_TRADE_LIFECYCLE_TABLES = frozenset(
+    {"actual_positions", "trade_executions", "position_plan_changes"}
+)
+
+
 def _migrate_trade_lifecycle(engine) -> None:
     """
-    Trade Lifecycle Phase 1 migration。
+    Phase 1 trade lifecycle 驗證。
 
-    actual_positions / trade_executions / position_plan_changes 是全新資料表，
-    由 create_all() 在 init_db 開頭建立。此函式保留給未來加欄位使用。
-
-    不動任何現有資料表（user_trades / position_monitor / forward_signals）。
+    SQLite（測試 / 本地）：create_all() 已在 init_db 建立，直接回傳。
+    PostgreSQL（生產）：檢查三張新表是否存在。
+      - 存在 → INFO log。
+      - 缺失 → WARNING log，不 raise（不阻斷既有每日 Pipeline）。
+        表示尚未執行 scripts/migrate_trade_lifecycle.py；
+        ACTUAL 持倉功能不可用，其餘選股 / 模擬功能正常。
+    不修改任何既有資料表（user_trades / position_monitor / forward_signals）。
     """
-    # Phase 1A: 新表由 create_all() 建立，此處暫無額外 ALTER 需求。
-    pass
+    from sqlalchemy import inspect as _insp
+
+    if engine.dialect.name != "postgresql":
+        return  # SQLite: create_all() 已處理
+
+    insp = _insp(engine)
+    existing = set(insp.get_table_names())
+    missing = _TRADE_LIFECYCLE_TABLES - existing
+
+    if missing:
+        logger.warning(
+            "_migrate_trade_lifecycle: tables missing in Production DB: %s. "
+            "ACTUAL position features unavailable. "
+            "Run: python scripts/migrate_trade_lifecycle.py --env production",
+            sorted(missing),
+        )
+    else:
+        logger.info("_migrate_trade_lifecycle: all 3 tables present ✓")
 
 
-def init_db(engine: Optional[Engine] = None) -> Engine:
+def init_db(
+    engine: Optional[Engine] = None,
+    *,
+    allow_ddl: Optional[bool] = None,
+) -> Engine:
+    """初始化資料庫連線並執行欄位增加型 Migration。
+
+    Parameters
+    ----------
+    engine:
+        使用指定 engine；None 時呼叫 get_engine() 取得預設連線。
+    allow_ddl:
+        None（預設）→ 自動：SQLite 為 True，PostgreSQL 為 False。
+        True  → 執行 Base.metadata.create_all()，建立不存在的資料表。
+                 僅用於測試、本地開發，或由 scripts/migrate_trade_lifecycle.py
+                 顯式呼叫。
+        False → 跳過 create_all()；假設所有表已存在（生產模式）。
+                 Daily Pipeline、Streamlit Dashboard 均應使用此模式。
+
+    不論 allow_ddl 為何，_migrate_* 欄位 Migration 皆執行
+    （均為 ADD COLUMN IF NOT EXISTS，對既有表安全）。
+    """
     if engine is None:
         engine = get_engine()
-    Base.metadata.create_all(engine)
+
+    # Auto-detect: SQLite（測試/本地）允許 DDL；PostgreSQL（生產）不允許。
+    if allow_ddl is None:
+        allow_ddl = engine.dialect.name == "sqlite"
+
+    if allow_ddl:
+        Base.metadata.create_all(engine)
+
     _migrate_stocks(engine)
     _migrate_analysis_results(engine)
     _migrate_forward_signals(engine)
