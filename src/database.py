@@ -894,7 +894,9 @@ class ActualPosition(Base):
 
     # 移動加權平均成本（由 _recalculate_position 原子更新）
     remaining_shares = Column(Integer, nullable=False, default=0)
-    avg_cost_per_share = Column(Numeric(12, 4, asdecimal=True), nullable=False, default=0)
+    avg_cost_per_share = Column(
+        Numeric(12, 4, asdecimal=True), nullable=False, default=0
+    )
     total_cost_basis = Column(Numeric(14, 2, asdecimal=True), nullable=False, default=0)
     realized_pnl = Column(Numeric(14, 2, asdecimal=True), nullable=False, default=0)
 
@@ -963,7 +965,9 @@ class PositionPlanChange(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     # FK → actual_positions.id
     position_id = Column(Integer, nullable=False, index=True)
-    changed_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    changed_at = Column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
     # target_price / stop_price
     field_name = Column(String(30), nullable=False)
     old_value = Column(Numeric(10, 2, asdecimal=True), nullable=True)

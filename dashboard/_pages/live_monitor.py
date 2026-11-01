@@ -327,8 +327,8 @@ def _render_record_buy_form(sid: str, name: str, rec: dict, signal_date, fs_id) 
     from datetime import date
     from decimal import Decimal
 
-    from src.database import get_session
     import src.services.trade_service as svc
+    from src.database import get_session
 
     signal_source = "AI_SIGNAL" if fs_id else "MANUAL"
     target = rec.get("target1")
