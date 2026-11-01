@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _DUPLICATE_WINDOW_SECONDS = 60
 
 # Decimal 精度常數
-_P2 = Decimal("0.01")   # 金額（元）
+_P2 = Decimal("0.01")  # 金額（元）
 _P4 = Decimal("0.0001")  # 均價（元，4 位小數）
 
 
@@ -143,7 +143,9 @@ def add_execution(
     """
     from src.database import ActualPosition, TradeExecution
 
-    _validate_execution_inputs(side, shares, execution_price, actual_fee, transaction_tax)
+    _validate_execution_inputs(
+        side, shares, execution_price, actual_fee, transaction_tax
+    )
 
     pos = (
         session.query(ActualPosition)
@@ -161,7 +163,9 @@ def add_execution(
             f"賣出 {shares} 股超過剩餘持倉 {pos.remaining_shares} 股，操作拒絕"
         )
 
-    _check_duplicate(session, position_id, side, execution_date, execution_price, shares)
+    _check_duplicate(
+        session, position_id, side, execution_date, execution_price, shares
+    )
 
     exec_rec = TradeExecution(
         position_id=position_id,

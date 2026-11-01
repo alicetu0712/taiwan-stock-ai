@@ -16,11 +16,10 @@ tests/test_trade_service.py — TradeService Phase 1A regression tests
 12. ACTUAL / PAPER 隔離（PositionMonitor 不可出現在 get_active_positions）
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date
 from decimal import Decimal
 
 import pytest
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -112,6 +111,7 @@ class TestCreatePosition:
         assert pos.forward_signal_id == fs.id
         assert pos.original_plan_snapshot is not None
         import json
+
         snap = json.loads(pos.original_plan_snapshot)
         assert snap["decision_label"] == "buy"
         assert snap["rec_level"] == "A"
@@ -159,7 +159,11 @@ class TestCreatePosition:
         session = _make_session()
         with pytest.raises(svc.TradeSvcError, match="不存在"):
             svc.create_position(
-                session, "2330", "台積電", "AI_SIGNAL", date(2026, 10, 30),
+                session,
+                "2330",
+                "台積電",
+                "AI_SIGNAL",
+                date(2026, 10, 30),
                 forward_signal_id=99999,
             )
         session.rollback()
@@ -171,7 +175,11 @@ class TestCreatePosition:
         fs = _make_forward_signal(session, is_valid=False)
         with pytest.raises(svc.TradeSvcError, match="is_valid=False"):
             svc.create_position(
-                session, "2330", "台積電", "AI_SIGNAL", date(2026, 10, 30),
+                session,
+                "2330",
+                "台積電",
+                "AI_SIGNAL",
+                date(2026, 10, 30),
                 forward_signal_id=fs.id,
             )
         session.rollback()
@@ -194,9 +202,14 @@ class TestAddExecutionBuy:
         session = _make_session()
         pos = self._pos(session)
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100.00"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100.00"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.remaining_shares == 1000
         assert pos.avg_cost_per_share == _d("100.0000")
@@ -210,9 +223,14 @@ class TestAddExecutionBuy:
         session = _make_session()
         pos = self._pos(session)
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100.00"), shares=1000,
-            actual_fee=_d("143.00"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100.00"),
+            shares=1000,
+            actual_fee=_d("143.00"),
+            transaction_tax=_d("0"),
         )
         # avg = (100000 + 143) / 1000 = 100.143
         assert pos.total_cost_basis == _d("100143.00")
@@ -227,15 +245,25 @@ class TestAddExecutionBuy:
         pos = self._pos(session)
         # BUY 1000 @ 100 → cost=100000, avg=100
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         # BUY 1000 @ 120 → total cost=220000, avg=110
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 11, 1),
-            execution_price=_d("120"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.remaining_shares == 2000
         assert pos.avg_cost_per_share == _d("110.0000")
@@ -248,9 +276,14 @@ class TestAddExecutionBuy:
         session = _make_session()
         with pytest.raises(svc.TradeSvcError, match="不存在"):
             svc.add_execution(
-                session, 99999, "BUY", date(2026, 10, 31),
-                execution_price=_d("100"), shares=1000,
-                actual_fee=_d("0"), transaction_tax=_d("0"),
+                session,
+                99999,
+                "BUY",
+                date(2026, 10, 31),
+                execution_price=_d("100"),
+                shares=1000,
+                actual_fee=_d("0"),
+                transaction_tax=_d("0"),
             )
         session.rollback()
 
@@ -261,9 +294,14 @@ class TestAddExecutionBuy:
         pos = self._pos(session)
         with pytest.raises(svc.TradeSvcError, match="BUY 或 SELL"):
             svc.add_execution(
-                session, pos.id, "SHORT", date(2026, 10, 31),
-                execution_price=_d("100"), shares=1000,
-                actual_fee=_d("0"), transaction_tax=_d("0"),
+                session,
+                pos.id,
+                "SHORT",
+                date(2026, 10, 31),
+                execution_price=_d("100"),
+                shares=1000,
+                actual_fee=_d("0"),
+                transaction_tax=_d("0"),
             )
         session.rollback()
 
@@ -274,9 +312,14 @@ class TestAddExecutionBuy:
         pos = self._pos(session)
         with pytest.raises(svc.TradeSvcError, match="shares"):
             svc.add_execution(
-                session, pos.id, "BUY", date(2026, 10, 31),
-                execution_price=_d("100"), shares=0,
-                actual_fee=_d("0"), transaction_tax=_d("0"),
+                session,
+                pos.id,
+                "BUY",
+                date(2026, 10, 31),
+                execution_price=_d("100"),
+                shares=0,
+                actual_fee=_d("0"),
+                transaction_tax=_d("0"),
             )
         session.rollback()
 
@@ -287,9 +330,14 @@ class TestAddExecutionBuy:
         pos = self._pos(session)
         with pytest.raises(svc.TradeSvcError, match="execution_price"):
             svc.add_execution(
-                session, pos.id, "BUY", date(2026, 10, 31),
-                execution_price=_d("0"), shares=1000,
-                actual_fee=_d("0"), transaction_tax=_d("0"),
+                session,
+                pos.id,
+                "BUY",
+                date(2026, 10, 31),
+                execution_price=_d("0"),
+                shares=1000,
+                actual_fee=_d("0"),
+                transaction_tax=_d("0"),
             )
         session.rollback()
 
@@ -306,9 +354,14 @@ class TestAddExecutionSell:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=2000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=2000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         return pos
 
@@ -318,9 +371,14 @@ class TestAddExecutionSell:
         session = _make_session()
         pos = self._open_pos_with_2000_shares(session)
         svc.add_execution(
-            session, pos.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("120"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.status == "partially_closed"
         assert pos.remaining_shares == 1000
@@ -335,9 +393,14 @@ class TestAddExecutionSell:
         session = _make_session()
         pos = self._open_pos_with_2000_shares(session)
         svc.add_execution(
-            session, pos.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("120"), shares=2000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=2000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.status == "closed"
         assert pos.remaining_shares == 0
@@ -356,9 +419,14 @@ class TestAddExecutionSell:
         # cost_of_sold = 100 * 1000 = 100000
         # realized = 119554 - 100000 = 19554
         svc.add_execution(
-            session, pos.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("120"), shares=1000,
-            actual_fee=_d("86"), transaction_tax=_d("360"),
+            session,
+            pos.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=1000,
+            actual_fee=_d("86"),
+            transaction_tax=_d("360"),
         )
         assert pos.realized_pnl == _d("19554.00")
         session.rollback()
@@ -370,9 +438,14 @@ class TestAddExecutionSell:
         pos = self._open_pos_with_2000_shares(session)
         with pytest.raises(svc.TradeSvcError, match="超過剩餘持倉"):
             svc.add_execution(
-                session, pos.id, "SELL", date(2026, 11, 1),
-                execution_price=_d("120"), shares=3000,
-                actual_fee=_d("0"), transaction_tax=_d("0"),
+                session,
+                pos.id,
+                "SELL",
+                date(2026, 11, 1),
+                execution_price=_d("120"),
+                shares=3000,
+                actual_fee=_d("0"),
+                transaction_tax=_d("0"),
             )
         session.rollback()
 
@@ -382,16 +455,26 @@ class TestAddExecutionSell:
         session = _make_session()
         pos = self._open_pos_with_2000_shares(session)
         svc.add_execution(
-            session, pos.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("120"), shares=2000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=2000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.status == "closed"
         with pytest.raises(svc.TradeSvcError, match="已完全出場"):
             svc.add_execution(
-                session, pos.id, "SELL", date(2026, 11, 2),
-                execution_price=_d("120"), shares=1000,
-                actual_fee=_d("0"), transaction_tax=_d("0"),
+                session,
+                pos.id,
+                "SELL",
+                date(2026, 11, 2),
+                execution_price=_d("120"),
+                shares=1000,
+                actual_fee=_d("0"),
+                transaction_tax=_d("0"),
             )
         session.rollback()
 
@@ -409,15 +492,25 @@ class TestDuplicateProtection:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         with pytest.raises(svc.TradeSvcError, match="重複提交"):
             svc.add_execution(
-                session, pos.id, "BUY", date(2026, 10, 31),
-                execution_price=_d("100"), shares=1000,
-                actual_fee=_d("0"), transaction_tax=_d("0"),
+                session,
+                pos.id,
+                "BUY",
+                date(2026, 10, 31),
+                execution_price=_d("100"),
+                shares=1000,
+                actual_fee=_d("0"),
+                transaction_tax=_d("0"),
             )
         session.rollback()
 
@@ -430,22 +523,31 @@ class TestDuplicateProtection:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         # 不同價格，不應觸發重複防護
         exec2 = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("101"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("101"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert exec2.id is not None
         session.rollback()
 
     def test_cancelled_exec_does_not_trigger_duplicate(self):
         """取消後的成交不影響重複偵測。"""
-        from src.database import TradeExecution
         import src.services.trade_service as svc
 
         session = _make_session()
@@ -453,16 +555,26 @@ class TestDuplicateProtection:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         exec1 = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         svc.cancel_execution(session, exec1.id, "test cancel")
         # 取消後相同參數應可重新提交
         exec2 = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert exec2.id is not None
         session.rollback()
@@ -480,9 +592,14 @@ class TestCancelExecution:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         exec1 = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.remaining_shares == 1000
 
@@ -502,14 +619,24 @@ class TestCancelExecution:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=2000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=2000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         exec_sell = svc.add_execution(
-            session, pos.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("120"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.status == "partially_closed"
         svc.cancel_execution(session, exec_sell.id, "誤按賣出")
@@ -527,14 +654,24 @@ class TestCancelExecution:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         exec_buy = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=2000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=2000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         svc.add_execution(
-            session, pos.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("120"), shares=2000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=2000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.status == "closed"
         with pytest.raises(svc.TradeSvcError):
@@ -549,9 +686,14 @@ class TestCancelExecution:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         exec1 = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         svc.cancel_execution(session, exec1.id, "reason")
         with pytest.raises(svc.TradeSvcError, match="已取消"):
@@ -575,8 +717,13 @@ class TestUpdatePlan:
         import src.services.trade_service as svc
 
         return svc.create_position(
-            session, "2330", "台積電", "MANUAL", date(2026, 10, 30),
-            target_price=_d("980"), stop_price=_d("860"),
+            session,
+            "2330",
+            "台積電",
+            "MANUAL",
+            date(2026, 10, 30),
+            target_price=_d("980"),
+            stop_price=_d("860"),
         )
 
     def test_update_target_price_creates_audit(self):
@@ -639,14 +786,24 @@ class TestQueryMethods:
         )
         # pos2 買進後全數賣出 → closed
         svc.add_execution(
-            session, pos2.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("1000"), shares=100,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos2.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("1000"),
+            shares=100,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         svc.add_execution(
-            session, pos2.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("1100"), shares=100,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos2.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("1100"),
+            shares=100,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos2.status == "closed"
 
@@ -664,14 +821,24 @@ class TestQueryMethods:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=2000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=2000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         svc.add_execution(
-            session, pos.id, "SELL", date(2026, 11, 1),
-            execution_price=_d("120"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "SELL",
+            date(2026, 11, 1),
+            execution_price=_d("120"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         assert pos.status == "partially_closed"
         active = svc.get_active_positions(session)
@@ -686,15 +853,25 @@ class TestQueryMethods:
             session, "2330", "台積電", "MANUAL", date(2026, 10, 30)
         )
         exec1 = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("100"), shares=1000,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("100"),
+            shares=1000,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         svc.cancel_execution(session, exec1.id, "test")
         exec2 = svc.add_execution(
-            session, pos.id, "BUY", date(2026, 10, 31),
-            execution_price=_d("101"), shares=500,
-            actual_fee=_d("0"), transaction_tax=_d("0"),
+            session,
+            pos.id,
+            "BUY",
+            date(2026, 10, 31),
+            execution_price=_d("101"),
+            shares=500,
+            actual_fee=_d("0"),
+            transaction_tax=_d("0"),
         )
         active_execs = svc.get_executions(session, pos.id)
         assert len(active_execs) == 1
@@ -732,6 +909,7 @@ class TestQueryMethods:
         assert pos.id in active_ids
         # PositionMonitor 不應出現在回傳結果（型別不同）
         from src.database import ActualPosition
+
         for p in active:
             assert isinstance(p, ActualPosition)
         session.rollback()
