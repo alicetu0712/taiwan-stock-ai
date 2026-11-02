@@ -99,33 +99,89 @@ class MigrationBlockedError(RuntimeError):
 
 
 _V1_2_INDEX_NAME = "uix_te_idempotency_key"
+_V1_2_EXPECTED_COLUMNS = ["idempotency_key"]
 _V1_2_EXPECTED_PREDICATE = "idempotency_key IS NOT NULL"
+_V1_2_SCHEMA = "public"
+
+# Map pg_constraint confdeltype / confupdtype → SQL keyword
+_PG_CONFTYPE_MAP: dict[str, str] = {
+    "a": "NO ACTION",
+    "r": "RESTRICT",
+    "c": "CASCADE",
+    "n": "SET NULL",
+    "d": "SET DEFAULT",
+}
 
 
 def _normalize_pg_predicate(expr: str | None) -> str | None:
     """Normalize a pg_get_expr() result for comparison.
 
-    pg returns e.g. '(idempotency_key IS NOT NULL)' — strip outer parens,
-    collapse whitespace, uppercase.
+    PG returns e.g. '(idempotency_key IS NOT NULL)' — strip outer parens,
+    collapse whitespace, uppercase for case-insensitive compare.
     """
     if expr is None:
         return None
     return expr.strip().strip("()").upper().replace("  ", " ").strip()
 
 
+# Single SQL for full partial-index catalog inspection.
+# Returns at most 2 rows (LIMIT 2 detects duplicate name collisions).
+# Columns: indisunique, indisvalid, indisready, predicate, tbl_schema, key_columns
+# key_columns: array_agg of non-expression key-only columns (INCLUDE excluded via
+#   indnkeyatts, expression columns excluded via attnum > 0), ordered by index pos.
+_PG_PARTIAL_INDEX_SQL = """
+    SELECT
+        pi.indisunique,
+        pi.indisvalid,
+        pi.indisready,
+        pg_get_expr(pi.indpred, pi.indrelid)              AS predicate,
+        n.nspname                                          AS tbl_schema,
+        (
+            SELECT COALESCE(
+                array_agg(a.attname ORDER BY k.pos),
+                ARRAY[]::text[]
+            )
+            FROM   unnest(pi.indkey) WITH ORDINALITY AS k(attnum, pos)
+            JOIN   pg_attribute a
+                   ON  a.attrelid = pi.indrelid
+                   AND a.attnum   = k.attnum
+            WHERE  k.attnum > 0
+              AND  k.pos    <= pi.indnkeyatts
+        )                                                  AS key_columns
+    FROM   pg_index     pi
+    JOIN   pg_class     tc ON tc.oid = pi.indrelid
+    JOIN   pg_class     ic ON ic.oid = pi.indexrelid
+    JOIN   pg_namespace n  ON n.oid  = tc.relnamespace
+    WHERE  tc.relname = :tbl
+      AND  ic.relname = :idx_name
+      AND  n.nspname  = :schema
+    LIMIT  2
+"""
+
+
 def _verify_pg_partial_index_catalog(
-    insp, tbl: str, index_name: str, expected_predicate: str
+    insp,
+    tbl: str,
+    index_name: str,
+    expected_columns: list[str],
+    expected_predicate: str | None,
+    schema_name: str = "public",
 ) -> bool:
-    """Query pg_index catalog to validate predicate, indisvalid, indisready.
+    """Full pg catalog validation for a partial unique index.
 
-    Returns True iff the named index exists on *tbl* with:
-      - predicate matching expected_predicate (case-insensitive, parens stripped)
-      - indisvalid = True
-      - indisready = True
+    Checks (in order):
+      1. Exactly one result row (LIMIT 2 — duplicate names in same schema = BLOCKED)
+      2. Schema matches schema_name
+      3. indisunique = True
+      4. indisvalid  = True
+      5. indisready  = True
+      6. Key columns (excluding INCLUDE / expression) == expected_columns (ordered)
+      7. Predicate matches expected_predicate (normalized, case-insensitive)
+         — None expected_predicate means a general (non-partial) index is acceptable
 
-    Returns False if the named index does not exist in pg_index (→ PENDING).
-    Raises MigrationBlockedError on catalog error, wrong predicate, or
-    invalid/not-ready index.
+    Returns True  — all checks pass (APPLIED).
+    Returns False — index not found in this schema (PENDING, safe to create).
+    Raises MigrationBlockedError — any check fails or catalog read errors.
     """
     from sqlalchemy import text
 
@@ -133,67 +189,99 @@ def _verify_pg_partial_index_catalog(
     if engine is None:
         raise MigrationBlockedError(
             f"PostgreSQL catalog 驗證失敗：無法從 Inspector 取得 engine "
-            f"({tbl}.{index_name})"
+            f"({schema_name}.{tbl}.{index_name})"
         )
 
     try:
         with engine.connect() as conn:
-            row = conn.execute(
-                text("""
-                    SELECT
-                        pg_get_expr(pi.indpred, pi.indrelid) AS predicate,
-                        pi.indisvalid,
-                        pi.indisready
-                    FROM pg_index    pi
-                    JOIN pg_class    tc ON tc.oid = pi.indrelid
-                    JOIN pg_class    ic ON ic.oid = pi.indexrelid
-                    WHERE tc.relname  = :tbl
-                      AND ic.relname  = :idx_name
-                      AND pi.indisunique = true
-                    """),
-                {"tbl": tbl, "idx_name": index_name},
-            ).fetchone()
+            rows = conn.execute(
+                text(_PG_PARTIAL_INDEX_SQL),
+                {"tbl": tbl, "idx_name": index_name, "schema": schema_name},
+            ).fetchall()
     except MigrationBlockedError:
         raise
     except Exception as exc:
         raise MigrationBlockedError(
-            f"PostgreSQL catalog 讀取失敗 ({tbl}.{index_name}): {exc}"
+            f"PostgreSQL catalog 讀取失敗 ({schema_name}.{tbl}.{index_name}): {exc}"
         ) from exc
 
-    if row is None:
-        # Named index not in pg_index — not yet created, safe to create
-        return False
+    if len(rows) == 0:
+        return False  # Index absent in this schema → PENDING
 
-    predicate_raw, indisvalid, indisready = row
+    if len(rows) > 1:
+        raise MigrationBlockedError(
+            f"PostgreSQL catalog 回傳多筆結果 ({len(rows)} rows) for "
+            f"index={index_name!r} table={tbl!r} schema={schema_name!r} — "
+            "資料庫 Schema 異常，請人工確認。"
+        )
 
+    (
+        indisunique,
+        indisvalid,
+        indisready,
+        predicate_raw,
+        tbl_schema,
+        key_columns,
+    ) = rows[0]
+
+    errors: list[str] = []
+
+    # Check 2: schema (should match what we queried, but be explicit)
+    if tbl_schema != schema_name:
+        errors.append(f"tbl_schema: 實際={tbl_schema!r}, 預期={schema_name!r}")
+
+    # Check 3: unique
+    if not indisunique:
+        errors.append("indisunique=False — Index 非 Unique")
+
+    # Check 4: valid
     if not indisvalid:
-        raise MigrationBlockedError(
-            f"Index {index_name!r} ({tbl}) — pg_index.indisvalid=False：\n"
-            "  Index 建立未完成或已損壞，請人工確認後重新執行。"
+        errors.append(
+            "indisvalid=False — Index 建立未完成或已損壞，請人工確認後重新執行"
         )
+
+    # Check 5: ready
     if not indisready:
-        raise MigrationBlockedError(
-            f"Index {index_name!r} ({tbl}) — pg_index.indisready=False：\n"
-            "  Index 尚未 ready（可能正在建立中），請稍後重新執行。"
+        errors.append(
+            "indisready=False — Index 尚未 ready（可能正在建立），請稍後重新執行"
         )
 
-    actual = _normalize_pg_predicate(predicate_raw)
-    expected = _normalize_pg_predicate(expected_predicate)
-
-    if actual is None:
+    if errors:
         raise MigrationBlockedError(
-            f"Index {index_name!r} ({tbl}) 是一般 Unique Index（無 predicate），\n"
-            f"  但 Schema Contract 要求 Partial Index "
-            f"(WHERE {expected_predicate})。\n"
-            "  請刪除現有 index 後重新執行 Migration。"
+            f"Index {index_name!r} ({schema_name}.{tbl}) catalog 驗證失敗：\n"
+            + "\n".join(f"  - {e}" for e in errors)
         )
-    if actual != expected:
+
+    # Check 6: key columns (including order)
+    actual_cols = list(key_columns) if key_columns else []
+    if actual_cols != expected_columns:
         raise MigrationBlockedError(
-            f"Index {index_name!r} ({tbl}) predicate 不符合預期：\n"
-            f"  實際  : {predicate_raw!r}\n"
-            f"  預期  : {expected_predicate!r}\n"
+            f"Index {index_name!r} ({schema_name}.{tbl}) key columns 不符合預期：\n"
+            f"  實際  : {actual_cols!r}\n"
+            f"  預期  : {expected_columns!r}\n"
             "  請人工確認後刪除並重新執行 Migration。"
         )
+
+    # Check 7: predicate
+    if expected_predicate is not None:
+        actual_pred = _normalize_pg_predicate(predicate_raw)
+        expected_pred = _normalize_pg_predicate(expected_predicate)
+
+        if actual_pred is None:
+            raise MigrationBlockedError(
+                f"Index {index_name!r} ({schema_name}.{tbl}) 是一般 Unique Index"
+                "（無 predicate），\n"
+                f"  但 Schema Contract 要求 Partial Index "
+                f"(WHERE {expected_predicate})。\n"
+                "  請刪除現有 index 後重新執行 Migration。"
+            )
+        if actual_pred != expected_pred:
+            raise MigrationBlockedError(
+                f"Index {index_name!r} ({schema_name}.{tbl}) predicate 不符合預期：\n"
+                f"  實際  : {predicate_raw!r}\n"
+                f"  預期  : {expected_predicate!r}\n"
+                "  請人工確認後刪除並重新執行 Migration。"
+            )
 
     return True
 
@@ -220,10 +308,16 @@ def _verify_idempotency_unique_index(insp, tbl: str) -> bool:
 
     if is_pg:
         # Check via pg catalog: look for our named partial index specifically.
+        # Validates schema, table, columns, unique, predicate, indisvalid, indisready.
         # If only an ORM-created general unique constraint exists (not our named
-        # partial index), return False so migration creates the partial index.
+        # partial index), returns False so migration creates the partial index.
         return _verify_pg_partial_index_catalog(
-            insp, tbl, _V1_2_INDEX_NAME, _V1_2_EXPECTED_PREDICATE
+            insp,
+            tbl,
+            _V1_2_INDEX_NAME,
+            _V1_2_EXPECTED_COLUMNS,
+            _V1_2_EXPECTED_PREDICATE,
+            schema_name=_V1_2_SCHEMA,
         )
 
     # SQLite: accept named unique index or ORM inline UNIQUE constraint
@@ -273,18 +367,24 @@ def _verify_fk(
     ref_table: str,
     ref_col: str,
     on_delete: str | None = None,
+    *,
+    ref_schema: str | None = None,
+    on_update: str | None = None,
 ) -> bool:
     """Strict FK verification (PostgreSQL-only migrations).
 
-    Returns True if the FK exists with ALL specified attributes matching.
-    Returns False if no FK on local_col exists yet → PENDING.
-    Raises MigrationBlockedError if FK exists but:
-      - refers to wrong table or column
-      - has wrong ON DELETE action
-      - pg_constraint.convalidated = False
+    Checks (inspector first, then PG catalog for convalidated + confdeltype/confupdtype):
+      1. FK on local_col exists — False (PENDING) if absent
+      2. referred_schema  (None = same schema; explicit value if cross-schema)
+      3. referred_table
+      4. referred_columns
+      5. ON DELETE rule  (authoritative from pg_constraint.confdeltype on PG)
+      6. ON UPDATE rule  (authoritative from pg_constraint.confupdtype on PG)
+      7. pg_constraint.convalidated = True
 
-    on_delete comparison is case-insensitive.  PostgreSQL default (no explicit
-    ON DELETE) is reported as '' or 'NO ACTION' — both are distinct from RESTRICT.
+    on_delete / on_update are case-insensitive; empty / None from inspector → "NO ACTION".
+    Raises MigrationBlockedError if FK exists but ANY attribute mismatches,
+    catalog read fails, or FK metadata is incomplete.
     """
     try:
         fks = insp.get_foreign_keys(tbl)
@@ -297,43 +397,48 @@ def _verify_fk(
     ]
 
     if not matching:
-        return False  # FK doesn't exist yet → PENDING
+        return False  # FK entirely absent → PENDING
 
     fk = matching[0]
     errors: list[str] = []
 
+    # Check 2: referred_schema
+    actual_ref_schema = fk.get("referred_schema")
+    if actual_ref_schema != ref_schema:
+        errors.append(
+            f"referred_schema: 實際={actual_ref_schema!r}, 預期={ref_schema!r}"
+        )
+
+    # Check 3: referred_table
     actual_ref_tbl = fk.get("referred_table")
     if actual_ref_tbl != ref_table:
         errors.append(f"referred_table: 實際={actual_ref_tbl!r}, 預期={ref_table!r}")
 
+    # Check 4: referred_columns
     actual_ref_cols = fk.get("referred_columns") or []
     if actual_ref_cols != [ref_col]:
         errors.append(f"referred_columns: 實際={actual_ref_cols!r}, 預期={[ref_col]!r}")
 
-    if on_delete is not None:
-        raw_od = (fk.get("options") or {}).get("ondelete") or ""
-        actual_od = raw_od.upper().strip() or "NO ACTION"
-        expected_od = on_delete.upper().strip()
-        if actual_od != expected_od:
-            errors.append(f"ON DELETE: 實際={actual_od!r}, 預期={expected_od!r}")
-
-    # PostgreSQL: check convalidated via pg_constraint
+    # Checks 5-7 require the PG catalog for authoritative values
     if insp.dialect.name == "postgresql":
         engine = getattr(insp, "engine", None) or getattr(insp, "bind", None)
         if engine is None:
             raise MigrationBlockedError(
-                f"PostgreSQL convalidated 驗證失敗：無法從 Inspector 取得 engine "
+                f"PostgreSQL FK catalog 驗證失敗：無法從 Inspector 取得 engine "
                 f"({tbl}.{local_col})"
             )
         try:
             from sqlalchemy import text
 
             with engine.connect() as conn:
-                row = conn.execute(
+                cat_row = conn.execute(
                     text("""
-                        SELECT c.convalidated
+                        SELECT
+                            c.convalidated,
+                            c.confdeltype,
+                            c.confupdtype
                         FROM   pg_constraint c
-                        JOIN   pg_class      t  ON t.oid  = c.conrelid
+                        JOIN   pg_class      t  ON t.oid = c.conrelid
                         JOIN   pg_attribute  a  ON a.attrelid = c.conrelid
                                                 AND a.attnum   = c.conkey[1]
                         WHERE  t.relname = :tbl
@@ -349,11 +454,59 @@ def _verify_fk(
                 f"PostgreSQL pg_constraint 讀取失敗 ({tbl}.{local_col}): {exc}"
             ) from exc
 
-        if row is not None and not row[0]:
+        if cat_row is None:
+            # Inspector found the FK but pg_constraint has no matching row —
+            # metadata inconsistency, cannot validate safely.
+            raise MigrationBlockedError(
+                f"FK {tbl}.{local_col} が Inspector に存在しますが "
+                "pg_constraint に見つかりません — metadata 不整合、人工確認が必要です"
+            )
+
+        convalidated, confdeltype_ch, confupdtype_ch = cat_row
+
+        # Check 5: ON DELETE (authoritative from confdeltype)
+        if on_delete is not None:
+            actual_od = _PG_CONFTYPE_MAP.get(confdeltype_ch, confdeltype_ch)
+            expected_od = on_delete.upper().strip()
+            if actual_od != expected_od:
+                errors.append(
+                    f"ON DELETE: 實際={actual_od!r} (confdeltype={confdeltype_ch!r}), "
+                    f"預期={expected_od!r}"
+                )
+
+        # Check 6: ON UPDATE (authoritative from confupdtype)
+        if on_update is not None:
+            actual_ou = _PG_CONFTYPE_MAP.get(confupdtype_ch, confupdtype_ch)
+            expected_ou = on_update.upper().strip()
+            if actual_ou != expected_ou:
+                errors.append(
+                    f"ON UPDATE: 實際={actual_ou!r} (confupdtype={confupdtype_ch!r}), "
+                    f"預期={expected_ou!r}"
+                )
+
+        # Check 7: convalidated
+        if not convalidated:
             errors.append(
                 "pg_constraint.convalidated=False — FK 已建立但 VALIDATE 未完成，"
                 "可能無法正確約束現有資料"
             )
+
+    else:
+        # Non-PG: use inspector options for ON DELETE / ON UPDATE (best-effort)
+        if on_delete is not None:
+            raw_od = (fk.get("options") or {}).get("ondelete") or ""
+            actual_od = raw_od.upper().strip() or "NO ACTION"
+            if actual_od != on_delete.upper().strip():
+                errors.append(
+                    f"ON DELETE: 實際={actual_od!r}, 預期={on_delete.upper()!r}"
+                )
+        if on_update is not None:
+            raw_ou = (fk.get("options") or {}).get("onupdate") or ""
+            actual_ou = raw_ou.upper().strip() or "NO ACTION"
+            if actual_ou != on_update.upper().strip():
+                errors.append(
+                    f"ON UPDATE: 實際={actual_ou!r}, 預期={on_update.upper()!r}"
+                )
 
     if errors:
         raise MigrationBlockedError(
@@ -462,6 +615,8 @@ _APPROVED_MIGRATIONS: list[dict] = [
         "pg_only": True,
         # Strict: verifies local_col, ref_table, ref_col, ON DELETE RESTRICT,
         # convalidated=True via pg_constraint catalog.
+        # Strict: verifies local_col, ref_schema, ref_table, ref_col,
+        # ON DELETE RESTRICT, ON UPDATE NO ACTION, convalidated=True via pg catalog.
         "verify": lambda insp, tbl: _verify_fk(
             insp,
             tbl,
@@ -469,6 +624,7 @@ _APPROVED_MIGRATIONS: list[dict] = [
             ref_table="forward_signals",
             ref_col="id",
             on_delete="RESTRICT",
+            on_update="NO ACTION",
         ),
         "sql_pg": (
             "ALTER TABLE actual_positions ADD CONSTRAINT fk_ap_fwd_signal"
@@ -490,6 +646,7 @@ _APPROVED_MIGRATIONS: list[dict] = [
             ref_table="actual_positions",
             ref_col="id",
             on_delete="RESTRICT",
+            on_update="NO ACTION",
         ),
         "sql_pg": (
             "ALTER TABLE trade_executions ADD CONSTRAINT fk_te_position"
@@ -504,8 +661,8 @@ _APPROVED_MIGRATIONS: list[dict] = [
             "FK position_plan_changes.position_id → actual_positions.id RESTRICT"
         ),
         "pg_only": True,
-        # Strict: verifies local_col, ref_table, ref_col, ON DELETE RESTRICT,
-        # convalidated=True via pg_constraint catalog.
+        # Strict: verifies local_col, ref_schema, ref_table, ref_col,
+        # ON DELETE RESTRICT, ON UPDATE NO ACTION, convalidated=True via pg catalog.
         "verify": lambda insp, tbl: _verify_fk(
             insp,
             tbl,
@@ -513,6 +670,7 @@ _APPROVED_MIGRATIONS: list[dict] = [
             ref_table="actual_positions",
             ref_col="id",
             on_delete="RESTRICT",
+            on_update="NO ACTION",
         ),
         "sql_pg": (
             "ALTER TABLE position_plan_changes ADD CONSTRAINT fk_ppc_position"
@@ -535,6 +693,7 @@ _APPROVED_MIGRATIONS: list[dict] = [
             ref_table="forward_signals",
             ref_col="id",
             on_delete="RESTRICT",
+            on_update="NO ACTION",
         ),
         "sql_pg": (
             "ALTER TABLE trade_executions ADD CONSTRAINT fk_te_linked_signal"
@@ -571,13 +730,23 @@ def _preflight_migration_plan(
 
 
 def _log_ddl_audit(
-    audit_log: list[dict], ddl_attempted: int, ddl_committed: int, ddl_rolled_back: int
+    audit_log: list[dict],
+    ddl_planned: int,
+    ddl_attempted: int,
+    ddl_committed: int,
+    ddl_rolled_back: int,
 ) -> None:
-    """Log the DDL execution audit trail."""
+    """Log the DDL execution audit trail.
+
+    Counters are strictly separated:
+      planned      — dry-run only: migrations that would execute DDL
+      attempted    — real runs: DDL transactions started (engine.begin entered)
+      committed    — real runs: DDL transactions whose engine.begin() completed
+      rolled_back  — real runs: DDL transactions that raised (SQLAlchemy auto-rollback)
+    """
     logger.info(
-        f"DDL Audit — attempted={ddl_attempted}, "
-        f"committed={ddl_committed}, "
-        f"rolled_back={ddl_rolled_back}"
+        f"DDL Audit — planned={ddl_planned}, attempted={ddl_attempted}, "
+        f"committed={ddl_committed}, rolled_back={ddl_rolled_back}"
     )
     for rec in audit_log:
         logger.info(
@@ -647,9 +816,11 @@ def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> i
         return 0
 
     # ── Phase 2: Controlled Execution ─────────────────────────────────
-    ddl_attempted = 0
-    ddl_committed = 0
-    ddl_rolled_back = 0
+    # Counters are strictly separated — no arithmetic inference between them.
+    ddl_planned = 0  # dry-run: migrations that would execute DDL
+    ddl_attempted = 0  # real: DDL transactions started
+    ddl_committed = 0  # real: DDL transactions successfully committed
+    ddl_rolled_back = 0  # real: DDL transactions rolled back on exception
     audit_log: list[dict] = []
 
     for mig, _reason in pending:
@@ -673,13 +844,14 @@ def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> i
         }
 
         if dry_run:
+            # Dry-run: plan only — nothing is written to the database.
             logger.info(f"  [DRY-RUN] Would apply [{mig['name']}] (PENDING): {sql}")
             record["start"] = record["end"] = datetime.datetime.now(
                 datetime.timezone.utc
             ).isoformat()
             record["result"] = "DRY_RUN"
             audit_log.append(record)
-            ddl_committed += 1  # dry-run counts as "would commit"
+            ddl_planned += 1  # dry-run counter; NOT added to ddl_committed
             continue
 
         logger.info(f"  Applying [{mig['name']}] (PENDING): {mig['description']}")
@@ -688,28 +860,35 @@ def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> i
         try:
             with engine.begin() as conn:
                 conn.execute(text(sql))
+            # Commit confirmed — engine.begin() context manager exits cleanly
             record["end"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             record["result"] = "COMMITTED"
-            ddl_committed += 1
+            ddl_committed += 1  # incremented only on confirmed commit
             logger.info(f"  [{mig['name']}] ✓ COMMITTED")
         except Exception as exc:
+            # engine.begin() auto-rollbacks on exception
             record["end"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             record["result"] = "ROLLED_BACK"
             ddl_rolled_back += 1
             logger.error(f"  [{mig['name']}] ROLLED_BACK: {exc}")
             audit_log.append(record)
-            _log_ddl_audit(audit_log, ddl_attempted, ddl_committed, ddl_rolled_back)
+            _log_ddl_audit(
+                audit_log, ddl_planned, ddl_attempted, ddl_committed, ddl_rolled_back
+            )
             raise RuntimeError(
                 f"已核准 Migration [{mig['name']}] 執行失敗：{exc}\n"
-                f"  DDL attempted={ddl_attempted}, committed={ddl_committed - 1 if ddl_rolled_back else ddl_committed}, "
+                f"  DDL: attempted={ddl_attempted}, committed={ddl_committed}, "
                 f"rolled_back={ddl_rolled_back}\n"
                 "請人工確認資料庫狀態後重新執行。"
             ) from exc
         audit_log.append(record)
 
     # ── Phase 3: Audit Log ─────────────────────────────────────────────
-    _log_ddl_audit(audit_log, ddl_attempted, ddl_committed, ddl_rolled_back)
-    return ddl_committed
+    _log_ddl_audit(
+        audit_log, ddl_planned, ddl_attempted, ddl_committed, ddl_rolled_back
+    )
+    # Return planned count for dry-run, committed count for real runs.
+    return ddl_planned if dry_run else ddl_committed
 
 
 # ── Engine ────────────────────────────────────────────────────────────

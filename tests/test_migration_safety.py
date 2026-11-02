@@ -1844,8 +1844,10 @@ class TestVersionedMigrations:
 class TestV12PredicateVerification:
     """PostgreSQL catalog checks for v1.2 partial unique index.
 
-    All tests mock insp.dialect.name='postgresql' and mock the pg catalog
-    query via insp.engine.connect() so no real PG connection is needed.
+    Row format (6 fields):
+      (indisunique, indisvalid, indisready, predicate, tbl_schema, key_columns)
+
+    The catalog function uses fetchall() returning a list of rows (0, 1, or 2).
     """
 
     def _load_mod(self):
@@ -1861,15 +1863,28 @@ class TestV12PredicateVerification:
         spec.loader.exec_module(mod)
         return mod
 
-    def _mock_pg_insp(self, catalog_row):
-        """Return a mock PG inspector whose engine.connect() yields catalog_row."""
-        from unittest.mock import MagicMock
+    def _good_row(
+        self,
+        predicate="(idempotency_key IS NOT NULL)",
+        valid=True,
+        ready=True,
+        unique=True,
+        schema="public",
+        cols=None,
+    ):
+        """Build a correctly-structured catalog row."""
+        return (unique, valid, ready, predicate, schema, cols or ["idempotency_key"])
 
-        mock_row = catalog_row  # tuple (predicate, valid, ready) or None
+    def _mock_pg_insp(self, rows):
+        """Return a mock PG inspector whose engine.connect() yields rows via fetchall().
+
+        rows: list of row tuples, or empty list for 'not found'.
+        """
+        from unittest.mock import MagicMock
 
         mock_conn = MagicMock()
         mock_result = MagicMock()
-        mock_result.fetchone.return_value = mock_row
+        mock_result.fetchall.return_value = rows
         mock_conn.execute.return_value = mock_result
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -1884,30 +1899,29 @@ class TestV12PredicateVerification:
 
     # ── Correct partial index → APPLIED ─────────────────────────────────
     def test_pg_correct_partial_index_returns_true(self):
-        """Partial index with correct predicate, valid, ready → True (APPLIED)."""
+        """Partial index: correct predicate, unique, valid, ready → True."""
         mod = self._load_mod()
-        tbl = "trade_executions"
-        predicate = "(idempotency_key IS NOT NULL)"
-        insp = self._mock_pg_insp((predicate, True, True))
-        insp.get_indexes.return_value = [
-            {
-                "name": mod._V1_2_INDEX_NAME,
-                "unique": True,
-                "column_names": ["idempotency_key"],
-            }
-        ]
-        result = mod._verify_idempotency_unique_index(insp, tbl)
+        insp = self._mock_pg_insp([self._good_row()])
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
         assert result is True
 
     # ── Named index absent → False (PENDING) ────────────────────────────
     def test_pg_named_index_absent_returns_false(self):
-        """Named index not in pg_index catalog → False (PENDING)."""
+        """No rows from catalog → False (PENDING, safe to create)."""
         mod = self._load_mod()
-        tbl = "trade_executions"
-        insp = self._mock_pg_insp(None)  # catalog returns no row
-        insp.get_indexes.return_value = []
-        result = mod._verify_idempotency_unique_index(insp, tbl)
+        insp = self._mock_pg_insp([])
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
         assert result is False
+
+    # ── Multiple catalog rows → BLOCKED ──────────────────────────────────
+    def test_pg_multiple_catalog_rows_raises_blocked(self):
+        """Catalog returns 2 rows for same name → BLOCKED (schema collision)."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp([self._good_row(), self._good_row(schema="other")])
+        with pytest.raises(mod.MigrationBlockedError, match="多筆"):
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
 
     # ── Wrong predicate → BLOCKED ────────────────────────────────────────
     def test_pg_wrong_predicate_raises_blocked(self):
@@ -1915,35 +1929,19 @@ class TestV12PredicateVerification:
         import pytest
 
         mod = self._load_mod()
-        tbl = "trade_executions"
-        insp = self._mock_pg_insp(("(shares > 0)", True, True))
-        insp.get_indexes.return_value = [
-            {
-                "name": mod._V1_2_INDEX_NAME,
-                "unique": True,
-                "column_names": ["idempotency_key"],
-            }
-        ]
+        insp = self._mock_pg_insp([self._good_row(predicate="(shares > 0)")])
         with pytest.raises(mod.MigrationBlockedError, match="predicate"):
-            mod._verify_idempotency_unique_index(insp, tbl)
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
 
     # ── No predicate (general index) → BLOCKED ──────────────────────────
     def test_pg_general_index_no_predicate_raises_blocked(self):
-        """General unique index (predicate=None) → BLOCKED (contract requires partial)."""
+        """General unique index (predicate=None) → BLOCKED."""
         import pytest
 
         mod = self._load_mod()
-        tbl = "trade_executions"
-        insp = self._mock_pg_insp((None, True, True))  # predicate=None
-        insp.get_indexes.return_value = [
-            {
-                "name": mod._V1_2_INDEX_NAME,
-                "unique": True,
-                "column_names": ["idempotency_key"],
-            }
-        ]
+        insp = self._mock_pg_insp([self._good_row(predicate=None)])
         with pytest.raises(mod.MigrationBlockedError, match="predicate|Partial"):
-            mod._verify_idempotency_unique_index(insp, tbl)
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
 
     # ── indisvalid=False → BLOCKED ───────────────────────────────────────
     def test_pg_index_invalid_raises_blocked(self):
@@ -1951,17 +1949,9 @@ class TestV12PredicateVerification:
         import pytest
 
         mod = self._load_mod()
-        tbl = "trade_executions"
-        insp = self._mock_pg_insp(("(idempotency_key IS NOT NULL)", False, True))
-        insp.get_indexes.return_value = [
-            {
-                "name": mod._V1_2_INDEX_NAME,
-                "unique": True,
-                "column_names": ["idempotency_key"],
-            }
-        ]
+        insp = self._mock_pg_insp([self._good_row(valid=False)])
         with pytest.raises(mod.MigrationBlockedError, match="indisvalid"):
-            mod._verify_idempotency_unique_index(insp, tbl)
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
 
     # ── indisready=False → BLOCKED ───────────────────────────────────────
     def test_pg_index_not_ready_raises_blocked(self):
@@ -1969,17 +1959,40 @@ class TestV12PredicateVerification:
         import pytest
 
         mod = self._load_mod()
-        tbl = "trade_executions"
-        insp = self._mock_pg_insp(("(idempotency_key IS NOT NULL)", True, False))
-        insp.get_indexes.return_value = [
-            {
-                "name": mod._V1_2_INDEX_NAME,
-                "unique": True,
-                "column_names": ["idempotency_key"],
-            }
-        ]
+        insp = self._mock_pg_insp([self._good_row(ready=False)])
         with pytest.raises(mod.MigrationBlockedError, match="indisready"):
-            mod._verify_idempotency_unique_index(insp, tbl)
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
+
+    # ── Wrong key columns → BLOCKED ──────────────────────────────────────
+    def test_pg_wrong_columns_raises_blocked(self):
+        """Index on wrong column set → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp([self._good_row(cols=["shares"])])
+        with pytest.raises(mod.MigrationBlockedError, match="key columns"):
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
+
+    # ── Wrong column order → BLOCKED ────────────────────────────────────
+    def test_pg_wrong_column_order_raises_blocked(self):
+        """Index with reversed column order (multi-col) → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        # idempotency_key index should be single col; two cols in wrong order
+        insp = self._mock_pg_insp([self._good_row(cols=["shares", "idempotency_key"])])
+        with pytest.raises(mod.MigrationBlockedError, match="key columns"):
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
+
+    # ── indisunique=False → BLOCKED ──────────────────────────────────────
+    def test_pg_non_unique_index_raises_blocked(self):
+        """Index found but not unique → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp([self._good_row(unique=False)])
+        with pytest.raises(mod.MigrationBlockedError, match="Unique"):
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
 
     # ── Catalog query raises → BLOCKED ───────────────────────────────────
     def test_pg_catalog_read_failure_raises_blocked(self):
@@ -1989,26 +2002,22 @@ class TestV12PredicateVerification:
         import pytest
 
         mod = self._load_mod()
-        tbl = "trade_executions"
-
         mock_conn = MagicMock()
         mock_conn.execute.side_effect = Exception("pg catalog unavailable")
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
-
         mock_engine = MagicMock()
         mock_engine.connect.return_value = mock_conn
-
         insp = MagicMock()
         insp.dialect.name = "postgresql"
         insp.engine = mock_engine
 
         with pytest.raises(mod.MigrationBlockedError, match="catalog"):
-            mod._verify_idempotency_unique_index(insp, tbl)
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
 
     # ── SQLite: general unique → APPLIED (unchanged) ─────────────────────
     def test_sqlite_general_unique_index_accepted(self):
-        """SQLite unique index → True (not PG, no catalog check)."""
+        """SQLite unique index → True (no catalog check on SQLite)."""
         from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
         from sqlalchemy import text
@@ -2018,7 +2027,8 @@ class TestV12PredicateVerification:
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "CREATE TABLE trade_executions (id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
                 )
             )
             conn.execute(
@@ -2028,8 +2038,7 @@ class TestV12PredicateVerification:
                 )
             )
         insp = sql_insp(engine)
-        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
-        assert result is True
+        assert mod._verify_idempotency_unique_index(insp, "trade_executions") is True
 
     # ── _assess_migration_state: catalog error → BLOCKED ─────────────────
     def test_pg_catalog_error_in_assess_state_is_blocked(self):
@@ -2037,15 +2046,12 @@ class TestV12PredicateVerification:
         from unittest.mock import MagicMock
 
         mod = self._load_mod()
-        tbl = "trade_executions"
-
         mock_conn = MagicMock()
         mock_conn.execute.side_effect = Exception("network error")
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
         mock_engine = MagicMock()
         mock_engine.connect.return_value = mock_conn
-
         insp = MagicMock()
         insp.dialect.name = "postgresql"
         insp.engine = mock_engine
@@ -2055,7 +2061,9 @@ class TestV12PredicateVerification:
             for m in mod._APPROVED_MIGRATIONS
             if m["name"] == "v1.2_add_idempotency_key_unique_index"
         )
-        state, reason = mod._assess_migration_state(insp, tbl, v12)
+        state, reason = mod._assess_migration_state(
+            insp, tbl := "trade_executions", v12
+        )
         assert state == mod._MIG_BLOCKED
         assert "catalog" in reason or "verify" in reason.lower()
 
@@ -2082,13 +2090,18 @@ class TestFKStrictVerification:
         spec.loader.exec_module(mod)
         return mod
 
-    def _mock_pg_insp(self, fks: list, convalidated: bool = True):
-        """Mock PG inspector with given FK list and pg_constraint convalidated value."""
+    def _mock_pg_insp(self, fks: list, cat_row=(True, "r", "a")):
+        """Mock PG inspector with given FK list.
+
+        cat_row: (convalidated, confdeltype_ch, confupdtype_ch) returned by
+                 pg_constraint fetchone(), or None for metadata-inconsistency tests.
+          'r'=RESTRICT  'c'=CASCADE  'a'=NO ACTION  'n'=SET NULL  'd'=SET DEFAULT
+        """
         from unittest.mock import MagicMock
 
         mock_conn = MagicMock()
         mock_result = MagicMock()
-        mock_result.fetchone.return_value = (convalidated,)
+        mock_result.fetchone.return_value = cat_row
         mock_conn.execute.return_value = mock_result
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -2102,11 +2115,14 @@ class TestFKStrictVerification:
         insp.get_foreign_keys.return_value = fks
         return insp
 
-    def _good_fk(self, local_col, ref_table, ref_col, on_delete="RESTRICT"):
+    def _good_fk(
+        self, local_col, ref_table, ref_col, on_delete="RESTRICT", ref_schema=None
+    ):
         return {
             "constrained_columns": [local_col],
             "referred_table": ref_table,
             "referred_columns": [ref_col],
+            "referred_schema": ref_schema,
             "options": {"ondelete": on_delete},
         }
 
@@ -2182,12 +2198,13 @@ class TestFKStrictVerification:
 
     # ── Wrong ON DELETE → BLOCKED ─────────────────────────────────────────
     def test_wrong_on_delete_raises_blocked(self):
-        """FK has CASCADE instead of RESTRICT → BLOCKED."""
+        """FK catalog shows CASCADE instead of RESTRICT → BLOCKED."""
         import pytest
 
         mod = self._load_mod()
         insp = self._mock_pg_insp(
-            [self._good_fk("forward_signal_id", "forward_signals", "id", "CASCADE")]
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+            cat_row=(True, "c", "a"),  # confdeltype='c' = CASCADE
         )
         with pytest.raises(mod.MigrationBlockedError, match="ON DELETE"):
             mod._verify_fk(
@@ -2201,12 +2218,13 @@ class TestFKStrictVerification:
 
     # ── NO ACTION instead of RESTRICT → BLOCKED ───────────────────────────
     def test_no_action_instead_of_restrict_raises_blocked(self):
-        """FK has NO ACTION (PG default) instead of RESTRICT → BLOCKED."""
+        """FK catalog shows NO ACTION instead of RESTRICT → BLOCKED."""
         import pytest
 
         mod = self._load_mod()
         insp = self._mock_pg_insp(
-            [self._good_fk("forward_signal_id", "forward_signals", "id", "NO ACTION")]
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+            cat_row=(True, "a", "a"),  # confdeltype='a' = NO ACTION
         )
         with pytest.raises(mod.MigrationBlockedError, match="ON DELETE"):
             mod._verify_fk(
@@ -2226,7 +2244,7 @@ class TestFKStrictVerification:
         mod = self._load_mod()
         insp = self._mock_pg_insp(
             [self._good_fk("forward_signal_id", "forward_signals", "id")],
-            convalidated=False,
+            cat_row=(False, "r", "a"),  # convalidated=False
         )
         with pytest.raises(mod.MigrationBlockedError, match="convalidated"):
             mod._verify_fk(
@@ -2236,6 +2254,71 @@ class TestFKStrictVerification:
                 "forward_signals",
                 "id",
                 "RESTRICT",
+            )
+
+    # ── catalog returns None → BLOCKED ────────────────────────────────────
+    def test_catalog_none_raises_blocked(self):
+        """Inspector finds FK but pg_constraint returns None → BLOCKED (metadata inconsistency)."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+            cat_row=None,
+        )
+        with pytest.raises(mod.MigrationBlockedError):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── Wrong ON UPDATE → BLOCKED ──────────────────────────────────────────
+    def test_wrong_on_update_raises_blocked(self):
+        """FK catalog shows CASCADE ON UPDATE when NO ACTION expected → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+            cat_row=(True, "r", "c"),  # confupdtype='c' = CASCADE
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="ON UPDATE"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+                on_update="NO ACTION",
+            )
+
+    # ── Wrong referred_schema → BLOCKED ───────────────────────────────────
+    def test_wrong_ref_schema_raises_blocked(self):
+        """FK refers to unexpected schema → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [
+                self._good_fk(
+                    "forward_signal_id", "forward_signals", "id", ref_schema="other"
+                )
+            ],
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="referred_schema"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+                ref_schema=None,  # expect None, got "other"
             )
 
     # ── FK Inspector failure → BLOCKED ────────────────────────────────────
@@ -2293,7 +2376,8 @@ class TestFKStrictVerification:
 
         mod = self._load_mod()
         insp = self._mock_pg_insp(
-            [self._good_fk("forward_signal_id", "forward_signals", "id", "CASCADE")]
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+            cat_row=(True, "c", "a"),  # confdeltype='c' = CASCADE (wrong)
         )
         v13 = next(
             m
@@ -2321,7 +2405,8 @@ class TestFKStrictVerification:
 
         mod = self._load_mod()
         insp = self._mock_pg_insp(
-            [self._good_fk("position_id", "actual_positions", "id", "SET NULL")]
+            [self._good_fk("position_id", "actual_positions", "id")],
+            cat_row=(True, "n", "a"),  # confdeltype='n' = SET NULL (wrong)
         )
         v15 = next(
             m
