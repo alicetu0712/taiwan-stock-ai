@@ -390,9 +390,7 @@ def _get_idempotent_execution(
     if _d(existing.actual_fee) != _d(fee):
         conflicts.append(f"actual_fee: {existing.actual_fee} != {fee}")
     if _d(existing.transaction_tax) != _d(tax):
-        conflicts.append(
-            f"transaction_tax: {existing.transaction_tax} != {tax}"
-        )
+        conflicts.append(f"transaction_tax: {existing.transaction_tax} != {tax}")
 
     if conflicts:
         raise TradeSvcError(

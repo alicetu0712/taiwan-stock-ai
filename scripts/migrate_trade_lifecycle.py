@@ -83,11 +83,126 @@ _PROTECTED_TABLES = {
     "daily_prices",
 }
 
+# ── Migration state machine ───────────────────────────────────────────
+
+# Three states per migration — only PENDING may proceed to DDL.
+_MIG_APPLIED = "APPLIED"  # fully and correctly applied → skip
+_MIG_PENDING = "PENDING"  # cleanly absent, safe to apply → execute DDL
+_MIG_BLOCKED = "BLOCKED"  # ambiguous / partial / unsafe → stop everything
+
+
+class MigrationBlockedError(RuntimeError):
+    """Raised by verify() or drift_check() when a migration is in an
+    ambiguous, partial, or unsafe state and requires human review before
+    any DDL may proceed.
+    """
+
+
+def _verify_idempotency_unique_index(insp, tbl: str) -> bool:
+    """Return True iff a correct unique constraint/index on exactly
+    [idempotency_key] exists on *tbl*.
+
+    Accepts both:
+    - Named unique index with column_names == ["idempotency_key"]  (ALTER TABLE path)
+    - Unnamed inline UNIQUE constraint from ORM CREATE TABLE        (SQLite / PG)
+
+    Rejects:
+    - Indexes with the right name but wrong column set
+    - Non-unique indexes on idempotency_key
+    - Multi-column indexes that include idempotency_key
+    """
+    target = ["idempotency_key"]
+    for idx in insp.get_indexes(tbl):
+        if idx.get("unique") and (idx.get("column_names") or []) == target:
+            return True
+    for uc in insp.get_unique_constraints(tbl):
+        if (uc.get("column_names") or []) == target:
+            return True
+    return False
+
+
+def _drift_check_idempotency_unique_index(insp, tbl: str) -> None:
+    """Raise MigrationBlockedError if any index on idempotency_key is malformed.
+
+    Detects partial-migration state before verify() runs:
+      - Non-unique index on idempotency_key → BLOCKED (wrong spec)
+      - Multi-column index including idempotency_key → BLOCKED (unexpected)
+
+    A correctly structured unique single-column index will be caught by
+    verify() as APPLIED and this function will return None (no-op).
+    """
+    target_col = "idempotency_key"
+    for idx in insp.get_indexes(tbl):
+        cols = idx.get("column_names") or []
+        if target_col not in cols:
+            continue
+        if not idx.get("unique"):
+            raise MigrationBlockedError(
+                f"idempotency_key 欄位存在非 Unique Index "
+                f"（name={idx.get('name')!r}, unique=False）"
+                "— 部分套用或手動建立的不正確 Index。"
+                "請人工確認並刪除後重新執行。"
+            )
+        if cols != [target_col]:
+            raise MigrationBlockedError(
+                f"idempotency_key 存在 Unique Index 但欄位組合不正確："
+                f" 實際 {cols!r}，預期 {[target_col]!r}"
+                "— 請人工確認後重新執行。"
+            )
+
+
+def _assess_migration_state(insp, tbl: str, mig: dict) -> tuple[str, str]:
+    """Strict three-state assessment for a single migration entry.
+
+    Returns (state, reason):
+      APPLIED  — verify() returned True → already fully applied
+      PENDING  — drift_check passed AND verify() returned False → safe to apply
+      BLOCKED  — any exception from verify()/drift_check(), non-boolean return,
+                 or explicitly raised MigrationBlockedError
+
+    Only PENDING transitions to DDL execution. BLOCKED stops the loop.
+    """
+    # Step 1: optional drift_check — detects known-bad partial states
+    drift_check = mig.get("drift_check")
+    if drift_check is not None:
+        try:
+            drift_check(insp, tbl)
+        except MigrationBlockedError as exc:
+            return _MIG_BLOCKED, f"drift_check: {exc}"
+        except Exception as exc:
+            return (
+                _MIG_BLOCKED,
+                f"drift_check 引發未預期例外 ({type(exc).__name__}): {exc}",
+            )
+
+    # Step 2: verify — determine whether migration has been applied
+    try:
+        result = mig["verify"](insp, tbl)
+    except MigrationBlockedError as exc:
+        return _MIG_BLOCKED, f"verify: {exc}"
+    except Exception as exc:
+        return _MIG_BLOCKED, f"verify() 引發例外 ({type(exc).__name__}): {exc}"
+
+    if result is True:
+        return _MIG_APPLIED, "已完整套用"
+    if result is False:
+        return _MIG_PENDING, "尚未套用，符合套用前置條件"
+    return _MIG_BLOCKED, f"verify() 回傳非布林值 {result!r}，無法判定狀態"
+
+
 # ── Approved versioned migrations ─────────────────────────────────────
 # Each entry is a known, reviewed schema upgrade for an EXISTING table.
-# Only ADD operations — no DROP / ALTER existing columns / DELETE.
-# "pg_only": True  → migration skipped on SQLite (FK constraints not
-#                    supported via ALTER TABLE in SQLite).
+# Keys:
+#   name        — unique identifier (used in log messages and error reports)
+#   table       — target table name
+#   description — human-readable description
+#   verify      — callable(insp, tbl) → bool | raises MigrationBlockedError
+#   drift_check — optional callable(insp, tbl) → None | raises MigrationBlockedError
+#   sql_pg      — DDL for PostgreSQL
+#   sql_sqlite  — DDL for SQLite (omit if pg_only)
+#   pg_only     — if True, skip on SQLite dialects
+#
+# Only ADD operations permitted — no DROP / ALTER existing columns / DELETE.
 _APPROVED_MIGRATIONS: list[dict] = [
     {
         "name": "v1.1_add_idempotency_key",
@@ -99,25 +214,22 @@ _APPROVED_MIGRATIONS: list[dict] = [
             "ALTER TABLE trade_executions"
             " ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(64)"
         ),
-        "sql_sqlite": ("ALTER TABLE trade_executions ADD COLUMN idempotency_key TEXT"),
+        "sql_sqlite": "ALTER TABLE trade_executions ADD COLUMN idempotency_key TEXT",
     },
     {
         "name": "v1.2_add_idempotency_key_unique_index",
         "table": "trade_executions",
-        "description": "Unique partial index on idempotency_key (NULL excluded)",
-        # ORM-built tables use an unnamed inline UNIQUE constraint (SQLite) or
-        # CREATE TABLE UNIQUE (PostgreSQL); ALTER TABLE path uses CREATE UNIQUE INDEX.
-        # Accept any of: named index containing "idempotency" OR a UC on that column.
-        "verify": lambda insp, tbl: (
-            any(
-                "idempotency" in (i.get("name") or "").lower()
-                for i in insp.get_indexes(tbl)
-            )
-            or any(
-                "idempotency_key" in (uc.get("column_names") or [])
-                for uc in insp.get_unique_constraints(tbl)
-            )
-        ),
+        "description": "Unique index on idempotency_key (partial WHERE NOT NULL on PG)",
+        # drift_check: detects non-unique or multi-column index on idempotency_key
+        #              before verify() runs — prevents fail-open on partial state.
+        # verify: checks exact column set ["idempotency_key"] + unique=True
+        #         via either get_indexes() (ALTER TABLE path) or
+        #         get_unique_constraints() (ORM CREATE TABLE path).
+        # NULL handling: PostgreSQL partial index (WHERE NOT NULL) allows multiple
+        #   NULLs; SQLite UNIQUE also allows multiple NULLs.  Both semantics are
+        #   correct for backward-compatible old rows with NULL idempotency_key.
+        "drift_check": _drift_check_idempotency_unique_index,
+        "verify": _verify_idempotency_unique_index,
         "sql_pg": (
             "CREATE UNIQUE INDEX IF NOT EXISTS uix_te_idempotency_key"
             " ON trade_executions(idempotency_key)"
@@ -206,13 +318,16 @@ _APPROVED_MIGRATIONS: list[dict] = [
 def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> int:
     """Apply approved versioned migrations to existing tables.
 
-    Only migrations whose target table is in ``existing_tables`` are
-    considered.  Each migration is skipped when its ``verify`` lambda
-    reports it is already applied.  PostgreSQL-only migrations are
-    skipped on SQLite.
+    Uses strict three-state logic per migration:
+      APPLIED  — already fully applied, skip safely
+      PENDING  — cleanly absent, apply DDL (only state that may run DDL)
+      BLOCKED  — ambiguous/partial/unsafe state, raise RuntimeError immediately
+                 and stop ALL subsequent migrations in this run
 
-    Returns the count of migrations actually applied (or would-apply in
-    dry-run mode).
+    BLOCKED stops the entire loop — even migrations after the blocked one
+    are NOT executed.  This prevents compounding an already-bad state.
+
+    Returns count of migrations actually applied (or would-apply in dry_run).
     """
     from sqlalchemy import inspect as _insp
     from sqlalchemy import text
@@ -227,42 +342,54 @@ def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> i
             continue
         if mig.get("pg_only") and not is_pg:
             logger.info(
-                f"  [{mig['name']}] skipped (pg_only, dialect={engine.dialect.name})"
+                f"  [{mig['name']}] 跳過 (pg_only, dialect={engine.dialect.name})"
             )
             continue
 
-        already_done = False
-        try:
-            already_done = mig["verify"](insp, tbl)
-        except Exception as e:
-            logger.warning(f"  [{mig['name']}] verify 失敗，視為 pending: {e}")
+        state, reason = _assess_migration_state(insp, tbl, mig)
 
-        if already_done:
-            logger.info(f"  [{mig['name']}] already applied — skip")
+        if state == _MIG_APPLIED:
+            logger.info(f"  [{mig['name']}] APPLIED — {reason}")
             continue
 
+        if state == _MIG_BLOCKED:
+            msg = (
+                f"Migration [{mig['name']}] BLOCKED — {reason}\n"
+                f"  Table    : {tbl}\n"
+                f"  動作     : 已停止後續所有 Migration（本次執行 DDL = 0）\n"
+                f"  修復建議 : 請人工確認 {tbl} 表的 Schema 狀態，"
+                f"確認無 Partial Migration 或 Schema Drift 後重新執行。"
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+        # state == _MIG_PENDING — the only state that may proceed to DDL
         sql = mig["sql_pg"] if is_pg else mig.get("sql_sqlite", "")
         if not sql:
-            logger.warning(f"  [{mig['name']}] 無對應 SQL，skip")
-            continue
+            msg = (
+                f"Migration [{mig['name']}] BLOCKED — "
+                f"此 dialect ({engine.dialect.name}) 無對應 SQL"
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
 
         if dry_run:
-            logger.info(f"  [DRY-RUN] Would apply [{mig['name']}]: {sql}")
+            logger.info(f"  [DRY-RUN] Would apply [{mig['name']}] (PENDING): {sql}")
             applied += 1
             continue
 
-        logger.info(f"  Applying [{mig['name']}]: {mig['description']}")
+        logger.info(f"  Applying [{mig['name']}] (PENDING): {mig['description']}")
         try:
             with engine.begin() as conn:
                 conn.execute(text(sql))
             logger.info(f"  [{mig['name']}] ✓")
             applied += 1
-        except Exception as e:
-            logger.error(f"  [{mig['name']}] 失敗: {e}")
+        except Exception as exc:
+            logger.error(f"  [{mig['name']}] 執行失敗: {exc}")
             raise RuntimeError(
-                f"已核准 Migration [{mig['name']}] 執行失敗：{e}\n"
+                f"已核准 Migration [{mig['name']}] 執行失敗：{exc}\n"
                 "請人工確認資料庫狀態後重新執行。"
-            ) from e
+            ) from exc
 
     return applied
 

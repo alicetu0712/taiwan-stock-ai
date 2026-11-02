@@ -1097,11 +1097,432 @@ class TestMigrationHardening:
             assert "id" in schema["pks"], f"{tbl}: 'id' not in PKs"
 
 
-# ── 9. Versioned Migration Tests (_apply_pending_migrations) ──
+# ── 9. Migration State Machine Tests ─────────────────────────
+
+
+class TestMigrationStateMachine:
+    """Unit tests for _assess_migration_state() three-state logic.
+
+    Covers: APPLIED / PENDING / BLOCKED transitions and the guarantee
+    that BLOCKED stops all subsequent migrations in _apply_pending_migrations.
+    """
+
+    def _load_mod(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _engine(self):
+        from sqlalchemy import create_engine
+
+        return create_engine("sqlite:///:memory:")
+
+    # ── _assess_migration_state() unit tests ─────────────────────────
+
+    def test_verify_true_returns_applied(self):
+        """verify() returning True → APPLIED."""
+        from sqlalchemy import inspect as _insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+        insp = _insp(engine)
+        mig = {"name": "x", "verify": lambda i, t: True}
+        state, reason = mod._assess_migration_state(insp, "t", mig)
+        assert state == mod._MIG_APPLIED
+        assert "已完整套用" in reason
+
+    def test_verify_false_returns_pending(self):
+        """verify() returning False → PENDING."""
+        from sqlalchemy import inspect as _insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+        insp = _insp(engine)
+        mig = {"name": "x", "verify": lambda i, t: False}
+        state, reason = mod._assess_migration_state(insp, "t", mig)
+        assert state == mod._MIG_PENDING
+
+    def test_verify_exception_returns_blocked(self):
+        """verify() raising any exception → BLOCKED (NOT PENDING)."""
+        from sqlalchemy import inspect as _insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+        insp = _insp(engine)
+        mig = {
+            "name": "x",
+            "verify": lambda i, t: (_ for _ in ()).throw(
+                RuntimeError("inspector kaboom")
+            ),
+        }
+        state, reason = mod._assess_migration_state(insp, "t", mig)
+        assert state == mod._MIG_BLOCKED
+        assert "kaboom" in reason or "verify" in reason.lower()
+
+    def test_verify_exception_with_callable_lambda(self):
+        """verify() that raises AttributeError (e.g. inspector attribute missing)→ BLOCKED."""
+        from sqlalchemy import inspect as _insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+        insp = _insp(engine)
+
+        def bad_verify(i, t):
+            raise AttributeError("no such attribute on inspector")
+
+        mig = {"name": "x", "verify": bad_verify}
+        state, reason = mod._assess_migration_state(insp, "t", mig)
+        assert state == mod._MIG_BLOCKED
+
+    def test_verify_nonbool_return_returns_blocked(self):
+        """verify() returning a non-boolean value → BLOCKED."""
+        from sqlalchemy import inspect as _insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+        insp = _insp(engine)
+        mig = {"name": "x", "verify": lambda i, t: "maybe"}
+        state, reason = mod._assess_migration_state(insp, "t", mig)
+        assert state == mod._MIG_BLOCKED
+        assert "非布林" in reason or "maybe" in reason
+
+    def test_drift_check_exception_returns_blocked(self):
+        """drift_check() raising MigrationBlockedError → BLOCKED before verify()."""
+        from sqlalchemy import inspect as _insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+        insp = _insp(engine)
+
+        verify_called = []
+
+        def drift(i, t):
+            raise mod.MigrationBlockedError("partial index detected")
+
+        def verify(i, t):
+            verify_called.append(True)
+            return False
+
+        mig = {"name": "x", "drift_check": drift, "verify": verify}
+        state, reason = mod._assess_migration_state(insp, "t", mig)
+        assert state == mod._MIG_BLOCKED
+        assert "partial index detected" in reason
+        assert (
+            verify_called == []
+        ), "verify() must NOT be called when drift_check raises"
+
+    def test_drift_check_unexpected_exception_blocked(self):
+        """drift_check() raising any other exception → BLOCKED."""
+        from sqlalchemy import inspect as _insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+        insp = _insp(engine)
+        mig = {
+            "name": "x",
+            "drift_check": lambda i, t: 1 / 0,
+            "verify": lambda i, t: True,
+        }
+        state, reason = mod._assess_migration_state(insp, "t", mig)
+        assert state == mod._MIG_BLOCKED
+
+    # ── BLOCKED stops all subsequent migrations ───────────────────────
+
+    def test_blocked_stops_all_subsequent_migrations(self):
+        """When migration N is BLOCKED, migrations N+1, N+2 ... are NOT executed."""
+        import pytest
+        from sqlalchemy import create_engine
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        executed = []
+
+        def make_mig(name, verify_fn):
+            def do_sql(i, t):
+                executed.append(name)
+
+            return {
+                "name": name,
+                "table": "t",
+                "description": name,
+                "verify": verify_fn,
+                "sql_sqlite": "SELECT 1",
+            }
+
+        def raises_exc(i, t):
+            raise RuntimeError("boom")
+
+        migs = [
+            make_mig("first_applied", lambda i, t: True),  # APPLIED → skip
+            {  # BLOCKED — verify raises
+                "name": "blocked_one",
+                "table": "t",
+                "description": "blocked",
+                "verify": raises_exc,
+                "sql_sqlite": "SELECT 1",
+            },
+            make_mig("after_blocked_1", lambda i, t: False),  # must NOT run
+            make_mig("after_blocked_2", lambda i, t: False),  # must NOT run
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        try:
+            with pytest.raises(RuntimeError, match="blocked_one"):
+                mod._apply_pending_migrations(engine, ["t"], dry_run=False)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert executed == [], "No DDL must run once a migration is BLOCKED"
+
+    def test_blocked_message_includes_table_and_repair_hint(self):
+        """BLOCKED error message must name the table and give a repair hint."""
+        import pytest
+        from sqlalchemy import create_engine
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        mig = {
+            "name": "bad_mig",
+            "table": "trade_executions",
+            "description": "test",
+            "verify": lambda i, t: (_ for _ in ()).throw(ValueError("oops")),
+            "sql_sqlite": "SELECT 1",
+        }
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [mig]
+        try:
+            with pytest.raises(RuntimeError) as exc_info:
+                mod._apply_pending_migrations(
+                    engine, ["trade_executions"], dry_run=False
+                )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        err = str(exc_info.value)
+        assert "bad_mig" in err
+        assert "trade_executions" in err
+        assert "BLOCKED" in err
+
+    # ── v1.2 drift_check: malformed index detection ───────────────────
+
+    def test_v1_2_nonunique_index_on_idempotency_key_blocked(self):
+        """Non-unique index on idempotency_key → BLOCKED via drift_check."""
+        import pytest
+        from sqlalchemy import create_engine, text
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            # Non-unique index — wrong spec
+            conn.execute(
+                text("CREATE INDEX bad_idem_idx ON trade_executions(idempotency_key)")
+            )
+
+        insp = sql_insp(engine)
+        with pytest.raises(mod.MigrationBlockedError, match="非 Unique Index"):
+            mod._drift_check_idempotency_unique_index(insp, "trade_executions")
+
+    def test_v1_2_multicolumn_unique_index_blocked(self):
+        """Unique index on (idempotency_key, id) — wrong column set → BLOCKED."""
+        import pytest
+        from sqlalchemy import create_engine, text
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX multi_idem_idx "
+                    "ON trade_executions(idempotency_key, id)"
+                )
+            )
+
+        insp = sql_insp(engine)
+        with pytest.raises(mod.MigrationBlockedError, match="欄位組合不正確"):
+            mod._drift_check_idempotency_unique_index(insp, "trade_executions")
+
+    def test_v1_2_correct_unique_index_no_block(self):
+        """Correct unique single-column index does NOT raise from drift_check."""
+        from sqlalchemy import create_engine, text
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uix_te_idempotency_key "
+                    "ON trade_executions(idempotency_key)"
+                )
+            )
+
+        insp = sql_insp(engine)
+        mod._drift_check_idempotency_unique_index(
+            insp, "trade_executions"
+        )  # must not raise
+
+    def test_v1_2_verify_requires_unique_true(self):
+        """_verify_idempotency_unique_index returns False when index is non-unique."""
+        from sqlalchemy import create_engine, text
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            # Non-unique index — should NOT satisfy verify
+            conn.execute(
+                text("CREATE INDEX bad_idx ON trade_executions(idempotency_key)")
+            )
+
+        insp = sql_insp(engine)
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
+        assert result is False, "Non-unique index must not be accepted as APPLIED"
+
+    def test_v1_2_verify_requires_exact_columns(self):
+        """_verify_idempotency_unique_index returns False for wrong column set."""
+        from sqlalchemy import create_engine, text
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            # Unique index but wrong columns
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX wrong_cols ON trade_executions(id, idempotency_key)"
+                )
+            )
+
+        insp = sql_insp(engine)
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
+        assert result is False, "Multi-column unique index must not be accepted"
+
+    def test_v1_2_verify_accepts_single_column_unique_index(self):
+        """_verify_idempotency_unique_index returns True for correct unique index."""
+        from sqlalchemy import create_engine, text
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uix_te_idempotency_key "
+                    "ON trade_executions(idempotency_key)"
+                )
+            )
+
+        insp = sql_insp(engine)
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
+        assert result is True
+
+    def test_v1_2_verify_accepts_orm_inline_unique_constraint(self):
+        """_verify_idempotency_unique_index returns True for ORM-created UNIQUE constraint."""
+        from src.database import init_db
+        from sqlalchemy import create_engine
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+        init_db(engine, allow_ddl=True)
+
+        insp = sql_insp(engine)
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
+        assert result is True, "ORM-created inline UNIQUE constraint must be accepted"
+
+    def test_v1_2_nonunique_index_blocked_in_full_migration(self):
+        """Full migration run: non-unique idempotency_key index → BLOCKED, no DDL."""
+        import pytest
+        from sqlalchemy import create_engine, text
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions "
+                    "(id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            conn.execute(text("CREATE INDEX bad ON trade_executions(idempotency_key)"))
+
+        v1x = [
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"]
+            in ("v1.1_add_idempotency_key", "v1.2_add_idempotency_key_unique_index")
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = v1x
+        try:
+            with pytest.raises(RuntimeError, match="BLOCKED"):
+                mod._apply_pending_migrations(
+                    engine, ["trade_executions"], dry_run=False
+                )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+
+# ── 10. Versioned Migration Integration Tests ─────────────────
 
 
 class TestVersionedMigrations:
-    """Tests for _APPROVED_MIGRATIONS and _apply_pending_migrations()."""
+    """Integration tests for _APPROVED_MIGRATIONS and _apply_pending_migrations()."""
 
     def _load_mod(self):
         import importlib.util
@@ -1140,7 +1561,6 @@ class TestVersionedMigrations:
         import re
 
         mod = self._load_mod()
-        # Match standalone statement keywords (not ON DELETE / ON UPDATE referential actions)
         dangerous_pattern = re.compile(
             r"(?<!\bON\s)\b(DROP|TRUNCATE)\b" r"|^\s*(DELETE|UPDATE)\b",
             re.IGNORECASE | re.MULTILINE,
@@ -1154,21 +1574,18 @@ class TestVersionedMigrations:
                     f"'{match.group()!r}': {sql}"
                 )
 
-    def test_apply_pending_already_applied_skips(self):
-        """When verify returns True, migration is skipped (no SQL executed)."""
+    def test_applied_state_skips_ddl(self):
+        """verify() → True (APPLIED) → migration skipped, DDL = 0."""
         from sqlalchemy import create_engine as _ce
 
         mod = self._load_mod()
         engine = _ce("sqlite:///:memory:")
-
-        # Build a fake migration where verify always returns True
-        was_executed = []
         fake_mig = {
             "name": "test_already_done",
             "table": "trade_executions",
             "description": "test",
             "verify": lambda insp, tbl: True,
-            "sql_sqlite": "SELECT 1",  # should never run
+            "sql_sqlite": "SELECT 1",
         }
         original = mod._APPROVED_MIGRATIONS
         mod._APPROVED_MIGRATIONS = [fake_mig]
@@ -1178,9 +1595,39 @@ class TestVersionedMigrations:
             )
         finally:
             mod._APPROVED_MIGRATIONS = original
-
         assert n == 0
-        assert was_executed == []
+
+    def test_verify_exception_blocked_ddl_zero(self):
+        """verify() raising exception → BLOCKED, DDL = 0 (was: fail-open → PENDING)."""
+        import pytest
+        from sqlalchemy import create_engine as _ce
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        def bad_verify(i, t):
+            raise RuntimeError("inspector read failed")
+
+        fake_mig = {
+            "name": "test_verify_exc",
+            "table": "trade_executions",
+            "description": "test",
+            "verify": bad_verify,
+            "sql_sqlite": "CREATE TABLE must_not_exist (x INTEGER)",
+        }
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [fake_mig]
+        try:
+            with pytest.raises(RuntimeError, match="BLOCKED"):
+                mod._apply_pending_migrations(
+                    engine, ["trade_executions"], dry_run=False
+                )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        insp = sql_insp(engine)
+        assert "must_not_exist" not in insp.get_table_names()
 
     def test_apply_pending_pg_only_skipped_on_sqlite(self):
         """pg_only migrations are skipped when dialect is SQLite."""
@@ -1188,13 +1635,12 @@ class TestVersionedMigrations:
 
         mod = self._load_mod()
         engine = _ce("sqlite:///:memory:")
-
         fake_mig = {
             "name": "test_pg_only",
             "table": "trade_executions",
             "description": "pg only test",
             "pg_only": True,
-            "verify": lambda insp, tbl: False,  # always pending
+            "verify": lambda insp, tbl: False,
             "sql_pg": "ALTER TABLE trade_executions ADD CONSTRAINT dummy UNIQUE (id)",
         }
         original = mod._APPROVED_MIGRATIONS
@@ -1205,8 +1651,7 @@ class TestVersionedMigrations:
             )
         finally:
             mod._APPROVED_MIGRATIONS = original
-
-        assert n == 0  # skipped because pg_only on sqlite
+        assert n == 0
 
     def test_apply_pending_dry_run_counts_but_does_not_write(self):
         """dry_run=True counts pending migrations but executes no SQL."""
@@ -1215,12 +1660,11 @@ class TestVersionedMigrations:
 
         mod = self._load_mod()
         engine = _ce("sqlite:///:memory:")
-
         fake_mig = {
             "name": "test_dry_run",
             "table": "trade_executions",
             "description": "dry run test",
-            "verify": lambda insp, tbl: False,  # always pending
+            "verify": lambda insp, tbl: False,
             "sql_sqlite": "CREATE TABLE should_not_exist (x INTEGER)",
         }
         original = mod._APPROVED_MIGRATIONS
@@ -1232,7 +1676,7 @@ class TestVersionedMigrations:
         finally:
             mod._APPROVED_MIGRATIONS = original
 
-        assert n == 1  # counted as would-apply
+        assert n == 1
         insp = sql_inspect(engine)
         assert "should_not_exist" not in insp.get_table_names()
 
@@ -1242,7 +1686,6 @@ class TestVersionedMigrations:
 
         mod = self._load_mod()
         engine = _ce("sqlite:///:memory:")
-
         fake_mig = {
             "name": "test_not_existing",
             "table": "trade_executions",
@@ -1253,17 +1696,15 @@ class TestVersionedMigrations:
         original = mod._APPROVED_MIGRATIONS
         mod._APPROVED_MIGRATIONS = [fake_mig]
         try:
-            # actual_positions is in existing, but trade_executions is NOT
             n = mod._apply_pending_migrations(
                 engine, ["actual_positions"], dry_run=False
             )
         finally:
             mod._APPROVED_MIGRATIONS = original
-
         assert n == 0
 
     def test_idempotency_key_migration_on_sqlite(self):
-        """v1.1 and v1.2 migrations apply correctly to SQLite."""
+        """v1.1 and v1.2 apply correctly to SQLite (real inspector)."""
         from sqlalchemy import create_engine as _ce
         from sqlalchemy import inspect as sql_inspect
         from sqlalchemy import text
@@ -1271,7 +1712,6 @@ class TestVersionedMigrations:
         mod = self._load_mod()
         engine = _ce("sqlite:///:memory:")
 
-        # Create trade_executions WITHOUT idempotency_key (simulates old schema)
         with engine.begin() as conn:
             conn.execute(
                 text(
@@ -1284,7 +1724,6 @@ class TestVersionedMigrations:
                 )
             )
 
-        # Only run v1.1 and v1.2
         v1x_migs = [
             m
             for m in mod._APPROVED_MIGRATIONS
@@ -1306,11 +1745,12 @@ class TestVersionedMigrations:
         col_names = {c["name"] for c in insp.get_columns("trade_executions")}
         assert "idempotency_key" in col_names
 
-        idx_names = [i.get("name", "") for i in insp.get_indexes("trade_executions")]
-        assert any("idempotency" in (n or "").lower() for n in idx_names)
+        # verify accepts the result (unique index created by migration)
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
+        assert result is True
 
     def test_idempotency_key_migration_idempotent(self):
-        """Running migrations twice applies each only once (verify blocks re-apply)."""
+        """Running migrations twice is safe — second run applies 0."""
         from sqlalchemy import create_engine as _ce
         from sqlalchemy import text
 
@@ -1320,9 +1760,7 @@ class TestVersionedMigrations:
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "CREATE TABLE trade_executions ("
-                    "id INTEGER PRIMARY KEY, position_id INTEGER"
-                    ")"
+                    "CREATE TABLE trade_executions (id INTEGER PRIMARY KEY, position_id INTEGER)"
                 )
             )
 
@@ -1345,16 +1783,15 @@ class TestVersionedMigrations:
             mod._APPROVED_MIGRATIONS = original
 
         assert n1 == 2
-        assert n2 == 0  # already applied — nothing to do
+        assert n2 == 0
 
-    def test_apply_apply_migration_failure_raises(self):
-        """When a migration SQL fails, RuntimeError is raised."""
+    def test_apply_migration_sql_failure_raises(self):
+        """When migration SQL itself fails → RuntimeError."""
         import pytest
         from sqlalchemy import create_engine as _ce
 
         mod = self._load_mod()
         engine = _ce("sqlite:///:memory:")
-
         fake_mig = {
             "name": "test_bad_sql",
             "table": "trade_executions",
@@ -1372,23 +1809,23 @@ class TestVersionedMigrations:
         finally:
             mod._APPROVED_MIGRATIONS = original
 
-    def test_apply_pending_migration_exists_applies_passes_validation(self):
-        """After _apply_pending_migrations, _validate_schema must pass for trade_executions.
-
-        Simulates the real production upgrade path: table exists without the
-        idempotency_key column; after Step 2 applies v1.1+v1.2, Step 3
-        validation should pass (UC check accepts either UC or unique index).
-        """
+    def test_orm_built_db_has_zero_pending_migrations(self):
+        """ORM-built SQLite DB has all migrations already applied → n == 0."""
         from src.database import init_db
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
         init_db(engine, allow_ddl=True)
 
-        # At this point, ORM-built DB already has idempotency_key → migrations
-        # are already applied, n == 0 is expected.
         n = mod._apply_pending_migrations(engine, ["trade_executions"], dry_run=False)
-        assert n == 0  # ORM init already created the column + index
+        assert n == 0
 
-        # Validation must pass after idempotency_key is present
+        # Validation must also pass
         mod._validate_schema(engine, ["trade_executions"])
+
+    def test_state_machine_constants_exported(self):
+        """_MIG_APPLIED/_MIG_PENDING/_MIG_BLOCKED constants are exported."""
+        mod = self._load_mod()
+        assert mod._MIG_APPLIED == "APPLIED"
+        assert mod._MIG_PENDING == "PENDING"
+        assert mod._MIG_BLOCKED == "BLOCKED"
