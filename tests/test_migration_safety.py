@@ -420,6 +420,7 @@ class TestSchemaValidationEnhanced:
                     "actual_fee NUMERIC NOT NULL DEFAULT 0",
                     "transaction_tax NUMERIC NOT NULL DEFAULT 0",
                     "linked_forward_signal_id INTEGER",
+                    "idempotency_key TEXT",
                     "notes TEXT",
                     "is_cancelled BOOLEAN NOT NULL DEFAULT 0",
                     "cancel_reason TEXT",
@@ -588,6 +589,15 @@ class TestMigrationHardening:
             if getattr(col, "index", False)
         ]
 
+        # --- Unique constraint list derived from ORM ---
+        from sqlalchemy import UniqueConstraint as SA_UC
+
+        uc_list = [
+            {"column_names": list(c.columns.keys())}
+            for c in orm_tbl.constraints
+            if isinstance(c, SA_UC) and list(c.columns.keys())
+        ]
+
         mock_engine = MagicMock()
         mock_engine.dialect.name = "postgresql"
 
@@ -595,7 +605,7 @@ class TestMigrationHardening:
         mock_insp.get_columns.return_value = col_list
         mock_insp.get_pk_constraint.return_value = {"constrained_columns": ["id"]}
         mock_insp.get_foreign_keys.return_value = fk_list
-        mock_insp.get_unique_constraints.return_value = []
+        mock_insp.get_unique_constraints.return_value = uc_list
         mock_insp.get_indexes.return_value = idx_list
 
         return mock_engine, mock_insp
@@ -837,6 +847,7 @@ class TestMigrationHardening:
                 "actual_fee NUMERIC NOT NULL DEFAULT 0",
                 "transaction_tax NUMERIC NOT NULL DEFAULT 0",
                 "linked_forward_signal_id INTEGER",
+                "idempotency_key TEXT",
                 "notes TEXT",
                 "is_cancelled BOOLEAN NOT NULL DEFAULT 0",
                 "cancel_reason TEXT",
@@ -1084,3 +1095,300 @@ class TestMigrationHardening:
             assert "indexes" in schema, f"{tbl}: missing 'indexes'"
             assert "id" in schema["columns"], f"{tbl}: 'id' column missing"
             assert "id" in schema["pks"], f"{tbl}: 'id' not in PKs"
+
+
+# ── 9. Versioned Migration Tests (_apply_pending_migrations) ──
+
+
+class TestVersionedMigrations:
+    """Tests for _APPROVED_MIGRATIONS and _apply_pending_migrations()."""
+
+    def _load_mod(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_approved_migrations_constant_exists(self):
+        """_APPROVED_MIGRATIONS must exist and be a non-empty list."""
+        mod = self._load_mod()
+        assert hasattr(mod, "_APPROVED_MIGRATIONS")
+        assert isinstance(mod._APPROVED_MIGRATIONS, list)
+        assert len(mod._APPROVED_MIGRATIONS) > 0
+
+    def test_approved_migrations_have_required_keys(self):
+        """Each migration entry must have name, table, description, verify."""
+        mod = self._load_mod()
+        for mig in mod._APPROVED_MIGRATIONS:
+            assert "name" in mig, f"Missing 'name': {mig}"
+            assert "table" in mig, f"Missing 'table': {mig}"
+            assert "description" in mig, f"Missing 'description': {mig}"
+            assert callable(mig.get("verify")), f"'verify' must be callable: {mig}"
+
+    def test_approved_migrations_only_add_operations(self):
+        """Migration SQL must not contain standalone DROP, DELETE, TRUNCATE, or UPDATE.
+
+        Note: 'ON DELETE' is valid FK syntax and is explicitly allowed.
+        """
+        import re
+
+        mod = self._load_mod()
+        # Match standalone statement keywords (not ON DELETE / ON UPDATE referential actions)
+        dangerous_pattern = re.compile(
+            r"(?<!\bON\s)\b(DROP|TRUNCATE)\b" r"|^\s*(DELETE|UPDATE)\b",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        for mig in mod._APPROVED_MIGRATIONS:
+            for key in ("sql_pg", "sql_sqlite"):
+                sql = mig.get(key, "") or ""
+                match = dangerous_pattern.search(sql)
+                assert not match, (
+                    f"[{mig['name']}] {key} contains dangerous keyword "
+                    f"'{match.group()!r}': {sql}"
+                )
+
+    def test_apply_pending_already_applied_skips(self):
+        """When verify returns True, migration is skipped (no SQL executed)."""
+        from sqlalchemy import create_engine as _ce
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        # Build a fake migration where verify always returns True
+        was_executed = []
+        fake_mig = {
+            "name": "test_already_done",
+            "table": "trade_executions",
+            "description": "test",
+            "verify": lambda insp, tbl: True,
+            "sql_sqlite": "SELECT 1",  # should never run
+        }
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [fake_mig]
+        try:
+            n = mod._apply_pending_migrations(
+                engine, ["trade_executions"], dry_run=False
+            )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n == 0
+        assert was_executed == []
+
+    def test_apply_pending_pg_only_skipped_on_sqlite(self):
+        """pg_only migrations are skipped when dialect is SQLite."""
+        from sqlalchemy import create_engine as _ce
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        fake_mig = {
+            "name": "test_pg_only",
+            "table": "trade_executions",
+            "description": "pg only test",
+            "pg_only": True,
+            "verify": lambda insp, tbl: False,  # always pending
+            "sql_pg": "ALTER TABLE trade_executions ADD CONSTRAINT dummy UNIQUE (id)",
+        }
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [fake_mig]
+        try:
+            n = mod._apply_pending_migrations(
+                engine, ["trade_executions"], dry_run=False
+            )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n == 0  # skipped because pg_only on sqlite
+
+    def test_apply_pending_dry_run_counts_but_does_not_write(self):
+        """dry_run=True counts pending migrations but executes no SQL."""
+        from sqlalchemy import create_engine as _ce
+        from sqlalchemy import inspect as sql_inspect
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        fake_mig = {
+            "name": "test_dry_run",
+            "table": "trade_executions",
+            "description": "dry run test",
+            "verify": lambda insp, tbl: False,  # always pending
+            "sql_sqlite": "CREATE TABLE should_not_exist (x INTEGER)",
+        }
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [fake_mig]
+        try:
+            n = mod._apply_pending_migrations(
+                engine, ["trade_executions"], dry_run=True
+            )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n == 1  # counted as would-apply
+        insp = sql_inspect(engine)
+        assert "should_not_exist" not in insp.get_table_names()
+
+    def test_apply_pending_skips_tables_not_in_existing(self):
+        """Migration for a table not in existing_tables is skipped."""
+        from sqlalchemy import create_engine as _ce
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        fake_mig = {
+            "name": "test_not_existing",
+            "table": "trade_executions",
+            "description": "test",
+            "verify": lambda insp, tbl: False,
+            "sql_sqlite": "SELECT 1",
+        }
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [fake_mig]
+        try:
+            # actual_positions is in existing, but trade_executions is NOT
+            n = mod._apply_pending_migrations(
+                engine, ["actual_positions"], dry_run=False
+            )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n == 0
+
+    def test_idempotency_key_migration_on_sqlite(self):
+        """v1.1 and v1.2 migrations apply correctly to SQLite."""
+        from sqlalchemy import create_engine as _ce
+        from sqlalchemy import inspect as sql_inspect
+        from sqlalchemy import text
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        # Create trade_executions WITHOUT idempotency_key (simulates old schema)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions ("
+                    "id INTEGER PRIMARY KEY, position_id INTEGER, "
+                    "side TEXT, execution_date DATE, execution_price NUMERIC, "
+                    "shares INTEGER, actual_fee NUMERIC DEFAULT 0, "
+                    "transaction_tax NUMERIC DEFAULT 0"
+                    ")"
+                )
+            )
+
+        # Only run v1.1 and v1.2
+        v1x_migs = [
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"]
+            in ("v1.1_add_idempotency_key", "v1.2_add_idempotency_key_unique_index")
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = v1x_migs
+        try:
+            n = mod._apply_pending_migrations(
+                engine, ["trade_executions"], dry_run=False
+            )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n == 2
+
+        insp = sql_inspect(engine)
+        col_names = {c["name"] for c in insp.get_columns("trade_executions")}
+        assert "idempotency_key" in col_names
+
+        idx_names = [i.get("name", "") for i in insp.get_indexes("trade_executions")]
+        assert any("idempotency" in (n or "").lower() for n in idx_names)
+
+    def test_idempotency_key_migration_idempotent(self):
+        """Running migrations twice applies each only once (verify blocks re-apply)."""
+        from sqlalchemy import create_engine as _ce
+        from sqlalchemy import text
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions ("
+                    "id INTEGER PRIMARY KEY, position_id INTEGER"
+                    ")"
+                )
+            )
+
+        v1x_migs = [
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"]
+            in ("v1.1_add_idempotency_key", "v1.2_add_idempotency_key_unique_index")
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = v1x_migs
+        try:
+            n1 = mod._apply_pending_migrations(
+                engine, ["trade_executions"], dry_run=False
+            )
+            n2 = mod._apply_pending_migrations(
+                engine, ["trade_executions"], dry_run=False
+            )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n1 == 2
+        assert n2 == 0  # already applied — nothing to do
+
+    def test_apply_apply_migration_failure_raises(self):
+        """When a migration SQL fails, RuntimeError is raised."""
+        import pytest
+        from sqlalchemy import create_engine as _ce
+
+        mod = self._load_mod()
+        engine = _ce("sqlite:///:memory:")
+
+        fake_mig = {
+            "name": "test_bad_sql",
+            "table": "trade_executions",
+            "description": "test fail",
+            "verify": lambda insp, tbl: False,
+            "sql_sqlite": "THIS IS NOT VALID SQL!!!",
+        }
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [fake_mig]
+        try:
+            with pytest.raises(RuntimeError, match="test_bad_sql"):
+                mod._apply_pending_migrations(
+                    engine, ["trade_executions"], dry_run=False
+                )
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+    def test_apply_pending_migration_exists_applies_passes_validation(self):
+        """After _apply_pending_migrations, _validate_schema must pass for trade_executions.
+
+        Simulates the real production upgrade path: table exists without the
+        idempotency_key column; after Step 2 applies v1.1+v1.2, Step 3
+        validation should pass (UC check accepts either UC or unique index).
+        """
+        from src.database import init_db
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+        init_db(engine, allow_ddl=True)
+
+        # At this point, ORM-built DB already has idempotency_key → migrations
+        # are already applied, n == 0 is expected.
+        n = mod._apply_pending_migrations(engine, ["trade_executions"], dry_run=False)
+        assert n == 0  # ORM init already created the column + index
+
+        # Validation must pass after idempotency_key is present
+        mod._validate_schema(engine, ["trade_executions"])

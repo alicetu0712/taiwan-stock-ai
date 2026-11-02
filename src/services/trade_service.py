@@ -126,6 +126,7 @@ def add_execution(
     execution_datetime: Optional[datetime] = None,
     linked_forward_signal_id: Optional[int] = None,
     notes: str = "",
+    idempotency_key: Optional[str] = None,
 ):
     """
     新增一筆成交明細，並原子性重新彙總持倉。
@@ -133,19 +134,47 @@ def add_execution(
     side: 'BUY' 或 'SELL'
     execution_price / actual_fee / transaction_tax 使用 Decimal。
     execution_datetime: UTC datetime（可選；使用者不知道時間則為 None）。
+    idempotency_key: UI 層生成的 UUID4，防止重試或 Streamlit rerun 重複寫入。
+      - 相同 key + 相同 payload：安全返回原成交（冪等）。
+      - 相同 key + 不同 payload：拒絕並回報 CONFLICT。
+      - 並發相同 key：DB UNIQUE 約束確保只有一筆成功。
+      - NULL：不使用冪等保護（向後相容舊資料）。
 
     防護：
       - 超賣（SELL > remaining_shares）→ TradeSvcError
       - 重複提交（相同內容在 _DUPLICATE_WINDOW_SECONDS 內）→ TradeSvcError
       - closed 持倉不可新增成交
+      - linked_forward_signal_id 非 NULL 時，必須是有效 ForwardSignal
 
     回傳新建的 TradeExecution（未 commit）。
     """
+    import sqlalchemy.exc
+
     from src.database import ActualPosition, TradeExecution
 
     _validate_execution_inputs(
         side, shares, execution_price, actual_fee, transaction_tax
     )
+
+    # ── Idempotency check ─────────────────────────────────────────────────
+    if idempotency_key:
+        existing = _get_idempotent_execution(
+            session,
+            idempotency_key,
+            position_id,
+            side,
+            execution_date,
+            execution_price,
+            shares,
+            actual_fee,
+            transaction_tax,
+        )
+        if existing is not None:
+            logger.info(
+                f"[trade_service] idempotent return existing #{existing.id} "
+                f"(key={idempotency_key!r})"
+            )
+            return existing
 
     pos = (
         session.query(ActualPosition)
@@ -163,6 +192,9 @@ def add_execution(
             f"賣出 {shares} 股超過剩餘持倉 {pos.remaining_shares} 股，操作拒絕"
         )
 
+    if linked_forward_signal_id is not None:
+        _validate_linked_signal(session, linked_forward_signal_id)
+
     _check_duplicate(
         session, position_id, side, execution_date, execution_price, shares
     )
@@ -177,11 +209,18 @@ def add_execution(
         actual_fee=actual_fee,
         transaction_tax=transaction_tax,
         linked_forward_signal_id=linked_forward_signal_id,
+        idempotency_key=idempotency_key if idempotency_key else None,
         notes=notes,
         is_cancelled=False,
     )
     session.add(exec_rec)
-    session.flush()
+    try:
+        session.flush()
+    except sqlalchemy.exc.IntegrityError as exc:
+        session.rollback()
+        raise TradeSvcError(
+            f"並發重複提交：idempotency_key={idempotency_key!r} 已被其他請求使用 ({exc})"
+        ) from exc
 
     _recalculate_position(session, pos)
     logger.info(
@@ -317,6 +356,71 @@ def _validate_execution_inputs(side, shares, price, fee, tax):
         raise TradeSvcError(f"actual_fee 不得為負，收到：{fee}")
     if _d(tax) < 0:
         raise TradeSvcError(f"transaction_tax 不得為負，收到：{tax}")
+
+
+def _get_idempotent_execution(
+    session, key, position_id, side, exec_date, price, shares, fee, tax
+):
+    """
+    Check idempotency key:
+      - Not found    → return None (proceed with new execution)
+      - Found + match → return existing execution (safe retry)
+      - Found + mismatch → raise TradeSvcError("CONFLICT: ...")
+
+    Payload fields checked: position_id, side, execution_date,
+    execution_price, shares, actual_fee, transaction_tax.
+    """
+    from src.database import TradeExecution
+
+    existing = session.query(TradeExecution).filter_by(idempotency_key=key).first()
+    if existing is None:
+        return None
+
+    conflicts = []
+    if existing.position_id != position_id:
+        conflicts.append(f"position_id: {existing.position_id} != {position_id}")
+    if existing.side != side:
+        conflicts.append(f"side: {existing.side!r} != {side!r}")
+    if existing.execution_date != exec_date:
+        conflicts.append(f"execution_date: {existing.execution_date} != {exec_date}")
+    if _d(existing.execution_price) != _d(price):
+        conflicts.append(f"execution_price: {existing.execution_price} != {price}")
+    if existing.shares != shares:
+        conflicts.append(f"shares: {existing.shares} != {shares}")
+    if _d(existing.actual_fee) != _d(fee):
+        conflicts.append(f"actual_fee: {existing.actual_fee} != {fee}")
+    if _d(existing.transaction_tax) != _d(tax):
+        conflicts.append(
+            f"transaction_tax: {existing.transaction_tax} != {tax}"
+        )
+
+    if conflicts:
+        raise TradeSvcError(
+            f"CONFLICT: idempotency_key={key!r} 已對應不同 payload "
+            f"(existing id={existing.id}): " + ", ".join(conflicts)
+        )
+
+    return existing
+
+
+def _validate_linked_signal(session, linked_forward_signal_id: int) -> None:
+    """
+    Validate that linked_forward_signal_id refers to an existing, valid ForwardSignal.
+    Raises TradeSvcError if the signal does not exist or is_valid=False.
+    """
+    from src.database import ForwardSignal
+
+    fs = session.query(ForwardSignal).filter_by(id=linked_forward_signal_id).first()
+    if fs is None:
+        raise TradeSvcError(
+            f"linked_forward_signal_id={linked_forward_signal_id} 不存在，"
+            "不得連結無效訊號 ID"
+        )
+    if not fs.is_valid:
+        raise TradeSvcError(
+            f"linked_forward_signal_id={linked_forward_signal_id} is_valid=False，"
+            "不得連結無效訊號"
+        )
 
 
 def _check_duplicate(session, position_id, side, exec_date, price, shares):

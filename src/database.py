@@ -951,7 +951,16 @@ class TradeExecution(Base):
     transaction_tax = Column(Numeric(10, 2, asdecimal=True), nullable=False, default=0)
 
     # 此筆成交可獨立連結 ForwardSignal（加碼時的新訊號）
-    linked_forward_signal_id = Column(Integer, nullable=True)
+    # ON DELETE RESTRICT: 禁止刪除被加碼成交參照的正式訊號（NULL = MANUAL / 初始 BUY）
+    linked_forward_signal_id = Column(
+        Integer,
+        ForeignKey("forward_signals.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
+    # 冪等鍵：由 UI 層生成（UUID4），防止重試或 Streamlit rerun 重複寫入。
+    # NULL = 舊資料（v1.0 前，無冪等保護）；DB UNIQUE 允許多個 NULL（PostgreSQL / SQLite 語意）
+    idempotency_key = Column(String(64), nullable=True, unique=True)
 
     notes = Column(Text, nullable=True)
 

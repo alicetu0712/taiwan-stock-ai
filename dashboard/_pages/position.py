@@ -377,8 +377,14 @@ def _render_actual_position_detail(e: dict) -> None:
 
 
 def _render_add_buy_form(pos_id: int, sid: str, name: str) -> None:
+    import uuid
+
     import src.services.trade_service as svc
     from src.database import get_session
+
+    idem_key_name = f"idem_buy_{pos_id}"
+    if idem_key_name not in st.session_state:
+        st.session_state[idem_key_name] = str(uuid.uuid4())
 
     with st.form(key=f"add_buy_{pos_id}", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -403,9 +409,11 @@ def _render_add_buy_form(pos_id: int, sid: str, name: str) -> None:
                     actual_fee=Decimal(str(fee)),
                     transaction_tax=Decimal("0"),
                     notes=notes,
+                    idempotency_key=st.session_state[idem_key_name],
                 )
                 s.commit()
                 s.close()
+                st.session_state[idem_key_name] = str(uuid.uuid4())
                 st.success(f"✅ 加碼記錄完成：{int(shares)} 股 @ {exec_price:.2f}")
                 st.rerun()
             except svc.TradeSvcError as e:
@@ -415,8 +423,14 @@ def _render_add_buy_form(pos_id: int, sid: str, name: str) -> None:
 
 
 def _render_partial_sell_form(pos_id: int, sid: str, name: str, remaining: int) -> None:
+    import uuid
+
     import src.services.trade_service as svc
     from src.database import get_session
+
+    idem_key_name = f"idem_sell_{pos_id}"
+    if idem_key_name not in st.session_state:
+        st.session_state[idem_key_name] = str(uuid.uuid4())
 
     st.caption(f"目前剩餘 {remaining:,} 股，賣出後自動計算已實現損益。")
     with st.form(key=f"partial_sell_{pos_id}", clear_on_submit=True):
@@ -442,9 +456,11 @@ def _render_partial_sell_form(pos_id: int, sid: str, name: str, remaining: int) 
                     actual_fee=Decimal(str(fee)),
                     transaction_tax=Decimal("0"),
                     notes=notes,
+                    idempotency_key=st.session_state[idem_key_name],
                 )
                 s.commit()
                 s.close()
+                st.session_state[idem_key_name] = str(uuid.uuid4())
                 st.success(f"✅ 賣出 {int(shares)} 股 @ {exec_price:.2f}")
                 st.rerun()
             except svc.TradeSvcError as e:
@@ -456,12 +472,19 @@ def _render_partial_sell_form(pos_id: int, sid: str, name: str, remaining: int) 
 def _render_full_sell_form(
     pos_id: int, sid: str, name: str, remaining: int, avg_cost: float
 ) -> None:
+    import uuid
+
     import src.services.trade_service as svc
     from src.database import get_session
 
     if remaining == 0:
         st.caption("持倉已為零。")
         return
+
+    idem_key_name = f"idem_full_sell_{pos_id}"
+    if idem_key_name not in st.session_state:
+        st.session_state[idem_key_name] = str(uuid.uuid4())
+
     st.caption(
         f"全數賣出 {remaining:,} 股（均價 {avg_cost:.2f}）。確認後持倉將標記為 closed。"
     )
@@ -486,9 +509,11 @@ def _render_full_sell_form(
                     actual_fee=Decimal(str(fee)),
                     transaction_tax=Decimal("0"),
                     notes=notes,
+                    idempotency_key=st.session_state[idem_key_name],
                 )
                 s.commit()
                 s.close()
+                st.session_state[idem_key_name] = str(uuid.uuid4())
                 realized = (exec_price - avg_cost) * remaining
                 st.success(
                     f"✅ 全數出場 {remaining:,} 股 @ {exec_price:.2f}　"
@@ -541,8 +566,13 @@ def _render_update_plan_form(
 
 def _render_manual_add_form() -> None:
     """手動新增 MANUAL 持倉（不連結 ForwardSignal）。"""
+    import uuid
+
     import src.services.trade_service as svc
     from src.database import get_session
+
+    if "idem_manual_add" not in st.session_state:
+        st.session_state["idem_manual_add"] = str(uuid.uuid4())
 
     with st.form(key="manual_add_position", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -594,9 +624,11 @@ def _render_manual_add_form() -> None:
                         shares=int(shares),
                         actual_fee=Decimal(str(fee)),
                         transaction_tax=Decimal("0"),
+                        idempotency_key=st.session_state["idem_manual_add"],
                     )
                     s.commit()
                     s.close()
+                    st.session_state["idem_manual_add"] = str(uuid.uuid4())
                     st.success(
                         f"✅ 已建立持倉：{stock_name or stock_id}（{stock_id}）"
                         f"買進 {int(shares)} 股 @ {exec_price:.2f}"

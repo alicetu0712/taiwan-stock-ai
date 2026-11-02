@@ -83,6 +83,189 @@ _PROTECTED_TABLES = {
     "daily_prices",
 }
 
+# ── Approved versioned migrations ─────────────────────────────────────
+# Each entry is a known, reviewed schema upgrade for an EXISTING table.
+# Only ADD operations — no DROP / ALTER existing columns / DELETE.
+# "pg_only": True  → migration skipped on SQLite (FK constraints not
+#                    supported via ALTER TABLE in SQLite).
+_APPROVED_MIGRATIONS: list[dict] = [
+    {
+        "name": "v1.1_add_idempotency_key",
+        "table": "trade_executions",
+        "description": "Add idempotency_key column (VARCHAR 64, nullable)",
+        "verify": lambda insp, tbl: "idempotency_key"
+        in {c["name"] for c in insp.get_columns(tbl)},
+        "sql_pg": (
+            "ALTER TABLE trade_executions"
+            " ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(64)"
+        ),
+        "sql_sqlite": ("ALTER TABLE trade_executions ADD COLUMN idempotency_key TEXT"),
+    },
+    {
+        "name": "v1.2_add_idempotency_key_unique_index",
+        "table": "trade_executions",
+        "description": "Unique partial index on idempotency_key (NULL excluded)",
+        # ORM-built tables use an unnamed inline UNIQUE constraint (SQLite) or
+        # CREATE TABLE UNIQUE (PostgreSQL); ALTER TABLE path uses CREATE UNIQUE INDEX.
+        # Accept any of: named index containing "idempotency" OR a UC on that column.
+        "verify": lambda insp, tbl: (
+            any(
+                "idempotency" in (i.get("name") or "").lower()
+                for i in insp.get_indexes(tbl)
+            )
+            or any(
+                "idempotency_key" in (uc.get("column_names") or [])
+                for uc in insp.get_unique_constraints(tbl)
+            )
+        ),
+        "sql_pg": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uix_te_idempotency_key"
+            " ON trade_executions(idempotency_key)"
+            " WHERE idempotency_key IS NOT NULL"
+        ),
+        "sql_sqlite": (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uix_te_idempotency_key"
+            " ON trade_executions(idempotency_key)"
+        ),
+    },
+    {
+        "name": "v1.3_add_fk_actual_positions_fwd_signals",
+        "table": "actual_positions",
+        "description": (
+            "FK actual_positions.forward_signal_id → forward_signals.id RESTRICT"
+        ),
+        "pg_only": True,
+        "verify": lambda insp, tbl: any(
+            afk.get("referred_table") == "forward_signals"
+            for afk in insp.get_foreign_keys(tbl)
+        ),
+        "sql_pg": (
+            "ALTER TABLE actual_positions ADD CONSTRAINT fk_ap_fwd_signal"
+            " FOREIGN KEY (forward_signal_id)"
+            " REFERENCES forward_signals(id) ON DELETE RESTRICT"
+        ),
+    },
+    {
+        "name": "v1.4_add_fk_trade_executions_positions",
+        "table": "trade_executions",
+        "description": (
+            "FK trade_executions.position_id → actual_positions.id RESTRICT"
+        ),
+        "pg_only": True,
+        "verify": lambda insp, tbl: any(
+            afk.get("referred_table") == "actual_positions"
+            and (afk.get("constrained_columns") or [None])[0] == "position_id"
+            for afk in insp.get_foreign_keys(tbl)
+        ),
+        "sql_pg": (
+            "ALTER TABLE trade_executions ADD CONSTRAINT fk_te_position"
+            " FOREIGN KEY (position_id)"
+            " REFERENCES actual_positions(id) ON DELETE RESTRICT"
+        ),
+    },
+    {
+        "name": "v1.5_add_fk_position_plan_changes_positions",
+        "table": "position_plan_changes",
+        "description": (
+            "FK position_plan_changes.position_id → actual_positions.id RESTRICT"
+        ),
+        "pg_only": True,
+        "verify": lambda insp, tbl: any(
+            afk.get("referred_table") == "actual_positions"
+            for afk in insp.get_foreign_keys(tbl)
+        ),
+        "sql_pg": (
+            "ALTER TABLE position_plan_changes ADD CONSTRAINT fk_ppc_position"
+            " FOREIGN KEY (position_id)"
+            " REFERENCES actual_positions(id) ON DELETE RESTRICT"
+        ),
+    },
+    {
+        "name": "v1.6_add_fk_trade_executions_linked_signal",
+        "table": "trade_executions",
+        "description": (
+            "FK trade_executions.linked_forward_signal_id"
+            " → forward_signals.id RESTRICT"
+        ),
+        "pg_only": True,
+        "verify": lambda insp, tbl: any(
+            afk.get("referred_table") == "forward_signals"
+            and (afk.get("constrained_columns") or [None])[0]
+            == "linked_forward_signal_id"
+            for afk in insp.get_foreign_keys(tbl)
+        ),
+        "sql_pg": (
+            "ALTER TABLE trade_executions ADD CONSTRAINT fk_te_linked_signal"
+            " FOREIGN KEY (linked_forward_signal_id)"
+            " REFERENCES forward_signals(id) ON DELETE RESTRICT"
+        ),
+    },
+]
+
+
+def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> int:
+    """Apply approved versioned migrations to existing tables.
+
+    Only migrations whose target table is in ``existing_tables`` are
+    considered.  Each migration is skipped when its ``verify`` lambda
+    reports it is already applied.  PostgreSQL-only migrations are
+    skipped on SQLite.
+
+    Returns the count of migrations actually applied (or would-apply in
+    dry-run mode).
+    """
+    from sqlalchemy import inspect as _insp
+    from sqlalchemy import text
+
+    insp = _insp(engine)
+    is_pg = engine.dialect.name == "postgresql"
+    applied = 0
+
+    for mig in _APPROVED_MIGRATIONS:
+        tbl = mig["table"]
+        if tbl not in existing_tables:
+            continue
+        if mig.get("pg_only") and not is_pg:
+            logger.info(
+                f"  [{mig['name']}] skipped (pg_only, dialect={engine.dialect.name})"
+            )
+            continue
+
+        already_done = False
+        try:
+            already_done = mig["verify"](insp, tbl)
+        except Exception as e:
+            logger.warning(f"  [{mig['name']}] verify 失敗，視為 pending: {e}")
+
+        if already_done:
+            logger.info(f"  [{mig['name']}] already applied — skip")
+            continue
+
+        sql = mig["sql_pg"] if is_pg else mig.get("sql_sqlite", "")
+        if not sql:
+            logger.warning(f"  [{mig['name']}] 無對應 SQL，skip")
+            continue
+
+        if dry_run:
+            logger.info(f"  [DRY-RUN] Would apply [{mig['name']}]: {sql}")
+            applied += 1
+            continue
+
+        logger.info(f"  Applying [{mig['name']}]: {mig['description']}")
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            logger.info(f"  [{mig['name']}] ✓")
+            applied += 1
+        except Exception as e:
+            logger.error(f"  [{mig['name']}] 失敗: {e}")
+            raise RuntimeError(
+                f"已核准 Migration [{mig['name']}] 執行失敗：{e}\n"
+                "請人工確認資料庫狀態後重新執行。"
+            ) from e
+
+    return applied
+
 
 # ── Engine ────────────────────────────────────────────────────────────
 
@@ -388,15 +571,20 @@ def _validate_schema(engine, tables: list) -> None:
             logger.info(f"  {tbl_name}: Check 7 (FK) N/A (ORM 無 ForeignKey() 宣告)")
 
         # ── Check 8: Unique Constraints ───────────────────────────────
+        # ALTER TABLE path (e.g., idempotency_key) may use CREATE UNIQUE INDEX
+        # instead of ADD CONSTRAINT — check both get_unique_constraints() and
+        # unique entries in get_indexes() to accept either implementation.
         if orm["unique_constraints"]:
             try:
                 actual_ucs = insp.get_unique_constraints(tbl_name)
-                actual_uc_sets = [
+                actual_idxs = insp.get_indexes(tbl_name)
+                covered: set[frozenset] = {
                     frozenset(uc.get("column_names", [])) for uc in actual_ucs
-                ]
-                missing_ucs = [
-                    s for s in orm["unique_constraints"] if s not in actual_uc_sets
-                ]
+                }
+                for idx in actual_idxs:
+                    if idx.get("unique"):
+                        covered.add(frozenset(idx.get("column_names", [])))
+                missing_ucs = [s for s in orm["unique_constraints"] if s not in covered]
                 if missing_ucs:
                     issues.append(
                         f"[FAIL] {tbl_name}: Unique Constraint 缺失 — "
@@ -578,9 +766,20 @@ def main():
     logger.info(f"已存在的目標表：{already_exist}")
     logger.info(f"缺失的目標表  ：{missing}")
 
-    # ── Step 2: Validate existing tables FIRST (Stop on Drift) ──────
+    # ── Step 2: Apply approved versioned migrations to existing tables ──
     if already_exist:
-        logger.info(f"\n── Step 2: 驗證既有表 Schema（{already_exist}）──")
+        logger.info(f"\n── Step 2: 套用已核准版本化 Migration（{already_exist}）──")
+        n = _apply_pending_migrations(engine, already_exist, dry_run)
+        if n:
+            logger.info(
+                f"已套用 {n} 個 Migration ({'dry-run' if dry_run else '實際寫入'}) ✓"
+            )
+        else:
+            logger.info("無待套用的 Migration")
+
+    # ── Step 3: Validate existing tables (should PASS after Step 2) ──
+    if already_exist:
+        logger.info(f"\n── Step 3: 驗證既有表 Schema（{already_exist}）──")
         try:
             _validate_schema(engine, already_exist)
             logger.info("既有表 Schema 驗證通過 ✓")
@@ -590,14 +789,17 @@ def main():
             logger.error("=" * 60)
             logger.error(str(drift_err))
             logger.error("\n既有表存在 Schema 不一致，不執行任何 DDL。")
-            logger.error("請人工修復後重新執行。")
+            logger.error(
+                "若 Drift 屬於預期升級，請將其加入 _APPROVED_MIGRATIONS 後重新執行。"
+            )
+            logger.error("若 Drift 屬於異常，請人工修復後重新執行。")
             sys.exit(2)
 
     if not missing:
         logger.info("\n三張表已全部存在，Schema 驗證通過。無需 Migration。")
         sys.exit(0)
 
-    # ── Step 3: Controlled Migration ─────────────────────────────────
+    # ── Step 4: Controlled Migration ─────────────────────────────────
     protected_snapshot: dict = {}
     for tbl in _PROTECTED_TABLES:
         try:
@@ -605,20 +807,20 @@ def main():
         except Exception:
             pass
 
-    logger.info(f"\n── Step 3: Controlled Migration（{missing}）──")
+    logger.info(f"\n── Step 4: Controlled Migration（{missing}）──")
     _create_tables(engine, missing, dry_run)
 
     if dry_run:
         logger.info("\n[DRY-RUN] 以上為 Migration 計畫，未執行任何寫入。")
         sys.exit(0)
 
-    # ── Step 4: Post-Migration Validation ────────────────────────────
-    logger.info("\n── Step 4: Post-Migration 完整驗證 ──")
+    # ── Step 5: Post-Migration Validation ────────────────────────────
+    logger.info("\n── Step 5: Post-Migration 完整驗證 ──")
     _validate_schema(engine, _REQUIRED_TABLES)
     _validate_protected_tables_untouched(engine, protected_snapshot)
 
     logger.info("\n" + "=" * 60)
-    logger.info("Migration 完成 ✓")
+    logger.info("Migration 完成 ✓  (Steps 1-5 全部通過)")
     logger.info("=" * 60)
     logger.info("\n後續步驟：")
     logger.info("  1. 確認 GitHub Actions Daily Pipeline 正常執行")
