@@ -1318,8 +1318,9 @@ class TestMigrationStateMachine:
     def test_v1_2_nonunique_index_on_idempotency_key_blocked(self):
         """Non-unique index on idempotency_key → BLOCKED via drift_check."""
         import pytest
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
@@ -1343,8 +1344,9 @@ class TestMigrationStateMachine:
     def test_v1_2_multicolumn_unique_index_blocked(self):
         """Unique index on (idempotency_key, id) — wrong column set → BLOCKED."""
         import pytest
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
@@ -1369,8 +1371,9 @@ class TestMigrationStateMachine:
 
     def test_v1_2_correct_unique_index_no_block(self):
         """Correct unique single-column index does NOT raise from drift_check."""
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
@@ -1396,8 +1399,9 @@ class TestMigrationStateMachine:
 
     def test_v1_2_verify_requires_unique_true(self):
         """_verify_idempotency_unique_index returns False when index is non-unique."""
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
@@ -1420,8 +1424,9 @@ class TestMigrationStateMachine:
 
     def test_v1_2_verify_requires_exact_columns(self):
         """_verify_idempotency_unique_index returns False for wrong column set."""
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
@@ -1446,8 +1451,9 @@ class TestMigrationStateMachine:
 
     def test_v1_2_verify_accepts_single_column_unique_index(self):
         """_verify_idempotency_unique_index returns True for correct unique index."""
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
@@ -1472,9 +1478,10 @@ class TestMigrationStateMachine:
 
     def test_v1_2_verify_accepts_orm_inline_unique_constraint(self):
         """_verify_idempotency_unique_index returns True for ORM-created UNIQUE constraint."""
-        from src.database import init_db
         from sqlalchemy import create_engine
         from sqlalchemy import inspect as sql_insp
+
+        from src.database import init_db
 
         mod = self._load_mod()
         engine = create_engine("sqlite:///:memory:")
@@ -1829,3 +1836,756 @@ class TestVersionedMigrations:
         assert mod._MIG_APPLIED == "APPLIED"
         assert mod._MIG_PENDING == "PENDING"
         assert mod._MIG_BLOCKED == "BLOCKED"
+
+
+# ── 11. v1.2 PG Partial Index Predicate Verification ─────────
+
+
+class TestV12PredicateVerification:
+    """PostgreSQL catalog checks for v1.2 partial unique index.
+
+    All tests mock insp.dialect.name='postgresql' and mock the pg catalog
+    query via insp.engine.connect() so no real PG connection is needed.
+    """
+
+    def _load_mod(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _mock_pg_insp(self, catalog_row):
+        """Return a mock PG inspector whose engine.connect() yields catalog_row."""
+        from unittest.mock import MagicMock
+
+        mock_row = catalog_row  # tuple (predicate, valid, ready) or None
+
+        mock_conn = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchone.return_value = mock_row
+        mock_conn.execute.return_value = mock_result
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn
+
+        insp = MagicMock()
+        insp.dialect.name = "postgresql"
+        insp.engine = mock_engine
+        return insp
+
+    # ── Correct partial index → APPLIED ─────────────────────────────────
+    def test_pg_correct_partial_index_returns_true(self):
+        """Partial index with correct predicate, valid, ready → True (APPLIED)."""
+        mod = self._load_mod()
+        tbl = "trade_executions"
+        predicate = "(idempotency_key IS NOT NULL)"
+        insp = self._mock_pg_insp((predicate, True, True))
+        insp.get_indexes.return_value = [
+            {
+                "name": mod._V1_2_INDEX_NAME,
+                "unique": True,
+                "column_names": ["idempotency_key"],
+            }
+        ]
+        result = mod._verify_idempotency_unique_index(insp, tbl)
+        assert result is True
+
+    # ── Named index absent → False (PENDING) ────────────────────────────
+    def test_pg_named_index_absent_returns_false(self):
+        """Named index not in pg_index catalog → False (PENDING)."""
+        mod = self._load_mod()
+        tbl = "trade_executions"
+        insp = self._mock_pg_insp(None)  # catalog returns no row
+        insp.get_indexes.return_value = []
+        result = mod._verify_idempotency_unique_index(insp, tbl)
+        assert result is False
+
+    # ── Wrong predicate → BLOCKED ────────────────────────────────────────
+    def test_pg_wrong_predicate_raises_blocked(self):
+        """Index with wrong predicate → MigrationBlockedError."""
+        import pytest
+
+        mod = self._load_mod()
+        tbl = "trade_executions"
+        insp = self._mock_pg_insp(("(shares > 0)", True, True))
+        insp.get_indexes.return_value = [
+            {
+                "name": mod._V1_2_INDEX_NAME,
+                "unique": True,
+                "column_names": ["idempotency_key"],
+            }
+        ]
+        with pytest.raises(mod.MigrationBlockedError, match="predicate"):
+            mod._verify_idempotency_unique_index(insp, tbl)
+
+    # ── No predicate (general index) → BLOCKED ──────────────────────────
+    def test_pg_general_index_no_predicate_raises_blocked(self):
+        """General unique index (predicate=None) → BLOCKED (contract requires partial)."""
+        import pytest
+
+        mod = self._load_mod()
+        tbl = "trade_executions"
+        insp = self._mock_pg_insp((None, True, True))  # predicate=None
+        insp.get_indexes.return_value = [
+            {
+                "name": mod._V1_2_INDEX_NAME,
+                "unique": True,
+                "column_names": ["idempotency_key"],
+            }
+        ]
+        with pytest.raises(mod.MigrationBlockedError, match="predicate|Partial"):
+            mod._verify_idempotency_unique_index(insp, tbl)
+
+    # ── indisvalid=False → BLOCKED ───────────────────────────────────────
+    def test_pg_index_invalid_raises_blocked(self):
+        """indisvalid=False → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        tbl = "trade_executions"
+        insp = self._mock_pg_insp(("(idempotency_key IS NOT NULL)", False, True))
+        insp.get_indexes.return_value = [
+            {
+                "name": mod._V1_2_INDEX_NAME,
+                "unique": True,
+                "column_names": ["idempotency_key"],
+            }
+        ]
+        with pytest.raises(mod.MigrationBlockedError, match="indisvalid"):
+            mod._verify_idempotency_unique_index(insp, tbl)
+
+    # ── indisready=False → BLOCKED ───────────────────────────────────────
+    def test_pg_index_not_ready_raises_blocked(self):
+        """indisready=False → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        tbl = "trade_executions"
+        insp = self._mock_pg_insp(("(idempotency_key IS NOT NULL)", True, False))
+        insp.get_indexes.return_value = [
+            {
+                "name": mod._V1_2_INDEX_NAME,
+                "unique": True,
+                "column_names": ["idempotency_key"],
+            }
+        ]
+        with pytest.raises(mod.MigrationBlockedError, match="indisready"):
+            mod._verify_idempotency_unique_index(insp, tbl)
+
+    # ── Catalog query raises → BLOCKED ───────────────────────────────────
+    def test_pg_catalog_read_failure_raises_blocked(self):
+        """Catalog query raises Exception → BLOCKED."""
+        from unittest.mock import MagicMock
+
+        import pytest
+
+        mod = self._load_mod()
+        tbl = "trade_executions"
+
+        mock_conn = MagicMock()
+        mock_conn.execute.side_effect = Exception("pg catalog unavailable")
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn
+
+        insp = MagicMock()
+        insp.dialect.name = "postgresql"
+        insp.engine = mock_engine
+
+        with pytest.raises(mod.MigrationBlockedError, match="catalog"):
+            mod._verify_idempotency_unique_index(insp, tbl)
+
+    # ── SQLite: general unique → APPLIED (unchanged) ─────────────────────
+    def test_sqlite_general_unique_index_accepted(self):
+        """SQLite unique index → True (not PG, no catalog check)."""
+        from sqlalchemy import create_engine
+        from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE trade_executions (id INTEGER PRIMARY KEY, idempotency_key TEXT)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uix_te_idempotency_key "
+                    "ON trade_executions(idempotency_key)"
+                )
+            )
+        insp = sql_insp(engine)
+        result = mod._verify_idempotency_unique_index(insp, "trade_executions")
+        assert result is True
+
+    # ── _assess_migration_state: catalog error → BLOCKED ─────────────────
+    def test_pg_catalog_error_in_assess_state_is_blocked(self):
+        """Catalog exception in verify → _assess_migration_state returns BLOCKED."""
+        from unittest.mock import MagicMock
+
+        mod = self._load_mod()
+        tbl = "trade_executions"
+
+        mock_conn = MagicMock()
+        mock_conn.execute.side_effect = Exception("network error")
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn
+
+        insp = MagicMock()
+        insp.dialect.name = "postgresql"
+        insp.engine = mock_engine
+
+        v12 = next(
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"] == "v1.2_add_idempotency_key_unique_index"
+        )
+        state, reason = mod._assess_migration_state(insp, tbl, v12)
+        assert state == mod._MIG_BLOCKED
+        assert "catalog" in reason or "verify" in reason.lower()
+
+
+# ── 12. v1.3 / v1.5 FK Strict Verification ───────────────────
+
+
+class TestFKStrictVerification:
+    """Tests for _verify_fk() — strict source/ref/ondelete/convalidated checks.
+
+    PG catalog queries mocked via insp.engine.connect().
+    """
+
+    def _load_mod(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _mock_pg_insp(self, fks: list, convalidated: bool = True):
+        """Mock PG inspector with given FK list and pg_constraint convalidated value."""
+        from unittest.mock import MagicMock
+
+        mock_conn = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchone.return_value = (convalidated,)
+        mock_conn.execute.return_value = mock_result
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn
+
+        insp = MagicMock()
+        insp.dialect.name = "postgresql"
+        insp.engine = mock_engine
+        insp.get_foreign_keys.return_value = fks
+        return insp
+
+    def _good_fk(self, local_col, ref_table, ref_col, on_delete="RESTRICT"):
+        return {
+            "constrained_columns": [local_col],
+            "referred_table": ref_table,
+            "referred_columns": [ref_col],
+            "options": {"ondelete": on_delete},
+        }
+
+    # ── Correct FK → True ────────────────────────────────────────────────
+    def test_correct_fk_returns_true(self):
+        """Correct FK with matching all fields → True."""
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id")]
+        )
+        result = mod._verify_fk(
+            insp,
+            "actual_positions",
+            "forward_signal_id",
+            "forward_signals",
+            "id",
+            "RESTRICT",
+        )
+        assert result is True
+
+    # ── FK absent → False (PENDING) ──────────────────────────────────────
+    def test_missing_fk_returns_false(self):
+        """No FK on local_col → False (PENDING)."""
+        mod = self._load_mod()
+        insp = self._mock_pg_insp([])
+        result = mod._verify_fk(
+            insp,
+            "actual_positions",
+            "forward_signal_id",
+            "forward_signals",
+            "id",
+            "RESTRICT",
+        )
+        assert result is False
+
+    # ── Wrong referred_table → BLOCKED ───────────────────────────────────
+    def test_wrong_referred_table_raises_blocked(self):
+        """FK exists but refers to wrong table → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "wrong_table", "id")]
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="referred_table"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── Wrong referred_column → BLOCKED ──────────────────────────────────
+    def test_wrong_referred_column_raises_blocked(self):
+        """FK refers to wrong column → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "wrong_col")]
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="referred_columns"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── Wrong ON DELETE → BLOCKED ─────────────────────────────────────────
+    def test_wrong_on_delete_raises_blocked(self):
+        """FK has CASCADE instead of RESTRICT → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id", "CASCADE")]
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="ON DELETE"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── NO ACTION instead of RESTRICT → BLOCKED ───────────────────────────
+    def test_no_action_instead_of_restrict_raises_blocked(self):
+        """FK has NO ACTION (PG default) instead of RESTRICT → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id", "NO ACTION")]
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="ON DELETE"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── convalidated=False → BLOCKED ──────────────────────────────────────
+    def test_fk_not_validated_raises_blocked(self):
+        """pg_constraint.convalidated=False → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+            convalidated=False,
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="convalidated"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── FK Inspector failure → BLOCKED ────────────────────────────────────
+    def test_inspector_get_fk_failure_raises_blocked(self):
+        """get_foreign_keys() raises → BLOCKED."""
+        from unittest.mock import MagicMock
+
+        import pytest
+
+        mod = self._load_mod()
+        insp = MagicMock()
+        insp.dialect.name = "postgresql"
+        insp.get_foreign_keys.side_effect = Exception("FK catalog read error")
+
+        with pytest.raises(mod.MigrationBlockedError, match="Inspector"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── v1.3 APPROVED_MIGRATIONS entry uses _verify_fk ───────────────────
+    def test_v1_3_verify_returns_false_when_no_fk(self):
+        """v1.3 verify: no FK on forward_signal_id → False (PENDING)."""
+        mod = self._load_mod()
+        insp = self._mock_pg_insp([])
+        v13 = next(
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"] == "v1.3_add_fk_actual_positions_fwd_signals"
+        )
+        result = v13["verify"](insp, "actual_positions")
+        assert result is False
+
+    def test_v1_3_verify_correct_fk_returns_true(self):
+        """v1.3 verify: correct FK with RESTRICT → True."""
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id")]
+        )
+        v13 = next(
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"] == "v1.3_add_fk_actual_positions_fwd_signals"
+        )
+        result = v13["verify"](insp, "actual_positions")
+        assert result is True
+
+    def test_v1_3_verify_wrong_on_delete_blocked(self):
+        """v1.3 verify: ON DELETE CASCADE instead of RESTRICT → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id", "CASCADE")]
+        )
+        v13 = next(
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"] == "v1.3_add_fk_actual_positions_fwd_signals"
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="ON DELETE"):
+            v13["verify"](insp, "actual_positions")
+
+    def test_v1_5_verify_returns_false_when_no_fk(self):
+        """v1.5 verify: no FK on position_id → False (PENDING)."""
+        mod = self._load_mod()
+        insp = self._mock_pg_insp([])
+        v15 = next(
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"] == "v1.5_add_fk_position_plan_changes_positions"
+        )
+        result = v15["verify"](insp, "position_plan_changes")
+        assert result is False
+
+    def test_v1_5_verify_wrong_on_delete_blocked(self):
+        """v1.5 verify: ON DELETE SET NULL instead of RESTRICT → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("position_id", "actual_positions", "id", "SET NULL")]
+        )
+        v15 = next(
+            m
+            for m in mod._APPROVED_MIGRATIONS
+            if m["name"] == "v1.5_add_fk_position_plan_changes_positions"
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="ON DELETE"):
+            v15["verify"](insp, "position_plan_changes")
+
+
+# ── 13. Global Preflight Tests ────────────────────────────────
+
+
+class TestGlobalPreflight:
+    """Tests for _preflight_migration_plan() + DDL-before-execute guarantee."""
+
+    def _load_mod(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _engine(self):
+        return create_engine("sqlite:///:memory:")
+
+    def test_preflight_plan_contains_all_applicable(self):
+        """_preflight_migration_plan returns entry for every in-scope migration."""
+        mod = self._load_mod()
+        engine = self._engine()
+
+        migs = [
+            {
+                "name": "a",
+                "table": "t",
+                "description": "a",
+                "verify": lambda i, tbl: True,
+                "sql_sqlite": "SELECT 1",
+            },
+            {
+                "name": "b",
+                "table": "t",
+                "description": "b",
+                "verify": lambda i, tbl: False,
+                "sql_sqlite": "SELECT 1",
+            },
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        from sqlalchemy import inspect as sql_insp
+
+        insp = sql_insp(engine)
+        try:
+            plan = mod._preflight_migration_plan(insp, False, ["t"])
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert len(plan) == 2
+        names = {m["name"] for m, _, _ in plan}
+        assert names == {"a", "b"}
+
+    def test_preflight_no_ddl_executed(self):
+        """_preflight_migration_plan never executes DDL even for PENDING entries."""
+        mod = self._load_mod()
+        engine = self._engine()
+
+        migs = [
+            {
+                "name": "no_ddl",
+                "table": "t",
+                "description": "test",
+                "verify": lambda i, tbl: False,
+                "sql_sqlite": "CREATE TABLE must_not_exist (x INTEGER)",
+            }
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        from sqlalchemy import inspect as sql_insp
+
+        insp = sql_insp(engine)
+        try:
+            plan = mod._preflight_migration_plan(insp, False, ["t"])
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        # No DDL executed
+        insp2 = sql_insp(engine)
+        assert "must_not_exist" not in insp2.get_table_names()
+        assert plan[0][1] == mod._MIG_PENDING
+
+    def test_blocked_in_preflight_stops_all_ddl(self):
+        """Any BLOCKED in preflight → raise before ANY DDL (DDL attempted = 0)."""
+        import pytest
+        from sqlalchemy import inspect as sql_insp
+
+        mod = self._load_mod()
+        engine = self._engine()
+
+        ddl_executed = []
+
+        def record_ddl(*a):
+            ddl_executed.append(True)
+
+        migs = [
+            {
+                "name": "blocked_first",
+                "table": "t",
+                "description": "blocked",
+                "verify": lambda i, tbl: (_ for _ in ()).throw(RuntimeError("blocked")),
+                "sql_sqlite": "SELECT 1",
+            },
+            {
+                "name": "pending_second",
+                "table": "t",
+                "description": "pending",
+                "verify": lambda i, tbl: False,
+                "sql_sqlite": "CREATE TABLE never_run (x INTEGER)",
+            },
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        try:
+            with pytest.raises(RuntimeError, match="BLOCKED"):
+                mod._apply_pending_migrations(engine, ["t"], dry_run=False)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        insp = sql_insp(engine)
+        assert (
+            "never_run" not in insp.get_table_names()
+        ), "DDL must not run when preflight is BLOCKED"
+
+    def test_multiple_blocked_all_reported(self):
+        """All BLOCKED migrations are reported in a single error (not just the first)."""
+        import pytest
+
+        mod = self._load_mod()
+        engine = self._engine()
+
+        migs = [
+            {
+                "name": "blocked_a",
+                "table": "t",
+                "description": "a",
+                "verify": lambda i, tbl: (_ for _ in ()).throw(RuntimeError("boom_a")),
+                "sql_sqlite": "SELECT 1",
+            },
+            {
+                "name": "blocked_b",
+                "table": "t",
+                "description": "b",
+                "verify": lambda i, tbl: (_ for _ in ()).throw(RuntimeError("boom_b")),
+                "sql_sqlite": "SELECT 1",
+            },
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        try:
+            with pytest.raises(RuntimeError) as exc_info:
+                mod._apply_pending_migrations(engine, ["t"], dry_run=False)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        err = str(exc_info.value)
+        assert "blocked_a" in err
+        assert "blocked_b" in err
+
+    def test_ddl_audit_log_tracks_committed(self):
+        """DDL audit: successful migration logged as COMMITTED."""
+        from sqlalchemy import create_engine
+        from sqlalchemy import inspect as sql_insp
+        from sqlalchemy import text
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE t (id INTEGER PRIMARY KEY)"))
+
+        migs = [
+            {
+                "name": "add_col",
+                "table": "t",
+                "description": "add col",
+                "verify": lambda i, tbl: "x" in {c["name"] for c in i.get_columns(tbl)},
+                "sql_sqlite": "ALTER TABLE t ADD COLUMN x TEXT",
+            }
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        try:
+            n = mod._apply_pending_migrations(engine, ["t"], dry_run=False)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n == 1
+        insp = sql_insp(engine)
+        cols = {c["name"] for c in insp.get_columns("t")}
+        assert "x" in cols
+
+    def test_ddl_audit_on_failure_reports_rolled_back(self):
+        """Failed migration DDL is reported as ROLLED_BACK in error message."""
+        import pytest
+        from sqlalchemy import create_engine, text
+
+        mod = self._load_mod()
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE t (id INTEGER PRIMARY KEY)"))
+
+        migs = [
+            {
+                "name": "bad_sql",
+                "table": "t",
+                "description": "bad",
+                "verify": lambda i, tbl: False,
+                "sql_sqlite": "THIS IS NOT VALID SQL!!!",
+            }
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        try:
+            with pytest.raises(RuntimeError) as exc_info:
+                mod._apply_pending_migrations(engine, ["t"], dry_run=False)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        err = str(exc_info.value)
+        assert "bad_sql" in err
+
+    def test_preflight_skips_pg_only_on_sqlite(self):
+        """pg_only migrations are excluded from preflight plan on SQLite."""
+        mod = self._load_mod()
+        engine = self._engine()
+
+        migs = [
+            {
+                "name": "pg_only_mig",
+                "table": "t",
+                "description": "pg only",
+                "pg_only": True,
+                "verify": lambda i, tbl: False,
+                "sql_pg": "SELECT 1",
+            }
+        ]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        from sqlalchemy import inspect as sql_insp
+
+        insp = sql_insp(engine)
+        try:
+            plan = mod._preflight_migration_plan(insp, False, ["t"])
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert plan == [], "pg_only migration must not appear in SQLite preflight plan"
+
+    def test_preflight_exported(self):
+        """_preflight_migration_plan is accessible on the module."""
+        mod = self._load_mod()
+        assert hasattr(mod, "_preflight_migration_plan")
+        assert callable(mod._preflight_migration_plan)
