@@ -16,6 +16,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     Numeric,
     String,
@@ -885,7 +886,12 @@ class ActualPosition(Base):
     # AI_SIGNAL（來自 BUY 卡片）或 MANUAL（手動新增，非平台推薦）
     signal_source = Column(String(20), nullable=False)
     # FK → forward_signals.id；僅 AI_SIGNAL 且 is_valid=True 時填入
-    forward_signal_id = Column(Integer, nullable=True)
+    # ON DELETE RESTRICT: ForwardSignal 必須 immutable，不允許刪除已被持倉參照的訊號
+    forward_signal_id = Column(
+        Integer,
+        ForeignKey("forward_signals.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
 
     # open / partially_closed / closed
     status = Column(String(20), nullable=False, default="open")
@@ -924,8 +930,13 @@ class TradeExecution(Base):
     __tablename__ = "trade_executions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # FK → actual_positions.id
-    position_id = Column(Integer, nullable=False, index=True)
+    # ON DELETE RESTRICT: 禁止刪除有成交紀錄的持倉（防孤兒成交）
+    position_id = Column(
+        Integer,
+        ForeignKey("actual_positions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
 
     side = Column(String(4), nullable=False)  # BUY / SELL
     execution_date = Column(Date, nullable=False)
@@ -963,8 +974,13 @@ class PositionPlanChange(Base):
     __tablename__ = "position_plan_changes"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # FK → actual_positions.id
-    position_id = Column(Integer, nullable=False, index=True)
+    # ON DELETE RESTRICT: 禁止刪除有計畫變更紀錄的持倉（防孤兒稽核紀錄）
+    position_id = Column(
+        Integer,
+        ForeignKey("actual_positions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     changed_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )

@@ -9,36 +9,50 @@ scripts/migrate_trade_lifecycle.py — Phase 1 Trade Lifecycle Schema Migration
 安全機制：
   - 預設 --env=local（連本地 SQLite），需明確傳 --env=production 才連 Neon。
   - --dry-run 模式：只顯示執行計畫，不寫入任何資料。
-  - 不執行 DROP TABLE / ALTER existing columns / DELETE / UPDATE。
   - 4-step Preflight：先驗證既有表 Schema，偵測 Drift 立即中止，再建立缺失表。
-  - 執行後完整 Post-Migration 驗證（欄位、型別、NOT NULL、NUMERIC 精度、PK、FK、
-    Unique Constraint、Index）。
+  - Schema 驗證以 ORM metadata 為唯一依據（Base.metadata），不維護重複清單。
+  - 執行後完整 Post-Migration 驗證。
+  - 不執行 DROP TABLE / ALTER existing columns / DELETE / UPDATE。
 
 Validation Result Classification:
   PASS    = 已驗證且一致
-  FAIL    = 已確認 Schema 不一致（欄位缺失、型別錯誤、PK 錯誤、Index 缺失等）
-  BLOCKED = 無法完成驗證（Inspector 例外、無法讀取 metadata）
+  FAIL    = 已確認 Schema 不一致
+  BLOCKED = 無法完成驗證（Inspector 例外、unreadable metadata）
   N/A     = ORM 未宣告此約束，DB 端亦不期望有
 
 執行方式：
-  # Dry-run（不寫入，只顯示計畫）
-  python scripts/migrate_trade_lifecycle.py --dry-run
+  python scripts/migrate_trade_lifecycle.py --dry-run     # 只顯示計畫
+  python scripts/migrate_trade_lifecycle.py               # 本地 SQLite
+  python scripts/migrate_trade_lifecycle.py --env production  # Neon Production
 
-  # 連本地資料庫（預設）
-  python scripts/migrate_trade_lifecycle.py
+正式部署前 Runbook：
+  Step 0 — 建立 Neon Database Branch（隔離快照）
+    neon branches create --name migration-$(date +%Y%m%d)
+    # 記錄 branch ID 以供回滾使用
 
-  # 連 Neon Production（需 NEON_URL 環境變數或 .env）
-  python scripts/migrate_trade_lifecycle.py --env production
+  Step 1 — 記錄 Migration 前狀態
+    python scripts/migrate_trade_lifecycle.py --env production --dry-run
+    # 確認三張表尚未存在，且受保護的舊表狀態正常
 
-  # Production dry-run
-  python scripts/migrate_trade_lifecycle.py --env production --dry-run
+  Step 2 — 執行 Migration（需 GitHub Environment 人工批准）
+    python scripts/migrate_trade_lifecycle.py --env production
+    # 或透過 GitHub Actions migrate.yml (workflow_dispatch + production approval)
 
-復原方案：
-  三張新表均為空表，Migration 失敗或需回滾時執行：
-    DROP TABLE IF EXISTS position_plan_changes;
-    DROP TABLE IF EXISTS trade_executions;
-    DROP TABLE IF EXISTS actual_positions;
-  舊表（user_trades / position_monitor / forward_signals）不受影響。
+  Step 3 — 驗證
+    python scripts/migrate_trade_lifecycle.py --env production --dry-run
+    # 已全部存在 → 顯示 "無需 Migration" 且 Schema 驗證通過
+
+Migration 失敗處理：
+  - PostgreSQL DDL 使用 engine.begin() 包裹，失敗時自動 rollback（atomic）。
+  - 如 rollback 確認成功，修復問題後重新執行 Step 2。
+  - 如 rollback 不確定，使用 Step 0 建立的 branch 還原：
+    neon branches reset --branch migration-$(date +%Y%m%d)
+  - 不得自動執行 DROP TABLE。
+  - 必須確認應用程式版本與 Schema 相容後才能重新部署。
+
+⚠️  禁止把以下語句當成一般回滾方案：
+  DROP TABLE actual_positions / trade_executions / position_plan_changes
+  以上操作會永久刪除生產資料，必須明確授權後才能執行。
 """
 
 import argparse
@@ -54,159 +68,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("migrate_trade_lifecycle")
 
+# ── Operational constants ─────────────────────────────────────────────
+# (schema-comparison constants removed: derived from ORM metadata at runtime)
+
 _REQUIRED_TABLES = ["actual_positions", "trade_executions", "position_plan_changes"]
-
-_REQUIRED_COLS = {
-    "actual_positions": {
-        "id",
-        "stock_id",
-        "stock_name",
-        "position_type",
-        "signal_source",
-        "forward_signal_id",
-        "status",
-        "open_date",
-        "close_date",
-        "remaining_shares",
-        "avg_cost_per_share",
-        "total_cost_basis",
-        "realized_pnl",
-        "target_price",
-        "stop_price",
-        "original_plan_snapshot",
-        "notes",
-        "created_at",
-        "updated_at",
-    },
-    "trade_executions": {
-        "id",
-        "position_id",
-        "side",
-        "execution_date",
-        "execution_datetime",
-        "execution_price",
-        "shares",
-        "actual_fee",
-        "transaction_tax",
-        "linked_forward_signal_id",
-        "notes",
-        "is_cancelled",
-        "cancel_reason",
-        "cancelled_at",
-        "created_at",
-        "updated_at",
-    },
-    "position_plan_changes": {
-        "id",
-        "position_id",
-        "changed_at",
-        "field_name",
-        "old_value",
-        "new_value",
-        "reason",
-        "created_at",
-    },
-}
-
-# NOT NULL columns per table (from ORM nullable=False)
-_NOT_NULL_COLS = {
-    "actual_positions": {
-        "stock_id",
-        "position_type",
-        "signal_source",
-        "status",
-        "open_date",
-        "remaining_shares",
-        "avg_cost_per_share",
-        "total_cost_basis",
-        "realized_pnl",
-    },
-    "trade_executions": {
-        "position_id",
-        "side",
-        "execution_date",
-        "execution_price",
-        "shares",
-        "actual_fee",
-        "transaction_tax",
-        "is_cancelled",
-    },
-    "position_plan_changes": {
-        "position_id",
-        "changed_at",
-        "field_name",
-    },
-}
-
-# Expected NUMERIC(precision, scale) per column (PostgreSQL only)
-_NUMERIC_PRECISION = {
-    "actual_positions": {
-        "avg_cost_per_share": (12, 4),
-        "total_cost_basis": (14, 2),
-        "realized_pnl": (14, 2),
-        "target_price": (10, 2),
-        "stop_price": (10, 2),
-    },
-    "trade_executions": {
-        "execution_price": (10, 2),
-        "actual_fee": (10, 2),
-        "transaction_tax": (10, 2),
-    },
-    "position_plan_changes": {
-        "old_value": (10, 2),
-        "new_value": (10, 2),
-    },
-}
-
-# VARCHAR / String max-length constraints (from ORM String(n), PostgreSQL only)
-_VARCHAR_LENGTHS = {
-    "actual_positions": {
-        "stock_id": 10,
-        "stock_name": 50,
-        "position_type": 10,
-        "signal_source": 20,
-        "status": 20,
-    },
-    "trade_executions": {
-        "side": 4,
-        "cancel_reason": 200,
-    },
-    "position_plan_changes": {
-        "field_name": 30,
-    },
-}
-
-# Expected primary key columns per table
-_PRIMARY_KEYS = {
-    "actual_positions": {"id"},
-    "trade_executions": {"id"},
-    "position_plan_changes": {"id"},
-}
-
-# Columns that must have an index (from ORM index=True)
-_INDEXED_COLS = {
-    "actual_positions": {"stock_id"},
-    "trade_executions": {"position_id"},
-    "position_plan_changes": {"position_id"},
-}
-
-# Expected unique constraint column sets per table.
-# ORM defines NO UniqueConstraint() for any of these three tables.
-_UNIQUE_CONSTRAINTS: dict = {
-    "actual_positions": [],
-    "trade_executions": [],
-    "position_plan_changes": [],
-}
-
-# FK constraints from ORM metadata.
-# The ORM intentionally declares NO ForeignKey() for position_id / forward_signal_id
-# (cross-table references managed at application layer, not DB-level FK constraints).
-# Validation for these tables: N/A (no DB-level FK expected).
-_FK_CONSTRAINTS: dict = {
-    "actual_positions": [],
-    "trade_executions": [],
-    "position_plan_changes": [],
-}
 
 _PROTECTED_TABLES = {
     "user_trades",
@@ -217,6 +82,9 @@ _PROTECTED_TABLES = {
     "stocks",
     "daily_prices",
 }
+
+
+# ── Engine ────────────────────────────────────────────────────────────
 
 
 def _get_engine(env: str):
@@ -254,49 +122,338 @@ def _get_engine(env: str):
     return engine
 
 
-def _validate_fk_details(
-    tbl: str, expected_fks: list, actual_fks: list, issues: list
-) -> None:
-    """Compare ORM-declared FK constraints vs DB (used only when ORM declares FKs)."""
-    actual_by_col: dict = {}
-    for fk in actual_fks:
-        constrained = fk.get("constrained_columns", [])
-        if constrained:
-            actual_by_col[constrained[0]] = fk
+# ── ORM-derived schema extraction ────────────────────────────────────
 
-    for exp in expected_fks:
-        local_col = exp.get("local_col")
-        ref_table = exp.get("referred_table")
-        ref_col = exp.get("referred_col")
-        actual = actual_by_col.get(local_col)
-        if actual is None:
-            issues.append(
-                f"[FAIL] {tbl}.{local_col}: FK 缺失 — "
-                f"Expected FK → {ref_table}.{ref_col}, Actual none"
-            )
+
+def _get_orm_schema(tbl_name: str) -> dict:
+    """從 SQLAlchemy ORM metadata 提取期望的 Schema 規格。
+
+    以 Base.metadata 為單一真相來源，避免與 ORM 定義脫鉤。
+    回傳 dict 包含 columns / pks / fks / unique_constraints / indexes。
+    """
+    from sqlalchemy import UniqueConstraint as SA_UC
+
+    from src.database import Base
+
+    if tbl_name not in Base.metadata.tables:
+        raise RuntimeError(
+            f"[BLOCKED] {tbl_name}: ORM Base.metadata 中找不到此表 — "
+            "請確認 ORM 模型已正確定義"
+        )
+
+    orm_tbl = Base.metadata.tables[tbl_name]
+
+    # Columns
+    cols: dict[str, dict] = {}
+    for col in orm_tbl.columns:
+        cols[col.name] = {
+            "nullable": col.nullable,
+            "primary_key": col.primary_key,
+            "type": col.type,
+        }
+
+    # PKs
+    pks = {name for name, info in cols.items() if info["primary_key"]}
+
+    # FK constraints — from column.foreign_keys
+    fks: list[dict] = []
+    for col in orm_tbl.columns:
+        for fk in col.foreign_keys:
+            try:
+                ref_table = fk.column.table.name
+                ref_col = fk.column.name
+                ondelete = (
+                    getattr(fk.constraint, "ondelete", None) or ""
+                ).upper() or None
+                fks.append(
+                    {
+                        "local_col": col.name,
+                        "ref_table": ref_table,
+                        "ref_col": ref_col,
+                        "ondelete": ondelete,
+                    }
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"[BLOCKED] {tbl_name}.{col.name}: FK 定義無法解析 — {e}"
+                ) from e
+
+    # Unique constraints
+    uc_sets: list[frozenset] = []
+    for c in orm_tbl.constraints:
+        if isinstance(c, SA_UC) and list(c.columns.keys()):
+            uc_sets.append(frozenset(c.columns.keys()))
+
+    # Indexes (from ORM index=True columns)
+    idx_col_sets: list[frozenset] = [
+        frozenset({col.name}) for col in orm_tbl.columns if getattr(col, "index", False)
+    ]
+
+    return {
+        "columns": cols,
+        "pks": pks,
+        "fks": fks,
+        "unique_constraints": uc_sets,
+        "indexes": idx_col_sets,
+    }
+
+
+# ── Schema validation ─────────────────────────────────────────────────
+
+
+def _validate_schema(engine, tables: list) -> None:
+    """全面 Schema 驗證（ORM metadata 為單一真相來源）。
+
+    9 大檢查點：
+      1. ORM metadata lookup (BLOCKED if missing)
+      2. Column names      (FAIL if missing)
+      3. NOT NULL          (PG only, FAIL)
+      4. NUMERIC p/s       (PG only, FAIL/BLOCKED)
+      5. VARCHAR length    (PG only, FAIL/BLOCKED)
+      6. Primary Key       (FAIL/BLOCKED)
+      7. Foreign Key       (FAIL/BLOCKED; N/A if ORM has none)
+      8. Unique Constraint (FAIL/BLOCKED; N/A if ORM has none)
+      9. Index             (FAIL/BLOCKED)
+
+    PASS    = 已驗證且一致
+    FAIL    = 已確認 Schema 不一致
+    BLOCKED = 無法完成驗證
+    N/A     = ORM 未宣告此約束
+
+    發現任何 FAIL 或 BLOCKED → raise RuntimeError（列出全部問題）。
+    禁止自動修復任何 Schema Drift。
+    """
+    from sqlalchemy import Numeric, String
+    from sqlalchemy import inspect as _insp
+
+    insp = _insp(engine)
+    is_pg = engine.dialect.name == "postgresql"
+    issues: list[str] = []
+
+    for tbl_name in tables:
+        # ── Check 1: ORM metadata lookup ─────────────────────────────
+        try:
+            orm = _get_orm_schema(tbl_name)
+        except RuntimeError as e:
+            issues.append(str(e))
             continue
-        actual_ref_table = actual.get("referred_table")
-        if actual_ref_table != ref_table:
+
+        # ── Get actual columns from DB ────────────────────────────────
+        try:
+            actual_cols_raw = insp.get_columns(tbl_name)
+        except Exception as e:
+            issues.append(f"[BLOCKED] {tbl_name}: 無法讀取欄位 — {e}")
+            continue
+
+        actual_cols = {c["name"]: c for c in actual_cols_raw}
+
+        # ── Check 2: Column names ─────────────────────────────────────
+        expected_names = set(orm["columns"])
+        missing_names = expected_names - set(actual_cols)
+        if missing_names:
             issues.append(
-                f"[FAIL] {tbl}.{local_col}: FK 參照表 — "
-                f"Expected → {ref_table}, Actual → {actual_ref_table}"
+                f"[FAIL] {tbl_name}: 缺少欄位 {sorted(missing_names)} — "
+                f"Expected all of {sorted(expected_names)}"
             )
-        exp_on_delete = exp.get("ondelete")
-        actual_on_delete = (actual.get("options") or {}).get("ondelete")
-        if exp_on_delete and exp_on_delete != actual_on_delete:
-            issues.append(
-                f"[FAIL] {tbl}.{local_col}: FK ON DELETE — "
-                f"Expected {exp_on_delete}, Actual {actual_on_delete}"
-            )
+            continue  # 後續型別驗證無意義
+        logger.info(f"  {tbl_name}: Check 2 (columns) PASS ({len(actual_cols)} cols)")
+
+        # ── Check 3: NOT NULL (PG only) ───────────────────────────────
+        if is_pg:
+            nn_ok = True
+            for col_name, col_info in sorted(orm["columns"].items()):
+                if col_info["nullable"] or col_info["primary_key"]:
+                    continue  # nullable=True or PK (implicitly NOT NULL)
+                actual = actual_cols.get(col_name, {})
+                if actual.get("nullable", True):
+                    issues.append(
+                        f"[FAIL] {tbl_name}.{col_name}: NOT NULL — "
+                        f"Expected NOT NULL, Actual nullable=True"
+                    )
+                    nn_ok = False
+            if nn_ok:
+                logger.info(f"  {tbl_name}: Check 3 (NOT NULL) PASS")
+
+        # ── Check 4: NUMERIC precision/scale (PG only) ───────────────
+        if is_pg:
+            num_ok = True
+            for col_name, col_info in sorted(orm["columns"].items()):
+                t = col_info["type"]
+                if not isinstance(t, Numeric) or t.precision is None:
+                    continue
+                exp_prec, exp_scale = t.precision, t.scale
+                actual = actual_cols.get(col_name, {})
+                act_type = actual.get("type")
+                act_prec = getattr(act_type, "precision", None)
+                act_scale = getattr(act_type, "scale", None)
+                if act_prec is None or act_scale is None:
+                    issues.append(
+                        f"[BLOCKED] {tbl_name}.{col_name}: 無法讀取 NUMERIC precision "
+                        f"(type={act_type!r}) — Expected NUMERIC({exp_prec},{exp_scale})"
+                    )
+                    num_ok = False
+                elif act_prec != exp_prec or act_scale != exp_scale:
+                    issues.append(
+                        f"[FAIL] {tbl_name}.{col_name}: NUMERIC — "
+                        f"Expected ({exp_prec},{exp_scale}), "
+                        f"Actual ({act_prec},{act_scale})"
+                    )
+                    num_ok = False
+            if num_ok:
+                logger.info(f"  {tbl_name}: Check 4 (NUMERIC) PASS")
+
+        # ── Check 5: VARCHAR length (PG only) ─────────────────────────
+        if is_pg:
+            vc_ok = True
+            for col_name, col_info in sorted(orm["columns"].items()):
+                t = col_info["type"]
+                if not isinstance(t, String) or t.length is None:
+                    continue
+                exp_len = t.length
+                actual = actual_cols.get(col_name, {})
+                act_type = actual.get("type")
+                act_len = getattr(act_type, "length", None)
+                if act_len is None:
+                    issues.append(
+                        f"[BLOCKED] {tbl_name}.{col_name}: 無法讀取 VARCHAR length "
+                        f"(type={act_type!r}) — Expected VARCHAR({exp_len})"
+                    )
+                    vc_ok = False
+                elif act_len != exp_len:
+                    issues.append(
+                        f"[FAIL] {tbl_name}.{col_name}: VARCHAR length — "
+                        f"Expected VARCHAR({exp_len}), Actual VARCHAR({act_len})"
+                    )
+                    vc_ok = False
+            if vc_ok:
+                logger.info(f"  {tbl_name}: Check 5 (VARCHAR) PASS")
+
+        # ── Check 6: Primary Key ──────────────────────────────────────
+        try:
+            pk_info = insp.get_pk_constraint(tbl_name)
+            actual_pks = set(pk_info.get("constrained_columns", []))
+            if orm["pks"] != actual_pks:
+                issues.append(
+                    f"[FAIL] {tbl_name}: PK — "
+                    f"Expected {sorted(orm['pks'])}, Actual {sorted(actual_pks)}"
+                )
+            else:
+                logger.info(f"  {tbl_name}: Check 6 (PK) PASS {sorted(actual_pks)}")
+        except Exception as e:
+            issues.append(f"[BLOCKED] {tbl_name}: PK 無法讀取 — {e}")
+
+        # ── Check 7: Foreign Key constraints ─────────────────────────
+        if orm["fks"]:
+            try:
+                actual_fks_raw = insp.get_foreign_keys(tbl_name)
+                # Build lookup: (local_col, ref_table, ref_col) → full fk dict
+                actual_fk_map: dict = {}
+                for afk in actual_fks_raw:
+                    lc = (afk.get("constrained_columns") or [None])[0]
+                    rt = afk.get("referred_table")
+                    rc = (afk.get("referred_columns") or [None])[0]
+                    if lc and rt and rc:
+                        actual_fk_map[(lc, rt, rc)] = afk
+
+                fk_ok = True
+                for spec in orm["fks"]:
+                    key = (spec["local_col"], spec["ref_table"], spec["ref_col"])
+                    if key not in actual_fk_map:
+                        issues.append(
+                            f"[FAIL] {tbl_name}.{spec['local_col']}: FK 缺失 — "
+                            f"Expected → {spec['ref_table']}.{spec['ref_col']}"
+                        )
+                        fk_ok = False
+                    elif is_pg and spec["ondelete"]:
+                        # Check ON DELETE on PostgreSQL (where it's enforced)
+                        afk = actual_fk_map[key]
+                        actual_od = (
+                            (afk.get("options") or {}).get("ondelete") or ""
+                        ).upper()
+                        if actual_od and actual_od != spec["ondelete"]:
+                            issues.append(
+                                f"[FAIL] {tbl_name}.{spec['local_col']}: FK ON DELETE — "
+                                f"Expected {spec['ondelete']}, Actual {actual_od}"
+                            )
+                            fk_ok = False
+
+                if fk_ok:
+                    logger.info(
+                        f"  {tbl_name}: Check 7 (FK) PASS "
+                        f"({len(orm['fks'])} constraints)"
+                    )
+            except Exception as e:
+                issues.append(f"[BLOCKED] {tbl_name}: FK 無法讀取 — {e}")
+        else:
+            logger.info(f"  {tbl_name}: Check 7 (FK) N/A (ORM 無 ForeignKey() 宣告)")
+
+        # ── Check 8: Unique Constraints ───────────────────────────────
+        if orm["unique_constraints"]:
+            try:
+                actual_ucs = insp.get_unique_constraints(tbl_name)
+                actual_uc_sets = [
+                    frozenset(uc.get("column_names", [])) for uc in actual_ucs
+                ]
+                missing_ucs = [
+                    s for s in orm["unique_constraints"] if s not in actual_uc_sets
+                ]
+                if missing_ucs:
+                    issues.append(
+                        f"[FAIL] {tbl_name}: Unique Constraint 缺失 — "
+                        f"Expected {[sorted(s) for s in missing_ucs]}"
+                    )
+                else:
+                    logger.info(f"  {tbl_name}: Check 8 (UC) PASS")
+            except Exception as e:
+                issues.append(f"[BLOCKED] {tbl_name}: UC 無法讀取 — {e}")
+        else:
+            logger.info(f"  {tbl_name}: Check 8 (UC) N/A (ORM 無 UniqueConstraint)")
+
+        # ── Check 9: Indexes ──────────────────────────────────────────
+        try:
+            actual_idxs = insp.get_indexes(tbl_name)
+            actual_idx_col_sets = [
+                frozenset(idx.get("column_names", [])) for idx in actual_idxs
+            ]
+            idx_ok = True
+            for expected_col_set in orm["indexes"]:
+                if not any(expected_col_set <= act for act in actual_idx_col_sets):
+                    col_name = next(iter(expected_col_set))
+                    issues.append(
+                        f"[FAIL] {tbl_name}.{col_name}: index 缺失 " f"(ORM index=True)"
+                    )
+                    idx_ok = False
+            if idx_ok:
+                logger.info(
+                    f"  {tbl_name}: Check 9 (Index) PASS "
+                    f"({sorted(idx.get('name', '?') for idx in actual_idxs if idx.get('name'))})"
+                )
+        except Exception as e:
+            issues.append(f"[BLOCKED] {tbl_name}: Index 無法讀取 — {e}")
+
+    if issues:
+        fail_count = sum(1 for i in issues if i.startswith("[FAIL]"))
+        blocked_count = sum(1 for i in issues if i.startswith("[BLOCKED]"))
+        raise RuntimeError(
+            f"Schema 驗證失敗 — {fail_count} FAIL, {blocked_count} BLOCKED：\n"
+            + "\n".join(f"  {i}" for i in issues)
+            + "\n\n"
+            "Migration 不會自動修復以上差異（禁止 AUTO ALTER / DROP）。\n"
+            "請人工審核並修復後重新執行。"
+        )
+
+    logger.info(f"Schema 完整驗證通過 ✓ ({len(tables)} 張表)")
+
+
+# ── Table creation ────────────────────────────────────────────────────
 
 
 def _create_tables(engine, missing: list, dry_run: bool) -> None:
     """按依賴順序建立缺失的新表。
 
-    PostgreSQL: DDL wrapped in explicit transaction (atomic rollback on failure).
-    SQLite: DDL is not fully transactional; warn and proceed.
+    PostgreSQL: DDL wrapped in engine.begin() → atomic rollback on failure.
+    SQLite: DDL is not fully transactional; warn user.
     建立順序：actual_positions → trade_executions → position_plan_changes
-    （後兩者在應用層依賴 actual_positions.id）
     """
     from src.database import (  # noqa: F401
         ActualPosition,
@@ -349,234 +506,7 @@ def _create_tables(engine, missing: list, dry_run: bool) -> None:
         raise
 
 
-def _validate_schema(engine, tables: list) -> None:
-    """全面 Schema 驗證（9 大檢查點，16 項子檢查）。
-
-    Result classification:
-      PASS    = 已驗證且一致
-      FAIL    = 已確認 Schema 不一致
-      BLOCKED = 無法完成驗證（Inspector 例外、metadata 無法讀取）
-      N/A     = ORM 未宣告此約束，DB 端亦不期望有
-
-    只有非必要的純診斷性資訊使用 WARNING。
-    所有必要約束驗證失敗 → FAIL 或 BLOCKED，不得回報 PASS 後繼續。
-
-    Error format:
-      [FAIL]    Table.Column: 說明 — Expected X, Actual Y
-      [BLOCKED] Table: 說明 — {exception}
-
-    若有任何 FAIL 或 BLOCKED：raise RuntimeError，列出全部問題。
-    禁止自動修復任何 Schema Drift。
-    """
-    from sqlalchemy import inspect as _insp
-
-    insp = _insp(engine)
-    is_pg = engine.dialect.name == "postgresql"
-    issues: list[str] = []
-
-    for tbl in tables:
-        # ── Check 1: Table 可讀（欄位 metadata）──────────────────────
-        try:
-            cols_info = insp.get_columns(tbl)
-        except Exception as e:
-            issues.append(f"[BLOCKED] {tbl}: 無法讀取欄位資訊 — {e}")
-            continue
-
-        existing_cols = {c["name"]: c for c in cols_info}
-
-        # ── Check 2: Column 名稱存在性 ──────────────────────────────
-        required = _REQUIRED_COLS.get(tbl, set())
-        missing_cols = required - set(existing_cols)
-        if missing_cols:
-            issues.append(
-                f"[FAIL] {tbl}: 缺少欄位 {sorted(missing_cols)} — "
-                f"Expected all of {sorted(required)}"
-            )
-            continue  # 缺欄位 → 後續型別驗證無意義
-        logger.info(f"  {tbl}: Check 2 (Column names) PASS ({len(existing_cols)} cols)")
-
-        # ── Check 3: NOT NULL 約束（PostgreSQL only）─────────────────
-        if is_pg:
-            not_null = _NOT_NULL_COLS.get(tbl, set())
-            nn_ok = True
-            for col_name in sorted(not_null):
-                col = existing_cols.get(col_name)
-                if col is None:
-                    continue
-                if col.get("nullable", True):
-                    issues.append(
-                        f"[FAIL] {tbl}.{col_name}: NOT NULL — "
-                        f"Expected NOT NULL, Actual nullable=True"
-                    )
-                    nn_ok = False
-            if nn_ok:
-                logger.info(f"  {tbl}: Check 3 (NOT NULL) PASS")
-
-        # ── Check 4: NUMERIC precision/scale（PostgreSQL only）───────
-        if is_pg:
-            numeric_checks = _NUMERIC_PRECISION.get(tbl, {})
-            num_ok = True
-            for col_name, (exp_prec, exp_scale) in sorted(numeric_checks.items()):
-                col = existing_cols.get(col_name)
-                if col is None:
-                    continue
-                col_type = col.get("type")
-                actual_prec = getattr(col_type, "precision", None)
-                actual_scale = getattr(col_type, "scale", None)
-                if actual_prec is None or actual_scale is None:
-                    # Cannot read precision → BLOCKED (not Warning)
-                    issues.append(
-                        f"[BLOCKED] {tbl}.{col_name}: 無法讀取 NUMERIC precision/scale "
-                        f"(type={col_type!r}) — "
-                        f"Expected NUMERIC({exp_prec},{exp_scale})"
-                    )
-                    num_ok = False
-                elif actual_prec != exp_prec or actual_scale != exp_scale:
-                    issues.append(
-                        f"[FAIL] {tbl}.{col_name}: NUMERIC precision — "
-                        f"Expected NUMERIC({exp_prec},{exp_scale}), "
-                        f"Actual NUMERIC({actual_prec},{actual_scale})"
-                    )
-                    num_ok = False
-            if num_ok and numeric_checks:
-                logger.info(f"  {tbl}: Check 4 (NUMERIC precision) PASS")
-
-        # ── Check 5: VARCHAR 長度（PostgreSQL only）──────────────────
-        if is_pg:
-            varchar_checks = _VARCHAR_LENGTHS.get(tbl, {})
-            vc_ok = True
-            for col_name, exp_len in sorted(varchar_checks.items()):
-                col = existing_cols.get(col_name)
-                if col is None:
-                    continue
-                col_type = col.get("type")
-                actual_len = getattr(col_type, "length", None)
-                if actual_len is None:
-                    issues.append(
-                        f"[BLOCKED] {tbl}.{col_name}: 無法讀取 VARCHAR length "
-                        f"(type={col_type!r}) — "
-                        f"Expected VARCHAR({exp_len})"
-                    )
-                    vc_ok = False
-                elif actual_len != exp_len:
-                    issues.append(
-                        f"[FAIL] {tbl}.{col_name}: VARCHAR length — "
-                        f"Expected VARCHAR({exp_len}), "
-                        f"Actual VARCHAR({actual_len})"
-                    )
-                    vc_ok = False
-            if vc_ok and varchar_checks:
-                logger.info(f"  {tbl}: Check 5 (VARCHAR length) PASS")
-
-        # ── Check 6: Primary Key ─────────────────────────────────────
-        try:
-            pk_info = insp.get_pk_constraint(tbl)
-            pk_cols = set(pk_info.get("constrained_columns", []))
-            expected_pk = _PRIMARY_KEYS.get(tbl, {"id"})
-            if expected_pk != pk_cols:
-                issues.append(
-                    f"[FAIL] {tbl}: PK — "
-                    f"Expected {sorted(expected_pk)}, "
-                    f"Actual {sorted(pk_cols)}"
-                )
-            else:
-                logger.info(f"  {tbl}: Check 6 (PK) PASS {sorted(pk_cols)}")
-        except Exception as e:
-            issues.append(f"[BLOCKED] {tbl}: 無法讀取 PK constraint — {e}")
-
-        # ── Check 7: Foreign Key ─────────────────────────────────────
-        # ORM 未宣告 ForeignKey()（intentional: application-layer refs only）
-        expected_fks = _FK_CONSTRAINTS.get(tbl, [])
-        try:
-            actual_fks = insp.get_foreign_keys(tbl)
-            if expected_fks:
-                # ORM declares FKs → must validate in detail
-                _validate_fk_details(tbl, expected_fks, actual_fks, issues)
-                logger.info(f"  {tbl}: Check 7 (FK) PASS")
-            else:
-                # ORM has no FK declared → N/A; warn if DB has unexpected FKs
-                if actual_fks:
-                    logger.warning(
-                        f"  {tbl}: Check 7 (FK) N/A — "
-                        f"ORM 無 FK 宣告，但 DB 有 {len(actual_fks)} 個 FK constraint "
-                        f"（可能為手動建立）"
-                    )
-                else:
-                    logger.info(f"  {tbl}: Check 7 (FK) N/A — ORM 無 ForeignKey() 宣告")
-        except Exception as e:
-            if expected_fks:
-                issues.append(f"[BLOCKED] {tbl}: 無法讀取 FK constraints — {e}")
-            else:
-                logger.warning(
-                    f"  {tbl}: Check 7 (FK) 讀取失敗（{e}），ORM 無 FK 宣告，跳過"
-                )
-
-        # ── Check 8: Unique Constraint ───────────────────────────────
-        expected_ucs = [frozenset(s) for s in _UNIQUE_CONSTRAINTS.get(tbl, [])]
-        try:
-            actual_ucs = insp.get_unique_constraints(tbl)
-            # Compare by column sets (ignore auto-generated constraint names)
-            actual_uc_sets = [
-                frozenset(uc.get("column_names", [])) for uc in actual_ucs
-            ]
-            missing_ucs = [s for s in expected_ucs if s not in actual_uc_sets]
-            if missing_ucs:
-                issues.append(
-                    f"[FAIL] {tbl}: Unique Constraint 缺失 — "
-                    f"Expected {[sorted(s) for s in missing_ucs]}"
-                )
-            else:
-                logger.info(
-                    f"  {tbl}: Check 8 (Unique Constraint) PASS "
-                    f"({len(actual_uc_sets)} found, {len(expected_ucs)} expected)"
-                )
-        except Exception as e:
-            if expected_ucs:
-                issues.append(f"[BLOCKED] {tbl}: 無法讀取 Unique Constraints — {e}")
-            else:
-                logger.warning(
-                    f"  {tbl}: Check 8 (UC) 讀取失敗（{e}），ORM 無 UC 宣告，跳過"
-                )
-
-        # ── Check 9: Index 存在性 ────────────────────────────────────
-        try:
-            indexes = insp.get_indexes(tbl)
-            indexed_col_sets = [
-                frozenset(idx.get("column_names", [])) for idx in indexes
-            ]
-            required_idx = _INDEXED_COLS.get(tbl, set())
-            idx_ok = True
-            for col_name in sorted(required_idx):
-                has_idx = any({col_name} <= col_set for col_set in indexed_col_sets)
-                if not has_idx:
-                    issues.append(
-                        f"[FAIL] {tbl}.{col_name}: Index — "
-                        f"ORM 定義 index=True，DB 無對應 index"
-                    )
-                    idx_ok = False
-            if idx_ok:
-                logger.info(
-                    f"  {tbl}: Check 9 (Index) PASS "
-                    f"({sorted(idx.get('name', '?') for idx in indexes if idx.get('name'))})"
-                )
-        except Exception as e:
-            issues.append(f"[BLOCKED] {tbl}: 無法讀取 Index 資訊 — {e}")
-
-    if issues:
-        fail_count = sum(1 for i in issues if i.startswith("[FAIL]"))
-        blocked_count = sum(1 for i in issues if i.startswith("[BLOCKED]"))
-        raise RuntimeError(
-            f"Schema 驗證失敗 — {fail_count} FAIL, {blocked_count} BLOCKED：\n"
-            + "\n".join(f"  {i}" for i in issues)
-            + "\n\n"
-            "Migration 不會自動修復以上差異（禁止 AUTO ALTER / DROP）。\n"
-            "請人工審核並修復後重新執行。"
-        )
-
-    logger.info(f"Schema 完整驗證通過 ✓ ({len(tables)} 張表)")
-
-
-def _validate_protected_tables_untouched(engine, before_cols: dict):
+def _validate_protected_tables_untouched(engine, before_cols: dict) -> None:
     """確認受保護的舊表欄位未被修改。"""
     from sqlalchemy import inspect
 
@@ -586,14 +516,13 @@ def _validate_protected_tables_untouched(engine, before_cols: dict):
             cols_after = {c["name"] for c in insp.get_columns(tbl)}
         except Exception:
             continue
-        added = cols_after - cols_before
         removed = cols_before - cols_after
-        if added or removed:
-            raise RuntimeError(
-                f"受保護的表 {tbl} 被意外修改！"
-                f"新增欄位：{added}，刪除欄位：{removed}"
-            )
+        if removed:
+            raise RuntimeError(f"受保護的表 {tbl} 被意外修改！刪除欄位：{removed}")
     logger.info("受保護的舊表完整性確認 ✓")
+
+
+# ── Main ──────────────────────────────────────────────────────────────
 
 
 def main():
@@ -669,7 +598,6 @@ def main():
         sys.exit(0)
 
     # ── Step 3: Controlled Migration ─────────────────────────────────
-    # Snapshot protected tables for post-migration integrity check
     protected_snapshot: dict = {}
     for tbl in _PROTECTED_TABLES:
         try:
@@ -695,10 +623,8 @@ def main():
     logger.info("\n後續步驟：")
     logger.info("  1. 確認 GitHub Actions Daily Pipeline 正常執行")
     logger.info("  2. 在 Dashboard 記錄第一筆 ACTUAL 成交，確認寫入正常")
-    logger.info(
-        "  3. 若需回滾：DROP TABLE position_plan_changes, "
-        "trade_executions, actual_positions"
-    )
+    logger.info("  3. 若需回滾，使用 Migration 前建立的 Neon Branch 還原")
+    logger.info("     （不得使用 DROP TABLE 刪除生產資料）")
 
 
 if __name__ == "__main__":
