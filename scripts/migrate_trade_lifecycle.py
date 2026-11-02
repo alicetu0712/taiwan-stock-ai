@@ -51,27 +51,128 @@ _REQUIRED_TABLES = ["actual_positions", "trade_executions", "position_plan_chang
 
 _REQUIRED_COLS = {
     "actual_positions": {
-        "id", "stock_id", "stock_name", "position_type", "signal_source",
-        "forward_signal_id", "status", "open_date", "close_date",
-        "remaining_shares", "avg_cost_per_share", "total_cost_basis",
-        "realized_pnl", "target_price", "stop_price",
-        "original_plan_snapshot", "notes", "created_at", "updated_at",
+        "id",
+        "stock_id",
+        "stock_name",
+        "position_type",
+        "signal_source",
+        "forward_signal_id",
+        "status",
+        "open_date",
+        "close_date",
+        "remaining_shares",
+        "avg_cost_per_share",
+        "total_cost_basis",
+        "realized_pnl",
+        "target_price",
+        "stop_price",
+        "original_plan_snapshot",
+        "notes",
+        "created_at",
+        "updated_at",
     },
     "trade_executions": {
-        "id", "position_id", "side", "execution_date", "execution_datetime",
-        "execution_price", "shares", "actual_fee", "transaction_tax",
-        "linked_forward_signal_id", "notes",
-        "is_cancelled", "cancel_reason", "cancelled_at", "created_at", "updated_at",
+        "id",
+        "position_id",
+        "side",
+        "execution_date",
+        "execution_datetime",
+        "execution_price",
+        "shares",
+        "actual_fee",
+        "transaction_tax",
+        "linked_forward_signal_id",
+        "notes",
+        "is_cancelled",
+        "cancel_reason",
+        "cancelled_at",
+        "created_at",
+        "updated_at",
     },
     "position_plan_changes": {
-        "id", "position_id", "changed_at", "field_name",
-        "old_value", "new_value", "reason", "created_at",
+        "id",
+        "position_id",
+        "changed_at",
+        "field_name",
+        "old_value",
+        "new_value",
+        "reason",
+        "created_at",
     },
 }
 
+# NOT NULL columns per table (ORM definition)
+_NOT_NULL_COLS = {
+    "actual_positions": {
+        "stock_id",
+        "position_type",
+        "signal_source",
+        "status",
+        "open_date",
+        "remaining_shares",
+        "avg_cost_per_share",
+        "total_cost_basis",
+        "realized_pnl",
+    },
+    "trade_executions": {
+        "position_id",
+        "side",
+        "execution_date",
+        "execution_price",
+        "shares",
+        "actual_fee",
+        "transaction_tax",
+        "is_cancelled",
+    },
+    "position_plan_changes": {
+        "position_id",
+        "changed_at",
+        "field_name",
+    },
+}
+
+# Expected NUMERIC(precision, scale) per column (PostgreSQL only)
+_NUMERIC_PRECISION = {
+    "actual_positions": {
+        "avg_cost_per_share": (12, 4),
+        "total_cost_basis": (14, 2),
+        "realized_pnl": (14, 2),
+        "target_price": (10, 2),
+        "stop_price": (10, 2),
+    },
+    "trade_executions": {
+        "execution_price": (10, 2),
+        "actual_fee": (10, 2),
+        "transaction_tax": (10, 2),
+    },
+    "position_plan_changes": {
+        "old_value": (10, 2),
+        "new_value": (10, 2),
+    },
+}
+
+# Expected primary key columns per table
+_PRIMARY_KEYS = {
+    "actual_positions": {"id"},
+    "trade_executions": {"id"},
+    "position_plan_changes": {"id"},
+}
+
+# Columns that must have an index (from ORM index=True)
+_INDEXED_COLS = {
+    "actual_positions": {"stock_id"},
+    "trade_executions": {"position_id"},
+    "position_plan_changes": {"position_id"},
+}
+
 _PROTECTED_TABLES = {
-    "user_trades", "position_monitor", "forward_signals",
-    "analysis_results", "recommendations", "stocks", "daily_prices",
+    "user_trades",
+    "position_monitor",
+    "forward_signals",
+    "analysis_results",
+    "recommendations",
+    "stocks",
+    "daily_prices",
 }
 
 
@@ -81,7 +182,9 @@ def _get_engine(env: str):
 
     if env == "production":
         import os
+
         from dotenv import load_dotenv
+
         load_dotenv()
         url = os.environ.get("NEON_URL", "")
         if not url:
@@ -92,11 +195,13 @@ def _get_engine(env: str):
         engine = create_engine(url, connect_args={"sslmode": "require"})
     else:
         from config import DATABASE_URL
+
         logger.info(f"Local mode: {DATABASE_URL[:50]}")
         engine = create_engine(DATABASE_URL)
 
     # 測試連線
     from sqlalchemy import text
+
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -133,7 +238,11 @@ def _preflight_check(engine, dry_run: bool) -> dict:
 
 def _create_tables(engine, missing: list, dry_run: bool):
     """使用 SQLAlchemy ORM 建立缺失的新表。"""
-    from src.database import ActualPosition, PositionPlanChange, TradeExecution  # noqa: F401
+    from src.database import (  # noqa: F401
+        ActualPosition,
+        PositionPlanChange,
+        TradeExecution,
+    )
 
     table_map = {
         "actual_positions": ActualPosition.__table__,
@@ -144,8 +253,9 @@ def _create_tables(engine, missing: list, dry_run: bool):
     for tbl_name in missing:
         table_obj = table_map[tbl_name]
         if dry_run:
-            from sqlalchemy.schema import CreateTable
             from sqlalchemy.dialects import postgresql
+            from sqlalchemy.schema import CreateTable
+
             ddl = str(CreateTable(table_obj).compile(dialect=postgresql.dialect()))
             logger.info(f"[DRY-RUN] Would CREATE TABLE {tbl_name}:\n{ddl}")
         else:
@@ -154,30 +264,147 @@ def _create_tables(engine, missing: list, dry_run: bool):
             logger.info(f"  → {tbl_name} created ✓")
 
 
-def _validate_schema(engine, tables: list):
-    """執行後驗證：欄位、型別、Index。"""
-    from sqlalchemy import inspect
+def _validate_schema(engine, tables: list) -> None:
+    """全面 Schema 驗證：欄位名稱、Nullability、NUMERIC 精度、PK、Unique、Index。
 
-    insp = inspect(engine)
-    errors = []
+    檢查項目：
+      1. 欄位名稱存在性
+      2. NOT NULL 約束（PostgreSQL only — SQLite 不強制執行 NOT NULL）
+      3. NUMERIC(precision, scale)（PostgreSQL only）
+      4. Primary Key 欄位
+      5. Unique Constraint 存在性記錄
+      6. Index 是否存在於 indexed 欄位
+
+    若 Schema 不符：
+      - 停止驗證流程
+      - 列出所有具體差異
+      - 不自動 ALTER / DROP / 重建任何欄位或 Index
+      - raise RuntimeError，要求人工審核修復
+    """
+    from sqlalchemy import inspect as _insp
+
+    insp = _insp(engine)
+    is_pg = engine.dialect.name == "postgresql"
+    errors: list[str] = []
 
     for tbl in tables:
-        existing_cols = {c["name"] for c in insp.get_columns(tbl)}
+        try:
+            cols_info = insp.get_columns(tbl)
+        except Exception as e:
+            errors.append(f"{tbl}: 無法讀取欄位資訊 — {e}")
+            continue
+
+        existing_cols = {c["name"]: c for c in cols_info}
+
+        # ── 1. 欄位名稱存在性 ──────────────────────────────
         required = _REQUIRED_COLS.get(tbl, set())
-        missing_cols = required - existing_cols
+        missing_cols = required - set(existing_cols)
         if missing_cols:
             errors.append(f"{tbl}: 缺少欄位 {sorted(missing_cols)}")
-        else:
-            logger.info(f"  {tbl}: 欄位驗證通過 ({len(existing_cols)} cols) ✓")
+            # 缺欄位時後續型別驗證無意義
+            continue
+        logger.info(f"  {tbl}: 欄位驗證通過 ({len(existing_cols)} cols) ✓")
 
-        # Index 驗證
-        indexes = {idx["name"] for idx in insp.get_indexes(tbl)}
-        logger.info(f"  {tbl}: indexes = {sorted(indexes)}")
+        # ── 2. NOT NULL 約束（PostgreSQL only）──────────────
+        if is_pg:
+            not_null = _NOT_NULL_COLS.get(tbl, set())
+            for col_name in sorted(not_null):
+                col = existing_cols.get(col_name)
+                if col is None:
+                    continue  # 已在上方報缺欄位
+                if col.get("nullable", True):
+                    errors.append(
+                        f"{tbl}.{col_name}: 期望 NOT NULL，"
+                        f"但資料庫設定為 nullable（可能為欄位新增後未加 NOT NULL 約束）"
+                    )
+            if not errors:
+                logger.info(f"  {tbl}: NOT NULL 驗證通過 ✓")
+
+        # ── 3. NUMERIC precision/scale（PostgreSQL only）────
+        if is_pg:
+            numeric_checks = _NUMERIC_PRECISION.get(tbl, {})
+            for col_name, (exp_prec, exp_scale) in sorted(numeric_checks.items()):
+                col = existing_cols.get(col_name)
+                if col is None:
+                    continue
+                col_type = col.get("type")
+                actual_prec = getattr(col_type, "precision", None)
+                actual_scale = getattr(col_type, "scale", None)
+                if actual_prec is not None and actual_scale is not None:
+                    if actual_prec != exp_prec or actual_scale != exp_scale:
+                        errors.append(
+                            f"{tbl}.{col_name}: 期望 NUMERIC({exp_prec},{exp_scale}), "
+                            f"實際 NUMERIC({actual_prec},{actual_scale}) — "
+                            f"精度不符會累積浮點誤差，需人工 ALTER COLUMN"
+                        )
+                else:
+                    logger.warning(
+                        f"  {tbl}.{col_name}: 無法讀取 NUMERIC precision "
+                        f"（型別={col_type!r}），跳過精度驗證"
+                    )
+
+        # ── 4. Primary Key ──────────────────────────────────
+        try:
+            pk_info = insp.get_pk_constraint(tbl)
+            pk_cols = set(pk_info.get("constrained_columns", []))
+            expected_pk = _PRIMARY_KEYS.get(tbl, {"id"})
+            if expected_pk != pk_cols:
+                errors.append(
+                    f"{tbl}: PK 不符 — 期望 {sorted(expected_pk)}, "
+                    f"實際 {sorted(pk_cols)}"
+                )
+            else:
+                logger.info(f"  {tbl}: PK 驗證通過 {sorted(pk_cols)} ✓")
+        except Exception as e:
+            logger.warning(f"  {tbl}: PK 驗證跳過（{e}）")
+
+        # ── 5. Unique Constraint 記錄（僅 log，不判 fail）──
+        try:
+            ucs = insp.get_unique_constraints(tbl)
+            for uc in ucs:
+                logger.info(
+                    f"  {tbl}: unique constraint '{uc.get('name','?')}' "
+                    f"on {uc.get('column_names', [])}"
+                )
+        except Exception as e:
+            logger.warning(f"  {tbl}: unique constraint 讀取失敗（{e}）")
+
+        # ── 6. Index 存在性驗證 ─────────────────────────────
+        try:
+            indexes = insp.get_indexes(tbl)
+            indexed_col_sets = [
+                frozenset(idx.get("column_names", [])) for idx in indexes
+            ]
+            logger.info(
+                f"  {tbl}: indexes = "
+                f"{sorted(idx.get('name','?') for idx in indexes if idx.get('name'))}"
+            )
+            required_idx = _INDEXED_COLS.get(tbl, set())
+            for col_name in sorted(required_idx):
+                has_idx = any({col_name} <= col_set for col_set in indexed_col_sets)
+                if not has_idx:
+                    errors.append(
+                        f"{tbl}.{col_name}: ORM 定義 index=True，"
+                        f"但資料庫中未找到對應 index（影響查詢效能）"
+                    )
+        except Exception as e:
+            logger.warning(f"  {tbl}: index 驗證跳過（{e}）")
 
     if errors:
-        raise RuntimeError("Schema 驗證失敗：\n" + "\n".join(errors))
+        raise RuntimeError(
+            f"Schema 驗證失敗 — 發現 {len(errors)} 個不一致：\n"
+            + "\n".join(f"  ✗ {e}" for e in errors)
+            + "\n\n"
+            "⚠️  Migration 不會自動修復以上差異（不允許 AUTO ALTER / DROP）。\n"
+            "請人工審核並手動修復後，重新執行 Schema Migration 驗證。"
+        )
 
-    logger.info("Schema 驗證全部通過 ✓")
+    logger.info(
+        f"Schema 完整驗證通過 ✓ "
+        f"（{len(tables)} 張表：欄位、"
+        + ("Nullability、NUMERIC 精度、" if is_pg else "")
+        + "PK、Index）"
+    )
 
 
 def _validate_protected_tables_untouched(engine, before_cols: dict):
@@ -257,6 +484,7 @@ def main():
 
     # 快照受保護舊表欄位（用於執行後驗證）
     from sqlalchemy import inspect as _insp
+
     insp = _insp(engine)
     protected_snapshot = {}
     for tbl in _PROTECTED_TABLES:
@@ -284,7 +512,9 @@ def main():
     logger.info("\n後續步驟：")
     logger.info("  1. 確認 GitHub Actions Daily Pipeline 正常執行")
     logger.info("  2. 在 Dashboard 記錄第一筆 ACTUAL 成交，確認寫入正常")
-    logger.info("  3. 若需回滾：DROP TABLE position_plan_changes, trade_executions, actual_positions")
+    logger.info(
+        "  3. 若需回滾：DROP TABLE position_plan_changes, trade_executions, actual_positions"
+    )
 
 
 if __name__ == "__main__":

@@ -452,3 +452,168 @@ class TestBusinessFunctionsUnaffected:
         count = session.query(ActualPosition).count()
         assert count == 0
         session.close()
+
+
+# ── T10: init_db(allow_ddl=False) 完全跳過所有 _migrate_* ─────
+
+
+class TestInitDbAllowDdlFalseSkipsMigrations:
+    """init_db(allow_ddl=False) must skip ALL DDL and _migrate_* calls."""
+
+    def test_allow_ddl_false_skips_all_migrate_fns(self):
+        """init_db(allow_ddl=False) must not call any _migrate_* function."""
+        from src.database import init_db
+
+        engine = create_engine("sqlite:///:memory:")
+        mocks = {fn: MagicMock() for fn in _ALL_MIGRATE_FNS}
+        with patch.multiple(
+            "src.database",
+            **{fn.split(".")[-1]: mocks[fn] for fn in _ALL_MIGRATE_FNS},
+        ):
+            with patch("src.database.Base"):
+                init_db(engine, allow_ddl=False)
+
+        for fn, mock in mocks.items():
+            assert mock.call_count == 0, (
+                f"{fn} was called by init_db(allow_ddl=False) — "
+                "must not execute DDL in allow_ddl=False mode"
+            )
+
+    def test_allow_ddl_false_skips_create_all(self):
+        """init_db(allow_ddl=False) must not call Base.metadata.create_all."""
+        from src.database import init_db
+
+        engine = create_engine("sqlite:///:memory:")
+        with patch("src.database.Base") as mock_base:
+            init_db(engine, allow_ddl=False)
+        mock_base.metadata.create_all.assert_not_called()
+
+    def test_allow_ddl_false_postgresql_skips_all_migrate_fns(self):
+        """init_db(allow_ddl=False) on PostgreSQL engine skips all _migrate_* fns."""
+        from src.database import init_db
+
+        pg_engine = MagicMock()
+        pg_engine.dialect.name = "postgresql"
+
+        mocks = {fn: MagicMock() for fn in _ALL_MIGRATE_FNS}
+        insp_mock = MagicMock()
+        insp_mock.get_columns.return_value = []
+
+        with patch.multiple(
+            "src.database",
+            **{fn.split(".")[-1]: mocks[fn] for fn in _ALL_MIGRATE_FNS},
+        ):
+            with patch("src.database.Base"):
+                with patch("sqlalchemy.inspect", return_value=insp_mock):
+                    try:
+                        init_db(pg_engine, allow_ddl=False)
+                    except Exception:
+                        pass  # _verify_schema_integrity may raise; that's expected
+
+        for fn, mock in mocks.items():
+            assert mock.call_count == 0, (
+                f"{fn} was called by init_db(allow_ddl=False) on PG — "
+                "production schema must never be auto-migrated"
+            )
+
+    def test_allow_ddl_none_postgresql_skips_all_migrate_fns(self):
+        """init_db(allow_ddl=None) on PostgreSQL auto-selects False → no migrations."""
+        from src.database import init_db
+
+        pg_engine = MagicMock()
+        pg_engine.dialect.name = "postgresql"
+
+        mocks = {fn: MagicMock() for fn in _ALL_MIGRATE_FNS}
+        insp_mock = MagicMock()
+        insp_mock.get_columns.return_value = []
+
+        with patch.multiple(
+            "src.database",
+            **{fn.split(".")[-1]: mocks[fn] for fn in _ALL_MIGRATE_FNS},
+        ):
+            with patch("src.database.Base"):
+                with patch("sqlalchemy.inspect", return_value=insp_mock):
+                    try:
+                        init_db(pg_engine, allow_ddl=None)  # auto-detects PG → False
+                    except Exception:
+                        pass
+
+        for fn, mock in mocks.items():
+            assert (
+                mock.call_count == 0
+            ), f"{fn} was called by init_db(allow_ddl=None) on PG"
+
+    def test_allow_ddl_true_still_calls_migrate_fns(self):
+        """init_db(allow_ddl=True) must call all _migrate_* functions (sanity check)."""
+        from src.database import init_db
+
+        engine = create_engine("sqlite:///:memory:")
+        called_fns = []
+
+        def make_recorder(name):
+            def recorder(eng):
+                called_fns.append(name)
+
+            return recorder
+
+        patch_dict = {fn.split(".")[-1]: make_recorder(fn) for fn in _ALL_MIGRATE_FNS}
+        with patch.multiple("src.database", **patch_dict):
+            with patch("src.database.Base") as mock_base:
+                mock_base.metadata.create_all.return_value = None
+                try:
+                    init_db(engine, allow_ddl=True)
+                except Exception:
+                    pass  # _verify_schema_integrity may raise on empty DB
+
+        # All migrate functions should have been called
+        for fn in _ALL_MIGRATE_FNS:
+            assert fn in called_fns, f"{fn} was NOT called by init_db(allow_ddl=True)"
+
+
+# ── T11: Daily Pipeline / Dashboard 不呼叫 init_db ───────────
+
+
+class TestNoBizPathCallsInitDb:
+    """Verify that run_daily.py and dashboard/app.py never import or call init_db."""
+
+    def test_run_daily_does_not_import_init_db(self):
+        """scripts/run_daily.py must not import init_db at module level."""
+        import ast
+
+        path = Path(__file__).parent.parent / "scripts" / "run_daily.py"
+        source = path.read_text()
+        tree = ast.parse(source)
+
+        init_db_imports = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == "init_db":
+                        init_db_imports.append(alias.name)
+
+        assert init_db_imports == [], (
+            f"run_daily.py imports init_db: {init_db_imports} — "
+            "daily pipeline must use connect_db() only"
+        )
+
+    def test_dashboard_db_does_not_call_init_db(self):
+        """dashboard/db.py must not call init_db."""
+        import ast
+
+        path = Path(__file__).parent.parent / "dashboard" / "db.py"
+        source = path.read_text()
+        tree = ast.parse(source)
+
+        init_db_calls = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == "init_db":
+                        init_db_calls.append(alias.name)
+            if isinstance(node, ast.Name) and node.id == "init_db":
+                init_db_calls.append("init_db_name_ref")
+
+        assert init_db_calls == [], (
+            f"dashboard/db.py references init_db: {init_db_calls} — "
+            "dashboard bootstrap must not trigger migrations"
+        )

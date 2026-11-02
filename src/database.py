@@ -1540,7 +1540,7 @@ def init_db(
     *,
     allow_ddl: Optional[bool] = None,
 ) -> Engine:
-    """初始化資料庫連線並執行欄位增加型 Migration。
+    """初始化資料庫連線並視情況執行 Schema Migration。
 
     Parameters
     ----------
@@ -1548,14 +1548,18 @@ def init_db(
         使用指定 engine；None 時呼叫 get_engine() 取得預設連線。
     allow_ddl:
         None（預設）→ 自動：SQLite 為 True，PostgreSQL 為 False。
-        True  → 執行 Base.metadata.create_all()，建立不存在的資料表。
-                 僅用於測試、本地開發，或由 scripts/migrate_trade_lifecycle.py
-                 顯式呼叫。
-        False → 跳過 create_all()；假設所有表已存在（生產模式）。
-                 Daily Pipeline、Streamlit Dashboard 均應使用此模式。
+        True  → 執行 Base.metadata.create_all() 及所有 _migrate_*()。
+                 僅用於測試、本地開發、scripts/init_db.py 或
+                 scripts/migrate_*.py 顯式呼叫。
+        False → 跳過 create_all() 及所有 _migrate_*()，不執行任何 DDL。
+                 Schema 視為已由 scripts/migrate_*.py 管理妥當。
+                 日常業務流程（Pipeline / Dashboard）必須改用 connect_db()
+                 而非直接呼叫 init_db()。
 
-    不論 allow_ddl 為何，_migrate_* 欄位 Migration 皆執行
-    （均為 ADD COLUMN IF NOT EXISTS，對既有表安全）。
+    安全保證：
+      allow_ddl=False 時，本函式不執行任何 DDL 或資料修復。
+      _verify_schema_integrity() 仍會執行（唯讀稽核），若必要欄位缺失
+      則 fail-closed，讓呼叫方明確知道 Schema 不符預期。
     """
     if engine is None:
         engine = get_engine()
@@ -1565,21 +1569,25 @@ def init_db(
         allow_ddl = engine.dialect.name == "sqlite"
 
     if allow_ddl:
+        # Full schema creation + all incremental migrations.
+        # Only reached when explicitly requested (scripts/init_db.py,
+        # scripts/sync_to_neon.py, backfill tools, or SQLite local dev).
         Base.metadata.create_all(engine)
+        _migrate_stocks(engine)
+        _migrate_analysis_results(engine)
+        _migrate_forward_signals(engine)
+        _migrate_recommendations(engine)
+        _migrate_decision_label_to_codes(engine)
+        _migrate_overnight_market_contexts(engine)
+        _migrate_forward_outcome_evaluations(engine)
+        _migrate_position_monitor(engine)
+        _migrate_position_monitor_nullable(engine)
+        _migrate_forward_signals_unique_constraint(engine)
+        _migrate_trade_lifecycle(engine)
+    # allow_ddl=False: no DDL, no migrations, no data backfill.
 
-    _migrate_stocks(engine)
-    _migrate_analysis_results(engine)
-    _migrate_forward_signals(engine)
-    _migrate_recommendations(engine)
-    _migrate_decision_label_to_codes(engine)
-    _migrate_overnight_market_contexts(engine)
-    _migrate_forward_outcome_evaluations(engine)
-    _migrate_position_monitor(engine)
-    _migrate_position_monitor_nullable(engine)
-    _migrate_forward_signals_unique_constraint(engine)
-    _migrate_trade_lifecycle(engine)
-
-    # Fail-closed: raise if required columns are still missing after all migrations.
+    # Fail-closed: raise if required columns are still missing.
+    # Skips tables that do not exist (fresh DB with allow_ddl=False is safe).
     _verify_schema_integrity(engine)
 
     from config import DATABASE_URL

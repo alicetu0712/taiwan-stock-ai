@@ -94,9 +94,8 @@ class TestSqliteMode:
 class TestAllowDdlFalse:
     def test_allow_ddl_false_skips_new_tables(self):
         """
-        init_db(allow_ddl=False) 在空 SQLite 上跳過 create_all，
-        新表不會被建立。
-        注意：_migrate_* 函式若找不到表會 return/skip（既有行為）。
+        init_db(allow_ddl=False) 在空 SQLite 上跳過 create_all 及所有 _migrate_*，
+        新表不會被建立（allow_ddl=False 不執行任何 DDL）。
         """
         from src.database import init_db
 
@@ -305,3 +304,180 @@ class TestMigrationScript:
             "trade_executions",
             "position_plan_changes",
         }
+
+
+# ── 7. 強化 Schema 驗證測試 ─────────────────────────────────
+
+
+class TestSchemaValidationEnhanced:
+    """驗證 _validate_schema() 能正確偵測各類 Schema Drift。"""
+
+    def _load_validate_fn(self):
+        """載入 _validate_schema from migrate_trade_lifecycle script。"""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod._validate_schema
+
+    def test_complete_schema_passes(self):
+        """完整 Schema（ORM 建立）應通過所有驗證。"""
+        from src.database import init_db
+
+        engine = create_engine("sqlite:///:memory:")
+        init_db(engine, allow_ddl=True)
+
+        validate = self._load_validate_fn()
+        validate(
+            engine, ["actual_positions", "trade_executions", "position_plan_changes"]
+        )
+
+    def test_missing_column_fails(self):
+        """缺少必要欄位時應 raise RuntimeError。"""
+        import pytest
+        from sqlalchemy import text
+
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE actual_positions (id INTEGER PRIMARY KEY, stock_id TEXT)"
+                )
+            )
+
+        validate = self._load_validate_fn()
+        with pytest.raises(RuntimeError, match="缺少欄位"):
+            validate(engine, ["actual_positions"])
+
+    def test_missing_required_columns_listed_in_error(self):
+        """錯誤訊息必須列出所有缺少的欄位名稱。"""
+        import pytest
+        from sqlalchemy import text
+
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as conn:
+            conn.execute(
+                text("CREATE TABLE trade_executions (id INTEGER PRIMARY KEY)")
+            )  # 缺少 position_id, side, execution_date 等
+
+        validate = self._load_validate_fn()
+        with pytest.raises(RuntimeError) as exc_info:
+            validate(engine, ["trade_executions"])
+
+        error_msg = str(exc_info.value)
+        assert "position_id" in error_msg or "缺少欄位" in error_msg
+
+    def test_primary_key_verified(self):
+        """主鍵驗證正常運作（不 raise 即表示通過）。"""
+        from src.database import init_db
+
+        engine = create_engine("sqlite:///:memory:")
+        init_db(engine, allow_ddl=True)
+
+        validate = self._load_validate_fn()
+        validate(engine, ["position_plan_changes"])  # must not raise
+
+    def test_index_exists_for_indexed_columns(self):
+        """ORM 定義 index=True 的欄位必須有對應的 index。"""
+        from src.database import init_db
+
+        engine = create_engine("sqlite:///:memory:")
+        init_db(engine, allow_ddl=True)
+
+        validate = self._load_validate_fn()
+        # These tables have indexed columns (position_id, stock_id)
+        validate(
+            engine, ["trade_executions", "position_plan_changes", "actual_positions"]
+        )
+
+    def test_missing_index_detected(self):
+        """缺少必要 index 時應 raise RuntimeError。"""
+        import pytest
+        from sqlalchemy import text
+
+        engine = create_engine("sqlite:///:memory:")
+        # Create trade_executions WITHOUT index on position_id
+        with engine.begin() as conn:
+            col_defs = ", ".join(
+                [
+                    "id INTEGER PRIMARY KEY",
+                    "position_id INTEGER NOT NULL",  # no index
+                    "side TEXT NOT NULL",
+                    "execution_date DATE NOT NULL",
+                    "execution_datetime DATETIME",
+                    "execution_price NUMERIC NOT NULL",
+                    "shares INTEGER NOT NULL",
+                    "actual_fee NUMERIC NOT NULL DEFAULT 0",
+                    "transaction_tax NUMERIC NOT NULL DEFAULT 0",
+                    "linked_forward_signal_id INTEGER",
+                    "notes TEXT",
+                    "is_cancelled BOOLEAN NOT NULL DEFAULT 0",
+                    "cancel_reason TEXT",
+                    "cancelled_at DATETIME",
+                    "created_at DATETIME",
+                    "updated_at DATETIME",
+                ]
+            )
+            conn.execute(text(f"CREATE TABLE trade_executions ({col_defs})"))
+            # Explicitly do NOT create index on position_id
+
+        validate = self._load_validate_fn()
+        with pytest.raises(RuntimeError, match="index"):
+            validate(engine, ["trade_executions"])
+
+    def test_repeated_validation_idempotent(self):
+        """連續執行兩次驗證結果相同（第二次不破壞資料）。"""
+        from src.database import init_db
+
+        engine = create_engine("sqlite:///:memory:")
+        init_db(engine, allow_ddl=True)
+
+        validate = self._load_validate_fn()
+        tables = ["actual_positions", "trade_executions", "position_plan_changes"]
+        validate(engine, tables)  # first time
+        validate(engine, tables)  # second time — must not raise
+
+    def test_table_inspection_failure_reported(self):
+        """完全不存在的表格應在錯誤訊息中標示。"""
+        import pytest
+
+        engine = create_engine("sqlite:///:memory:")  # empty DB, no tables
+
+        validate = self._load_validate_fn()
+        # Table doesn't exist at all
+        with pytest.raises(RuntimeError):
+            validate(engine, ["actual_positions"])
+
+    def test_new_schema_constants_match_required_tables(self):
+        """_NOT_NULL_COLS, _NUMERIC_PRECISION, _PRIMARY_KEYS, _INDEXED_COLS 涵蓋全部三張表。"""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        required_tables = set(mod._REQUIRED_TABLES)
+
+        assert (
+            set(mod._NOT_NULL_COLS.keys()) == required_tables
+        ), "_NOT_NULL_COLS must cover all 3 trade lifecycle tables"
+        assert (
+            set(mod._NUMERIC_PRECISION.keys()) == required_tables
+        ), "_NUMERIC_PRECISION must cover all 3 trade lifecycle tables"
+        assert (
+            set(mod._PRIMARY_KEYS.keys()) == required_tables
+        ), "_PRIMARY_KEYS must cover all 3 trade lifecycle tables"
+        assert (
+            set(mod._INDEXED_COLS.keys()) == required_tables
+        ), "_INDEXED_COLS must cover all 3 trade lifecycle tables"
