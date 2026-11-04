@@ -446,6 +446,9 @@ def _render_partial_sell_form(pos_id: int, sid: str, name: str, remaining: int) 
         if st.form_submit_button("✅ 確認賣出", type="primary"):
             try:
                 s = get_session()
+                from src.database import ActualPosition as _AP
+                _pos = s.query(_AP).filter_by(id=pos_id).first()
+                _prev_realized = float(_pos.realized_pnl) if _pos else 0.0
                 svc.add_execution(
                     s,
                     pos_id,
@@ -459,9 +462,13 @@ def _render_partial_sell_form(pos_id: int, sid: str, name: str, remaining: int) 
                     idempotency_key=st.session_state[idem_key_name],
                 )
                 s.commit()
+                _this_pnl = float(_pos.realized_pnl) - _prev_realized
                 s.close()
                 st.session_state[idem_key_name] = str(uuid.uuid4())
-                st.success(f"✅ 賣出 {int(shares)} 股 @ {exec_price:.2f}")
+                st.success(
+                    f"✅ 賣出 {int(shares)} 股 @ {exec_price:.2f}　"
+                    f"本次已實現淨損益 {_this_pnl:+,.0f}"
+                )
                 st.rerun()
             except svc.TradeSvcError as e:
                 st.error(f"賣出失敗：{e}")
@@ -512,12 +519,18 @@ def _render_full_sell_form(
                     idempotency_key=st.session_state[idem_key_name],
                 )
                 s.commit()
+                from src.database import ActualPosition as _AP
+                _pos = s.query(_AP).filter_by(id=pos_id).first()
+                _cum_pnl = float(_pos.realized_pnl) if _pos else None
                 s.close()
                 st.session_state[idem_key_name] = str(uuid.uuid4())
-                realized = (exec_price - avg_cost) * remaining
+                _pnl_part = (
+                    f"　累計已實現淨損益 {_cum_pnl:+,.0f}"
+                    if _cum_pnl is not None
+                    else ""
+                )
                 st.success(
-                    f"✅ 全數出場 {remaining:,} 股 @ {exec_price:.2f}　"
-                    f"本次實現損益 {realized:+,.0f}"
+                    f"✅ 全數出場 {remaining:,} 股 @ {exec_price:.2f}{_pnl_part}"
                 )
                 st.rerun()
             except svc.TradeSvcError as e:
