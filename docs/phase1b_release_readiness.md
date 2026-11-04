@@ -96,12 +96,14 @@ Impact assessment: **None for Phase 1B release.** These are pre-existing technic
 
 | Item | Value |
 |------|-------|
-| CI run URL | https://github.com/alicetu0712/taiwan-stock-ai/actions/runs/41776383669 |
-| Commit | 91e8d7b |
-| Result | ✅ success (lint + test Python 3.11 + test Python 3.13) |
-| HEAD (9b8203d) CI | Docs-only commits; CI passes (lint/test scope unchanged) |
+| CI run URL (last verified) | https://github.com/alicetu0712/taiwan-stock-ai/actions/runs/41776383669 |
+| Commit verified | 91e8d7b (pre-UI-fix) |
+| Result at 91e8d7b | ✅ success (lint + test Python 3.11 + test Python 3.13) |
+| d27e1b2 CI | Pushed to origin/main; CI triggered automatically on push |
+| d27e1b2 CI verification | **Pending human check** — visit Actions tab to confirm pass |
 
-> Note: 9b8203d and f75dc8c change only `docs/` and `.coverage`. CI runs on each push; docs-only changes cannot break lint/test gates.
+> CI lint scope covers `dashboard/_pages/position.py` and `tests/test_position_pnl_display.py`.
+> Local verification: `ruff check dashboard/ tests/test_position_pnl_display.py` passes (no new errors).
 
 ### B.4 PostgreSQL Integration Evidence
 
@@ -111,10 +113,12 @@ Impact assessment: **None for Phase 1B release.** These are pre-existing technic
 | PG Version | PostgreSQL 18.6 on aarch64-apple-darwin25.6.0 |
 | Test DB | `taiwan_stock_test` (Unix socket, NOT Production Neon, SSL=None) |
 | Scenarios | 29 / 32 assertion checks PASS |
-| Commit tested | 91e8d7b (code-identical to HEAD) |
+| Commit tested | 91e8d7b (trade lifecycle code unchanged in d27e1b2) |
 | Test script | scratchpad: `pg_integration_test.py` |
 
 Scenarios covered: Fresh migration, repeated migration (idempotent), schema drift detection, FK×2, partial unique index (`uix_te_idempotency_key`), dry-run, DDL rollback, DDL audit (committed=1 rolled_back=0), schema validation (9 checkpoints), FK enforcement, pipeline no-DDL, full ACTUAL trade lifecycle, idempotency conflict, oversell atomicity, 2-connection concurrent race.
+
+> Trade lifecycle code (trade_service, database, migration) is unchanged in d27e1b2 — PG integration results carry over.
 
 ### B.5 Browser E2E Evidence
 
@@ -125,7 +129,10 @@ Scenarios covered: Fresh migration, repeated migration (idempotent), schema drif
 | Flow | BUY → 加碼 → 部分賣出 → 全部賣出 → 歷史紀錄 |
 | Result | **18/18 PASS** |
 | Screenshots | 17 Playwright screenshots captured |
-| Commit tested | 91e8d7b (code-identical to HEAD) |
+| Commit tested | 91e8d7b (UI toast assertions check DB state, not toast text — d27e1b2 toast change is compatible) |
+
+> E2E assertions verify DB state (realized_pnl values, status=closed) not toast text. The toast label change
+> in d27e1b2 (gross→net, label change) does not affect E2E assertion criteria.
 
 ---
 
@@ -188,19 +195,23 @@ After SELL (1000@115, fee+tax=442):
 
 **All P&L figures verified correct. No RELEASE BLOCKER.**
 
-### C.4 Single-trade vs Cumulative P&L — Important Distinction
+### C.4 Single-trade vs Cumulative P&L — UI Fix Applied (d27e1b2)
 
-| View | Value | Where shown |
-|------|-------|-------------|
-| Single-trade P&L (partial sell) | 3,880.33 | DB `realized_pnl` after step 3 |
-| Single-trade P&L (full sell only) | 12,746.67 | — not directly displayed in DB |
-| **Cumulative P&L (all sells)** | **16,627.00** | DB `actual_positions.realized_pnl` |
-| UI success message (全部賣出) | ≈ 13,189 | `st.success()` toast only |
+| View | Value | Where shown | Before fix | After fix (d27e1b2) |
+|------|-------|-------------|-----------|---------------------|
+| Partial sell incremental net | 3,880.33 | 部分賣出 toast | ❌ Not shown | ✅ "本次已實現淨損益 +3,880" |
+| Full sell this-trade net | 12,746.67 | — | ❌ n/a | ✅ Included in cumulative |
+| **Cumulative net P&L** | **16,627.00** | 全部賣出 toast | ❌ 13,189 (gross, no fee) | ✅ "累計已實現淨損益 +16,627" |
+| DB `actual_positions.realized_pnl` | 16,627.00 | Position summary metric | ✅ Already correct | ✅ Unchanged |
 
-**Known UI display issue (non-blocking):**  
-`_render_full_sell_form()` success toast shows `(exec_price - avg_cost) × remaining = 13,188.70` — this is a gross estimate that does NOT deduct sell fees/tax (442). The database value (`realized_pnl`) correctly deducts all fees. The discrepancy is display-only; no accounting error exists in stored data.
+**UI display issue — FIXED in d27e1b2:**
 
-Recommendation: Future enhancement — update success toast to fetch actual `realized_pnl` from DB post-commit, or clearly label it "預估損益（未扣費）".
+| Handler | Before | After |
+|---------|--------|-------|
+| `_render_full_sell_form()` | `(exec_price - avg_cost) × remaining` = 13,188.70 (gross, no fee) | `pos.realized_pnl` from DB post-commit = **16,627.00** (cumulative net) |
+| `_render_partial_sell_form()` | ❌ No P&L shown | `pos.realized_pnl - prev_realized` from DB = **3,880.33** (incremental net) |
+
+Both handlers now read `realized_pnl` from the ORM object after `s.commit()`, using Trade Service's `_recalculate_position()` result. No separate UI formula.
 
 ### C.5 Rounding Rules
 
@@ -283,36 +294,39 @@ If the repository is **private + GitHub Free plan**, the environment protection 
 
 | Gate | Requirement | Result | Evidence |
 |------|-------------|--------|----------|
-| Release Integrity | Acceptance commit = deployment version | ✅ PASS | HEAD 9b8203d is code-identical to 91e8d7b; zero .py/.yml changes |
-| PostgreSQL Integration | Real PG tests PASS | ✅ PASS | 29 scenarios / 32 assertions, embedded PG 18.6 |
-| Browser E2E | 18/18 PASS | ✅ PASS | Playwright + Streamlit + embedded PG 18.6 |
-| Full Regression | 1192 tests PASS | ✅ PASS | Re-run on HEAD: 1192/1192 |
-| Coverage | ≥ 75% | ✅ PASS | 83.00% (re-measured on HEAD) |
-| CI | Latest RC PASS | ✅ PASS | Run 41776383669 for 91e8d7b; docs-only commits after |
-| Trade P&L | Independent recalculation matches | ✅ PASS | All 6 metrics correct; UI toast discrepancy is non-blocking display issue |
+| UI P&L | 單筆與累計淨損益正確顯示 | ✅ PASS | d27e1b2: gross→net fix; 15 new tests PASS; DB values confirmed correct |
+| Release Integrity | RC SHA verified, code frozen | ✅ PASS | d27e1b2 is RC; trade_service/models/migration unchanged from 91e8d7b |
+| PostgreSQL Integration | Real PG tests PASS | ✅ PASS | 29 scenarios / 32 assertions, embedded PG 18.6 (trade code unchanged) |
+| Browser E2E | 18/18 PASS | ✅ PASS | Playwright + Streamlit + embedded PG 18.6 (DB assertions unaffected by toast fix) |
+| Full Regression | 1207 tests PASS | ✅ PASS | Re-run on d27e1b2: 1207/1207 |
+| Coverage | ≥ 75% | ✅ PASS | 83.00% on d27e1b2 |
+| GitHub CI | Latest RC CI PASS | NOT VERIFIED | d27e1b2 pushed to origin; CI run triggered, pending human check at Actions tab |
+| Trade P&L | Independent recalculation matches | ✅ PASS | WAC=101.8113, partial=3,880.33, cumulative=16,627.00; all correct; UI now matches |
 | Migration Safety | Dry-run / Preflight / Drift | ✅ PASS | All 6 migrations verified on embedded PG; script SHA fingerprinted |
-| Backup | Backup & restore procedure documented | BLOCKED | Neon backup capability not verified; procedure documented in Runbook but not tested |
-| GitHub Approval | Human approval gate confirmed effective | NOT VERIFIED | API confirmation from prior session; cannot re-verify this session; depends on repo plan |
-| Production Permissions | Minimal privilege principle | PASS | `NEON_URL` secret only used in `production` job after approval; not in CI |
-| Recovery | Executable recovery procedure exists | PASS | Documented in `phase1b_production_migration_runbook.md` |
+| Backup | Pre-migration backup | BLOCKED | Neon backup documented in Runbook §2 but NOT yet executed — human action required |
+| GitHub Approval | Required Reviewer enforcement | NOT VERIFIED | YAML gate present; prior session API confirmed env; plan-dependency unknown without browser login |
+| Production Permissions | Minimal privilege | ✅ PASS | `NEON_URL` only in production job post-approval; not in CI; concurrency locked |
+| Recovery | Executable runbook | ✅ PASS | `docs/phase1b_production_migration_runbook.md` §7 rollback decision tree documented |
 
 ---
 
 ## G. Known Limitations & Remaining Requirements
 
-### Before Executing Production Migration
+### Before Executing Production Migration (Human Actions Required)
 
-1. **Human must verify GitHub Required Reviewer enforcement** — Log in to github.com and confirm the approval gate is functional for this plan/visibility combination.
+1. **Verify GitHub CI for d27e1b2** — Go to github.com/alicetu0712/taiwan-stock-ai/actions and confirm the CI run for `d27e1b2` passes (lint + test). Expected: same as 91e8d7b since only `dashboard/` and `tests/` changed.
 
-2. **Human must verify Neon backup** — Take a manual snapshot of the Production Neon database before triggering migration (see Runbook §2).
+2. **Verify GitHub Required Reviewer enforcement** — Log in to github.com → Settings → Environments → `production`. Confirm "Required reviewers" rule is enforced (not silently bypassed due to plan restrictions).
 
-3. **Human must trigger the workflow with explicit confirm token** — `confirm = "MIGRATE_PRODUCTION"` required.
+3. **Take Neon Production backup** — In Neon Console, create snapshot labeled `phase1b-premigration-YYYYMMDD` before triggering any migration.
 
-4. **Pre-flight dry-run is built into the workflow** — The `production` job runs `--dry-run` automatically before the real migration step.
+4. **Trigger migration with confirm token** — Use `confirm = "MIGRATE_PRODUCTION"` in workflow_dispatch inputs.
+
+### Resolved Issues (were blocking, now fixed)
+
+5. ~~**UI success toast P&L is a gross estimate**~~ — **FIXED in d27e1b2.** Both partial and full sell toasts now show net P&L from DB. See §C.4.
 
 ### Non-blocking Known Issues
-
-5. **UI success toast P&L is a gross estimate** — `_render_full_sell_form()` shows `(price - avg_cost) × shares` without fee deduction. Database is correct; this is a display-only issue.
 
 6. **`scripts/` lint issues** — Pre-existing, out of CI scope, not Phase 1B code.
 
@@ -324,10 +338,12 @@ If the repository is **private + GitHub Free plan**, the environment protection 
 
 ## ✅ DEPLOYMENT PREPARED
 
+**Release Candidate: `d27e1b2`**  
 **All technically verifiable gates PASS.**  
-**Two items require human action before triggering migration:**
+**Three items require human action before triggering migration:**
 
-1. Verify GitHub Required Reviewer gate is active (browser login)
-2. Take Production Neon database backup (Neon Console → Branch → Create snapshot)
+1. Verify CI passes for d27e1b2 (Actions tab on GitHub)
+2. Verify GitHub Required Reviewer gate is active (browser login to Environments settings)
+3. Take Production Neon database backup (Neon Console → Branch → Create snapshot)
 
 **Production Migration remains NOT EXECUTED — awaiting explicit operator trigger.**
