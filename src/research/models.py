@@ -26,6 +26,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class ResearchBase(DeclarativeBase):
     """Separate base — deliberately isolated from production Base."""
+
     pass
 
 
@@ -39,9 +40,7 @@ class V2ShadowSignal(ResearchBase):
 
     __tablename__ = "v2_shadow_signals"
     __table_args__ = (
-        UniqueConstraint(
-            "trade_date", "stock_id", name="uq_v2ss_date_stock"
-        ),
+        UniqueConstraint("trade_date", "stock_id", name="uq_v2ss_date_stock"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -82,9 +81,7 @@ class V2ShadowOutcome(ResearchBase):
 
     __tablename__ = "v2_shadow_outcomes"
     __table_args__ = (
-        UniqueConstraint(
-            "trade_date", "stock_id", name="uq_v2so_date_stock"
-        ),
+        UniqueConstraint("trade_date", "stock_id", name="uq_v2so_date_stock"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -94,12 +91,16 @@ class V2ShadowOutcome(ResearchBase):
     # What actually happened
     fwd_return_20d: Mapped[Optional[float]] = mapped_column(Float)
     fwd_return_60d: Mapped[Optional[float]] = mapped_column(Float)
-    max_drawdown_pct: Mapped[Optional[float]] = mapped_column(Float)   # max adverse excursion
+    max_drawdown_pct: Mapped[Optional[float]] = mapped_column(
+        Float
+    )  # max adverse excursion
     stop_hit: Mapped[Optional[bool]] = mapped_column(Boolean)
     target_hit: Mapped[Optional[bool]] = mapped_column(Boolean)
 
     # Comparison context
-    v1_fwd_return_20d: Mapped[Optional[float]] = mapped_column(Float)   # from ForwardSignal
+    v1_fwd_return_20d: Mapped[Optional[float]] = mapped_column(
+        Float
+    )  # from ForwardSignal
     v1_fwd_return_60d: Mapped[Optional[float]] = mapped_column(Float)
 
     filled_at: Mapped[datetime] = mapped_column(

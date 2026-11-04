@@ -27,13 +27,12 @@ from src.analyzers.entry_timing import (
     NO_VALID_SETUP,
     RISK_REWARD_UNFAVORABLE,
     TOO_EXTENDED,
+    TOO_EXTENDED_MA20_GAP,
     WAIT_FOR_BREAKOUT,
     WAIT_FOR_PULLBACK,
     EntryTimingAnalyzer,
     EntryTimingResult,
-    TOO_EXTENDED_MA20_GAP,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -113,7 +112,9 @@ class TestNoLookaheadBias:
     def test_prior_20d_high_excludes_today(self):
         # all prior highs = 100, today high = 200
         a = EntryTimingAnalyzer()
-        hist = _make_history(n=60, base_close=100.0, today_close=200.0, today_high=200.0)
+        hist = _make_history(
+            n=60, base_close=100.0, today_close=200.0, today_high=200.0
+        )
         r = a.analyze("0050", hist)
         # prior_20d_high should still be 100, not 200
         assert r.prior_20d_high is not None
@@ -250,7 +251,9 @@ class TestRRComputation:
     def test_stop_set_below_ma20(self):
         # Stop is MA20 * (1 - STOP_BUFFER) — 3% below MA20
         a = EntryTimingAnalyzer()
-        hist = _make_history(n=60, base_close=100.0, today_close=102.0, vol_today=2_000_000.0)
+        hist = _make_history(
+            n=60, base_close=100.0, today_close=102.0, vol_today=2_000_000.0
+        )
         r = a.analyze("0050", hist)
         assert r.stop_price is not None
         assert r.stop_price < r.ma20  # stop is below MA20
@@ -281,10 +284,15 @@ class TestLabelDecisions:
         high_arr = [112.0] * (n - 1) + [106.0]
         low_arr = [c * 0.98 for c in close_arr]
         vol_arr = [1_000_000.0] * n
-        hist = pd.DataFrame({
-            "date": dates, "close": close_arr, "high": high_arr,
-            "low": low_arr, "volume": vol_arr,
-        })
+        hist = pd.DataFrame(
+            {
+                "date": dates,
+                "close": close_arr,
+                "high": high_arr,
+                "low": low_arr,
+                "volume": vol_arr,
+            }
+        )
         r = a.analyze("0050", hist)
         assert r.resistance_broken is False
         assert r.entry_label == WAIT_FOR_PULLBACK
@@ -320,13 +328,15 @@ class TestLabelDecisions:
         # stop = 97, risk = 3, target = 103.1, reward = 3.1, R/R ≈ 1.03 < 2 → unfavorable
         # prior_high = 103 → dist = 3% (at boundary, > 3% needed for not near-resistance)
         high_arr3 = [103.1] * (n - 1) + [100.0]  # prior highs = 103.1
-        df3 = pd.DataFrame({
-            "date": dates,
-            "close": close_arr,
-            "high": high_arr3,
-            "low": [c * 0.98 for c in close_arr],
-            "volume": [1_000_000.0] * n,
-        })
+        df3 = pd.DataFrame(
+            {
+                "date": dates,
+                "close": close_arr,
+                "high": high_arr3,
+                "low": [c * 0.98 for c in close_arr],
+                "volume": [1_000_000.0] * n,
+            }
+        )
         r3 = a.analyze("0050", df3)
         # prior_20d_high = 103.1, today = 100, dist = 3.1% (not "near"), MA20 = 100
         # stop = 97, risk = 3, target = 103.1, reward = 3.1, R/R = 1.03 < 2 → RISK_REWARD_UNFAVORABLE
@@ -345,7 +355,9 @@ class TestResultFields:
 
     def test_reasons_list_populated(self):
         a = EntryTimingAnalyzer()
-        hist = _make_history(n=60, base_close=100.0, today_close=102.0, vol_today=2_000_000.0)
+        hist = _make_history(
+            n=60, base_close=100.0, today_close=102.0, vol_today=2_000_000.0
+        )
         r = a.analyze("2330", hist)
         assert isinstance(r.reasons, list)
         assert len(r.reasons) >= 1

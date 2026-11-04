@@ -49,7 +49,7 @@ ALL_LABELS = [
 # Minimum R/R to consider a pullback entry acceptable
 MIN_RR_RATIO = 2.0
 # MA20 pullback zone: price within X% above MA20
-MA20_PULLBACK_UPPER = 0.03   # +3% above MA20
+MA20_PULLBACK_UPPER = 0.03  # +3% above MA20
 MA20_PULLBACK_LOWER = -0.05  # -5% below MA20 (still viable if holding)
 # Stop is placed 3% below MA20 (buffer)
 STOP_BUFFER = 0.03
@@ -65,26 +65,28 @@ class EntryTimingResult:
     entry_label: str = INSUFFICIENT_DATA
 
     # ── Resistance state ──────────────────────────────────────────────────
-    prior_20d_high: Optional[float] = None        # max(high[-21:-1]) — no look-ahead
-    dist_to_resistance_pct: Optional[float] = None  # (prior_20d_high - close) / close * 100 (positive = below)
-    resistance_broken: bool = False               # close > prior_20d_high
+    prior_20d_high: Optional[float] = None  # max(high[-21:-1]) — no look-ahead
+    dist_to_resistance_pct: Optional[float] = (
+        None  # (prior_20d_high - close) / close * 100 (positive = below)
+    )
+    resistance_broken: bool = False  # close > prior_20d_high
 
     # ── MA20 pullback state ───────────────────────────────────────────────
     ma20: Optional[float] = None
-    ma20_gap_pct: Optional[float] = None          # (close - ma20) / ma20 * 100
+    ma20_gap_pct: Optional[float] = None  # (close - ma20) / ma20 * 100
     in_ma20_pullback_zone: bool = False
 
     # ── Breakout confirmation ─────────────────────────────────────────────
-    breakout_volume_confirmed: bool = False       # resistance broken AND vol_ratio >= 1.0
+    breakout_volume_confirmed: bool = False  # resistance broken AND vol_ratio >= 1.0
     vol_ratio: Optional[float] = None
 
     # ── R/R computation ───────────────────────────────────────────────────
-    entry_price: Optional[float] = None           # today's close (proxy for next-open entry)
-    stop_price: Optional[float] = None            # MA20 (or MA60 fallback)
-    target_price: Optional[float] = None          # prior_20d_high + (prior_20d_high - stop)
-    risk: Optional[float] = None                  # entry - stop
-    reward: Optional[float] = None                # target - entry
-    rr_ratio: Optional[float] = None              # reward / risk
+    entry_price: Optional[float] = None  # today's close (proxy for next-open entry)
+    stop_price: Optional[float] = None  # MA20 (or MA60 fallback)
+    target_price: Optional[float] = None  # prior_20d_high + (prior_20d_high - stop)
+    risk: Optional[float] = None  # entry - stop
+    reward: Optional[float] = None  # target - entry
+    rr_ratio: Optional[float] = None  # reward / risk
 
     # ── Diagnostics ───────────────────────────────────────────────────────
     reasons: List[str] = field(default_factory=list)
@@ -144,7 +146,10 @@ class EntryTimingAnalyzer:
             result.in_ma20_pullback_zone = False
 
         # Too extended check (before anything else)
-        if result.ma20_gap_pct is not None and result.ma20_gap_pct >= TOO_EXTENDED_MA20_GAP:
+        if (
+            result.ma20_gap_pct is not None
+            and result.ma20_gap_pct >= TOO_EXTENDED_MA20_GAP
+        ):
             result.entry_label = TOO_EXTENDED
             result.reasons.append(
                 f"MA20 乖離 {result.ma20_gap_pct:.1f}% ≥ {TOO_EXTENDED_MA20_GAP}%，追高風險"
@@ -153,11 +158,12 @@ class EntryTimingAnalyzer:
 
         # ── Step 3: Breakout Confirmation ─────────────────────────────────
         vol_ma = float(np.mean(volume[-20:])) if n >= 20 else None
-        vol_ratio = round(float(volume[-1]) / vol_ma, 2) if (vol_ma and vol_ma > 0) else None
+        vol_ratio = (
+            round(float(volume[-1]) / vol_ma, 2) if (vol_ma and vol_ma > 0) else None
+        )
         result.vol_ratio = vol_ratio
-        result.breakout_volume_confirmed = (
-            result.resistance_broken
-            and (vol_ratio is not None and vol_ratio >= 1.0)
+        result.breakout_volume_confirmed = result.resistance_broken and (
+            vol_ratio is not None and vol_ratio >= 1.0
         )
 
         # ── Step 4: R/R Computation ───────────────────────────────────────
@@ -199,9 +205,7 @@ class EntryTimingAnalyzer:
 
         # 2. Resistance broken but no volume confirmation → wait
         if r.resistance_broken and not r.breakout_volume_confirmed:
-            r.reasons.append(
-                f"突破前20日高點但量比={r.vol_ratio}（< 1.0），等放量確認"
-            )
+            r.reasons.append(f"突破前20日高點但量比={r.vol_ratio}（< 1.0），等放量確認")
             return WAIT_FOR_BREAKOUT
 
         # 3. Near resistance (within 3%) without breakout — check before pullback zone
@@ -220,9 +224,7 @@ class EntryTimingAnalyzer:
                 )
                 return ENTRY_READY
             elif r.rr_ratio is not None:
-                r.reasons.append(
-                    f"MA20 拉回帶但 R/R={r.rr_ratio:.1f} < {MIN_RR_RATIO}"
-                )
+                r.reasons.append(f"MA20 拉回帶但 R/R={r.rr_ratio:.1f} < {MIN_RR_RATIO}")
                 return RISK_REWARD_UNFAVORABLE
             else:
                 r.reasons.append("MA20 拉回帶，但 R/R 無法計算")

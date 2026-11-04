@@ -113,7 +113,9 @@ def page_entry_timing_research() -> None:
 def _render_signal_list() -> None:
     rows = _load_v2_signals()
     if not rows:
-        st.info("尚無 V2 Shadow Signal 資料。請執行 EntryTimingResearchService.run_for_date() 產生資料。")
+        st.info(
+            "尚無 V2 Shadow Signal 資料。請執行 EntryTimingResearchService.run_for_date() 產生資料。"
+        )
         return
 
     # Summary counts by label
@@ -121,9 +123,7 @@ def _render_signal_list() -> None:
 
     label_counts = Counter(r["entry_label"] for r in rows)
     cols = st.columns(min(len(label_counts), 4))
-    for i, (label, cnt) in enumerate(
-        sorted(label_counts.items(), key=lambda x: -x[1])
-    ):
+    for i, (label, cnt) in enumerate(sorted(label_counts.items(), key=lambda x: -x[1])):
         if i >= 4:
             break
         color = _LABEL_COLORS.get(label, "#6b7280")
@@ -151,7 +151,16 @@ def _render_signal_list() -> None:
 
     # Format display
     df_display = df[
-        ["trade_date", "stock_id", "v1_label", "entry_label", "dist_pct", "ma20_gap", "rr_ratio", "vol_ratio"]
+        [
+            "trade_date",
+            "stock_id",
+            "v1_label",
+            "entry_label",
+            "dist_pct",
+            "ma20_gap",
+            "rr_ratio",
+            "vol_ratio",
+        ]
     ].rename(
         columns={
             "trade_date": "日期",
@@ -208,7 +217,16 @@ def _render_comparison() -> None:
         import pandas as pd
 
         df = pd.DataFrame(rows)
-        df_show = df[["trade_date", "stock_id", "v1_label", "v2_label", "fwd_return_20d", "rr_ratio"]].rename(
+        df_show = df[
+            [
+                "trade_date",
+                "stock_id",
+                "v1_label",
+                "v2_label",
+                "fwd_return_20d",
+                "rr_ratio",
+            ]
+        ].rename(
             columns={
                 "trade_date": "日期",
                 "stock_id": "股票",

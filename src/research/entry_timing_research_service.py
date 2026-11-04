@@ -64,9 +64,7 @@ class EntryTimingResearchService:
                 history = self._load_history(session, fs.stock_id, trade_date)
                 if history is None or len(history) < 21:
                     errors += 1
-                    logger.debug(
-                        f"{fs.stock_id} @{trade_date}: 歷史資料不足，跳過"
-                    )
+                    logger.debug(f"{fs.stock_id} @{trade_date}: 歷史資料不足，跳過")
                     continue
 
                 result = analyzer.analyze(fs.stock_id, history)
@@ -88,7 +86,9 @@ class EntryTimingResearchService:
                         target_price=result.target_price,
                         entry_price=result.entry_price,
                         data_bars=result.data_bars,
-                        reasons_json=json.dumps(result.reasons, ensure_ascii=False)[:500],
+                        reasons_json=json.dumps(result.reasons, ensure_ascii=False)[
+                            :500
+                        ],
                     )
                     try:
                         session.add(shadow)

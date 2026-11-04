@@ -335,8 +335,9 @@ class TestCaseD_ConcurrentSubmission:
         Session = sessionmaker(bind=engine)
 
         # Re-create the position in this engine
-        from src.database import ActualPosition, ForwardSignal, TradeExecution
         from decimal import Decimal
+
+        from src.database import ActualPosition, ForwardSignal, TradeExecution
 
         with Session() as s:
             fs = ForwardSignal(
