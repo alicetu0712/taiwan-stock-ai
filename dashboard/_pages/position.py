@@ -447,6 +447,7 @@ def _render_partial_sell_form(pos_id: int, sid: str, name: str, remaining: int) 
             try:
                 s = get_session()
                 from src.database import ActualPosition as _AP
+
                 _pos = s.query(_AP).filter_by(id=pos_id).first()
                 _prev_realized = float(_pos.realized_pnl) if _pos else 0.0
                 svc.add_execution(
@@ -520,6 +521,7 @@ def _render_full_sell_form(
                 )
                 s.commit()
                 from src.database import ActualPosition as _AP
+
                 _pos = s.query(_AP).filter_by(id=pos_id).first()
                 _cum_pnl = float(_pos.realized_pnl) if _pos else None
                 s.close()

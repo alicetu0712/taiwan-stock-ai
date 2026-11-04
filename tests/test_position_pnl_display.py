@@ -28,14 +28,13 @@ from decimal import Decimal
 
 import pytest
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _make_session():
     from sqlalchemy import create_engine
 
-    from src.database import init_db, get_session
+    from src.database import get_session, init_db
 
     engine = create_engine("sqlite:///:memory:")
     init_db(engine)
@@ -311,9 +310,7 @@ class TestT08IdempotentSell:
         _sell(session, pos.id, 110, 500, fee=0, key=key)  # duplicate
         pnl_after_second = _realized(pos)
 
-        assert pnl_after_first == pnl_after_second, (
-            "重複提交不應改變 realized_pnl"
-        )
+        assert pnl_after_first == pnl_after_second, "重複提交不應改變 realized_pnl"
         assert pos.remaining_shares == 500, "重複提交不應多扣股數"
         session.rollback()
 
