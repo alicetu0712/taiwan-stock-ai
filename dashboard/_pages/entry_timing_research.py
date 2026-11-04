@@ -206,7 +206,12 @@ def page_entry_timing_research() -> None:
         else:
             st.success("v2_research_v2：最新版本（post-DESC fix），is_legacy=False。")
 
-    tab1, tab2, tab3 = st.tabs(["📋 訊號列表", "📊 完整回測（FOS）", "⚠️ 已知限制"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📋 訊號列表",
+        "📊 完整回測（FOS）",
+        "🔬 有效性分析",
+        "⚠️ 已知限制",
+    ])
 
     with tab1:
         _render_signal_list(research_version)
@@ -215,6 +220,9 @@ def page_entry_timing_research() -> None:
         _render_full_backtest(research_version)
 
     with tab3:
+        _render_effectiveness_analysis()
+
+    with tab4:
         _render_known_limitations()
 
 
@@ -520,6 +528,342 @@ def _render_full_backtest(research_version: str) -> None:
     with st.expander("回測假設 (SA)"):
         for note in result.get("notes", []):
             st.caption(f"• {note}")
+
+
+def _load_effectiveness_json() -> dict:
+    import json
+    import os
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "data", "effectiveness_analysis.json",
+    )
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _verdict_color(verdict: str) -> str:
+    return {
+        "VALIDATED": "#16a34a",
+        "CONDITIONAL": "#ca8a04",
+        "NOT SUPPORTED": "#dc2626",
+        "INSUFFICIENT DATA": "#6b7280",
+    }.get(verdict, "#6b7280")
+
+
+def _render_group_table(groups: dict) -> None:
+    """Render a group-performance dict as a colour-coded table."""
+    import pandas as pd
+    rows = []
+    for label, s in groups.items():
+        n = s.get("n", 0)
+        delta = s.get("paired_delta_mean")
+        ci = s.get("paired_delta_ci95")
+        rows.append({
+            "分組": label,
+            "N": n,
+            "V1 均值": _fmt_pct(s.get("v1_mean")),
+            "V2 FOS 均值": _fmt_pct(s.get("v2_mean")),
+            "配對 Delta": _fmt_pct(delta),
+            "95% CI": (
+                f"[{_fmt_pct(ci['lo'])}, {_fmt_pct(ci['hi'])}]" if ci else "—"
+            ),
+            "成交率": f"{s.get('fill_rate_pct'):.1f}%" if s.get("fill_rate_pct") else "—",
+            "樣本": "⚠️ 不足" if s.get("insufficient_sample") else "OK",
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _render_effectiveness_analysis() -> None:
+    st.markdown("### V2 有效性分析（Effectiveness Analysis）")
+    st.caption(
+        "RESEARCH ONLY — 此分析基於 EntryTimingAnalyzer 生成的研究訊號，"
+        "非正式 ForwardSignal pipeline。"
+    )
+
+    data = _load_effectiveness_json()
+    if not data:
+        st.info(
+            "尚無有效性分析資料。請執行：\n\n"
+            "```bash\npython3 scripts/run_effectiveness_analysis.py\n```"
+        )
+        return
+
+    generated = data.get("generated_at", "未知")
+    cfg = data.get("config", {})
+    st.caption(
+        f"分析生成日期：{generated}  ·  "
+        f"研究期間：{cfg.get('signal_start')} to {cfg.get('signal_end')}  ·  "
+        f"股票：{cfg.get('sample_stocks')}  ·  去重視窗：{cfg.get('dedup_window')}d"
+    )
+
+    summary = data.get("summary", {})
+    verdict = summary.get("verdict", "—")
+    verdict_color = _verdict_color(verdict)
+
+    # Overall verdict banner
+    st.markdown(
+        f'<div style="background:{verdict_color}20;border:2px solid {verdict_color};'
+        f'border-radius:6px;padding:10px 16px;margin-bottom:12px">'
+        f'<span style="font-weight:700;font-size:0.9rem;color:{verdict_color}">'
+        f"最終評級：{verdict}</span><br>"
+        f'<span style="color:#374151;font-size:0.78rem">'
+        "RESEARCH ONLY — 此評級不代表正式買賣建議"
+        "</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    # Header metrics
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric("有效配對訊號", summary.get("overall_n", "—"))
+    with m2:
+        fill = summary.get("overall_fill_rate")
+        st.metric("整體成交率", f"{fill:.1f}%" if fill else "—")
+    with m3:
+        delta = summary.get("overall_paired_delta")
+        color = "normal" if (delta or 0) >= 0 else "inverse"
+        st.metric("整體 Paired Delta（V2-V1）", _fmt_pct(delta), delta=_fmt_pct(delta), delta_color=color,
+                  help="V2 FOS 相較 V1 OHLC 平均每訊號多賺/少賺")
+    with m4:
+        oos = summary.get("oos_paired_delta")
+        oos_color = "normal" if (oos or 0) >= 0 else "inverse"
+        st.metric("OOS Delta", _fmt_pct(oos), delta=_fmt_pct(oos), delta_color=oos_color,
+                  help="樣本外 (OOS) 2026-07 to 2026-09 的 Paired Delta")
+    with m5:
+        st.metric("OOS 通過", summary.get("oos_pass_fail", "—"),
+                  help="PASS = delta ≥ -1pp；FAIL = delta < -1pp")
+
+    st.markdown("---")
+
+    # Tabs for each analysis section
+    ea_tabs = st.tabs([
+        "📋 資料稽核", "🔍 MA20 稽核", "📊 分組分析",
+        "⏱ Walk-forward", "🔧 敏感度"
+    ])
+
+    # ── Tab 1: Data Integrity Audit ───────────────────────────────────────────
+    with ea_tabs[0]:
+        st.markdown("#### 資料完整性稽核")
+        st.caption(
+            "**去重規則（28-day dedup）**：同一股票在 28 曆日內重複出現的訊號，"
+            "保留最早一筆，餘者排除。主要結論採用「去重後＋已成熟＋有效配對」資料集。"
+        )
+        audit = data.get("data_integrity_audit", {})
+        a1, a2, a3, a4 = st.columns(4)
+        with a1:
+            st.metric("原始訊號（Raw）", audit.get("raw_count", "—"))
+        with a2:
+            st.metric("去重後（Dedup）", audit.get("dedup_count", "—"))
+        with a3:
+            st.metric("已成熟", audit.get("matured_count", "—"))
+        with a4:
+            st.metric("有效配對（主要分析）", audit.get("valid_paired_count", "—"))
+
+        col_l, col_r = st.columns(2)
+        with col_l:
+            st.caption(f"獨立股票數：{audit.get('unique_stocks')} | "
+                       f"獨立交易日：{audit.get('unique_dates')}")
+            st.caption(f"去重移除：{audit.get('dedup_removed')} | "
+                       f"未成熟（無足夠後續資料）：{audit.get('missing_maturity_count')}")
+            if audit.get("concentration_warning"):
+                st.warning("⚠️ 集中度警告：單一股票超過 15% 的去重成熟訊號")
+            else:
+                st.success("✅ 無集中度警告（單一股票 ≤ 15%）")
+
+        with col_r:
+            label_dist = audit.get("entry_label_dist", {})
+            if label_dist:
+                import pandas as pd
+                df_dist = pd.DataFrame(
+                    [{"進場標籤": k, "數量": v} for k, v in label_dist.items()]
+                )
+                st.dataframe(df_dist, use_container_width=True, hide_index=True)
+
+        monthly = audit.get("monthly_dist", {})
+        if monthly:
+            import pandas as pd
+            df_monthly = pd.DataFrame([{"月份": k, "訊號數": v} for k, v in monthly.items()])
+            st.markdown("**月份分布（去重成熟）**")
+            st.bar_chart(df_monthly.set_index("月份"))
+
+        regime_dist = audit.get("regime_dist", {})
+        if regime_dist:
+            st.caption(
+                "市場狀態分布：" + "  |  ".join(f"{k}: {v}" for k, v in regime_dist.items())
+            )
+
+    # ── Tab 2: MA20 Audit ─────────────────────────────────────────────────────
+    with ea_tabs[1]:
+        st.markdown("#### MA20 / Planned Entry 稽核")
+        st.caption(
+            "**SA-1 fix 驗證**：WAIT_FOR_PULLBACK 的 planned_entry = stop/(1-0.03) = MA20 估計值。"
+            "此稽核確認 stop-derived MA20 與 EntryTimingAnalyzer 實際計算的 MA20 誤差。"
+        )
+        ma = data.get("ma20_audit", {})
+        assessment = ma.get("assessment", "—")
+        ma_color = "#16a34a" if assessment == "ACCURATE" else "#ca8a04" if assessment == "MINOR_DEVIATION" else "#dc2626"
+        st.markdown(
+            f'<span style="background:{ma_color}20;border:1px solid {ma_color};'
+            f'padding:4px 12px;border-radius:4px;font-weight:600;color:{ma_color}">'
+            f"評估：{assessment}</span>",
+            unsafe_allow_html=True,
+        )
+        ma1, ma2, ma3, ma4 = st.columns(4)
+        with ma1:
+            st.metric("稽核訊號數", ma.get("n_audited", "—"))
+        with ma2:
+            st.metric("1% 以內比例", f"{ma.get('pct_within_1pct')}%" if ma.get("pct_within_1pct") is not None else "—")
+        with ma3:
+            st.metric("平均絕對誤差", _fmt_float(ma.get("ma20_vs_derived_mean_abs_diff"), 4))
+        with ma4:
+            st.metric("WAIT_PULLBACK 筆數", ma.get("wait_pullback_n", "—"))
+
+        wp_diff = ma.get("wait_pullback_entry_vs_ma20_mean_diff_pct")
+        if wp_diff is not None:
+            st.caption(
+                f"WAIT_FOR_PULLBACK：planned_entry vs 實際 MA20 均差 = {wp_diff:.4f}%"
+                "（接近 0 表示 SA-1 公式正確）"
+            )
+        for note in ma.get("notes", []):
+            st.caption(f"• {note}")
+
+    # ── Tab 3: Group Analysis ─────────────────────────────────────────────────
+    with ea_tabs[2]:
+        st.markdown("#### 分組績效分析（Part B）")
+        st.warning(data.get("group_analysis", {}).get("multiple_testing_note", ""))
+        st.caption(
+            "⚠️ 分組後最好的結果不代表有效策略。"
+            "樣本數不足的分組（標記為「⚠️ 不足」）僅供假設生成，不可用於決策。"
+        )
+
+        ga = data.get("group_analysis", {})
+        g_tabs = st.tabs([
+            "進場類型", "MA20 趨勢", "MA60 趨勢", "MA20 Gap", "市場狀態", "整體"
+        ])
+
+        with g_tabs[0]:
+            st.caption(
+                "**進場類型（Entry Setup）**：ENTRY_READY = V2 與 V1 相同立即進場；"
+                "WAIT_FOR_PULLBACK/BREAKOUT = 等待觸發條件。"
+                "ENTRY_READY 的 delta 應接近 0（相同進場條件）。"
+            )
+            _render_group_table(ga.get("by_entry_label", {}))
+
+        with g_tabs[1]:
+            st.caption(
+                "**MA20 趨勢**：rising/flat/falling 依訊號當天前 10 個交易日的 MA20 斜率判定。"
+                "rising > +0.3% / falling < -0.3% / 其餘 flat。"
+            )
+            _render_group_table(ga.get("by_ma20_trend", {}))
+
+        with g_tabs[2]:
+            st.caption(
+                "**MA60 趨勢**：需 ≥70 bars 歷史才能計算。unknown = 歷史不足。"
+            )
+            _render_group_table(ga.get("by_ma60_trend", {}))
+
+        with g_tabs[3]:
+            st.caption(
+                "**MA20 Gap（% 距離）**：訊號當天收盤距 MA20 的百分比。"
+                "<0% = 收盤低於 MA20；>5% = 偏離過大。"
+            )
+            _render_group_table(ga.get("by_ma20_gap_bucket", {}))
+
+        with g_tabs[4]:
+            st.caption(
+                "**市場狀態（Market Regime）**：依 0050 MA20 斜率判定。"
+                "bull = 0050 > MA20 且 MA20 rising；"
+                "bear = 0050 < MA20 且 MA20 falling；neutral = 其餘。"
+            )
+            _render_group_table(ga.get("by_market_regime", {}))
+
+        with g_tabs[5]:
+            overall = ga.get("overall", {})
+            if overall:
+                _render_group_table({"整體": overall})
+
+    # ── Tab 4: Walk-forward ───────────────────────────────────────────────────
+    with ea_tabs[3]:
+        st.markdown("#### Walk-forward 時序驗證（Part C）")
+        st.caption(
+            "**Out-of-Sample（OOS）**：用沒有參與策略設計的歷史期間確認策略是否仍有效。"
+            "此處 OOS 為 2026-07-01 to 2026-09-15（最後 2.5 個月）。"
+            "W1–W9 為開發期間內的時序切分（无 parameter fitting，僅供時間一致性驗證）。"
+        )
+        wf = data.get("walk_forward", [])
+        if wf:
+            import pandas as pd
+            rows = []
+            for w in wf:
+                pf = w.get("pass_fail", "—")
+                is_oos = w.get("is_oos", False)
+                rows.append({
+                    "視窗": ("🔵 OOS: " if is_oos else "") + w.get("name", "—"),
+                    "測試期間": f"{w.get('test_start')} ～ {w.get('test_end')}",
+                    "N": w.get("n", 0),
+                    "Paired Delta": _fmt_pct(w.get("paired_delta_mean")),
+                    "95% CI": (
+                        f"[{_fmt_pct(w.get('paired_delta_ci95', {}).get('lo'))}, "
+                        f"{_fmt_pct(w.get('paired_delta_ci95', {}).get('hi'))}]"
+                        if w.get("paired_delta_ci95") else "—"
+                    ),
+                    "成交率": f"{w.get('fill_rate_pct'):.1f}%" if w.get("fill_rate_pct") else "—",
+                    "主要 Regime": w.get("dominant_regime", "—"),
+                    "通過/失敗": pf,
+                })
+            df_wf = pd.DataFrame(rows)
+            st.dataframe(df_wf, use_container_width=True, hide_index=True)
+
+            pass_count = sum(1 for w in wf if w.get("pass_fail") == "PASS")
+            total_count = sum(1 for w in wf if w.get("pass_fail") in ("PASS", "FAIL"))
+            st.caption(
+                f"通過率：{pass_count}/{total_count} 個視窗 PASS  "
+                f"（INSUFFICIENT_DATA 視窗不計）"
+            )
+
+    # ── Tab 5: Sensitivity ────────────────────────────────────────────────────
+    with ea_tabs[4]:
+        st.markdown("#### 敏感度分析（Sensitivity Matrix，Part D）")
+        st.caption(
+            "**Robustness（穩健性）**：交易條件稍微改變（等待天數、費率等），"
+            "策略結果是否仍維持類似表現。"
+            "FRAGILE = 與 base 偏差 > 0.5pp；ROBUST = 所有變體均穩定。"
+        )
+        sens = data.get("sensitivity_matrix", [])
+        if sens:
+            import pandas as pd
+            overall_row = next((r for r in sens if r["variant"] == "_overall"), None)
+            if overall_row:
+                robustness = overall_row.get("note", "—")
+                rob_color = "#16a34a" if "ROBUST" in robustness else "#dc2626"
+                st.markdown(
+                    f'<span style="background:{rob_color}20;border:1px solid {rob_color};'
+                    f'padding:4px 12px;border-radius:4px;font-weight:600;color:{rob_color}">'
+                    f"{robustness}</span>",
+                    unsafe_allow_html=True,
+                )
+
+            rows = []
+            for v in sens:
+                if v["variant"] == "_overall":
+                    continue
+                is_fragile = v.get("is_fragile", False)
+                rows.append({
+                    "變體": v["variant"],
+                    "說明": v.get("description", ""),
+                    "N": v.get("n", "—"),
+                    "Paired Delta": _fmt_pct(v.get("paired_delta_mean")),
+                    "V1 均值": _fmt_pct(v.get("v1_mean")),
+                    "V2 均值": _fmt_pct(v.get("v2_mean")),
+                    "成交率": f"{v.get('fill_rate_pct'):.1f}%" if v.get("fill_rate_pct") else "—",
+                    "穩健性": "🔴 FRAGILE" if is_fragile else "✅ OK",
+                })
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption("⚠️ 不得選擇表現最佳的參數版本作為正式設定。")
 
 
 def _render_known_limitations() -> None:
