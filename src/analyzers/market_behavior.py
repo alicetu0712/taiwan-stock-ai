@@ -269,12 +269,38 @@ class MarketBehaviorAnalyzer:
 def analyze_market_sentiment(
     all_prices: pd.DataFrame,
     trade_date,
+    index_change_pct: float = None,
 ) -> dict:
+    """分析大盤市場情緒（Bullish / Neutral / Bearish）。
+
+    Returns dict:
+      sentiment         : "Bullish" / "Neutral" / "Bearish"
+      up_count          : int or None — None when change_pct unavailable
+      down_count        : int or None
+      total_count       : int
+      up_ratio          : float or None
+      data_available    : bool — False when breadth data missing or all NaN
+      data_coverage_pct : float — % of stocks with non-null change_pct
+      sentiment_basis   : str — "breadth" / "index" / "none"
+      summary           : str
+
+    When change_pct is unavailable, falls back to index_change_pct if provided.
+    Never returns Bearish solely due to missing/NaN data.
     """
-    分析大盤市場情緒（Bullish / Neutral / Bearish）。
-    """
-    if all_prices.empty:
-        return {"sentiment": "Neutral", "summary": "無市場資料。"}
+    _empty = {
+        "sentiment": "Neutral",
+        "up_count": None,
+        "down_count": None,
+        "total_count": 0,
+        "up_ratio": None,
+        "data_available": False,
+        "data_coverage_pct": 0.0,
+        "sentiment_basis": "none",
+        "summary": "無市場資料。",
+    }
+
+    if all_prices is None or all_prices.empty:
+        return _empty
 
     day_data = (
         all_prices[all_prices["date"] == trade_date]
@@ -284,30 +310,85 @@ def analyze_market_sentiment(
     if day_data.empty:
         day_data = all_prices
 
-    up_count = (
-        (day_data["change_pct"] > 0).sum() if "change_pct" in day_data.columns else 0
-    )
-    down_count = (
-        (day_data["change_pct"] < 0).sum() if "change_pct" in day_data.columns else 0
-    )
     total_count = len(day_data)
-    up_ratio = up_count / total_count if total_count > 0 else 0
 
-    if up_ratio >= 0.6:
-        sentiment = "Bullish"
-        desc = f"今日上漲 {up_count} 家，下跌 {down_count} 家，市場偏多"
-    elif up_ratio <= 0.4:
-        sentiment = "Bearish"
-        desc = f"今日上漲 {up_count} 家，下跌 {down_count} 家，市場偏空"
-    else:
-        sentiment = "Neutral"
-        desc = f"今日上漲 {up_count} 家，下跌 {down_count} 家，市場中性"
+    # ── 判斷 change_pct 是否可用 ───────────────────────────────
+    has_col = "change_pct" in day_data.columns
+    valid_count = int(day_data["change_pct"].notna().sum()) if has_col else 0
+    data_coverage_pct = (
+        round(valid_count / total_count * 100, 1) if total_count > 0 else 0.0
+    )
 
+    # 至少需要 10% 有效覆蓋率（且不少於 100 筆）才視為可用
+    min_valid = max(100, int(total_count * 0.1))
+    breadth_available = has_col and valid_count >= min_valid
+
+    if breadth_available:
+        # 只使用有 change_pct 的列計算漲跌家數
+        valid_data = day_data[day_data["change_pct"].notna()]
+        up_count = int((valid_data["change_pct"] > 0).sum())
+        down_count = int((valid_data["change_pct"] < 0).sum())
+        up_ratio = round(up_count / valid_count, 3)
+
+        if up_ratio >= 0.6:
+            sentiment = "Bullish"
+            desc = f"今日上漲 {up_count} 家，下跌 {down_count} 家，市場偏多"
+        elif up_ratio <= 0.4:
+            sentiment = "Bearish"
+            desc = f"今日上漲 {up_count} 家，下跌 {down_count} 家，市場偏空"
+        else:
+            sentiment = "Neutral"
+            desc = f"今日上漲 {up_count} 家，下跌 {down_count} 家，市場中性"
+
+        return {
+            "sentiment": sentiment,
+            "up_count": up_count,
+            "down_count": down_count,
+            "total_count": int(total_count),
+            "up_ratio": up_ratio,
+            "data_available": True,
+            "data_coverage_pct": data_coverage_pct,
+            "sentiment_basis": "breadth",
+            "summary": desc,
+        }
+
+    # ── change_pct 不可用：嘗試 index fallback ─────────────────
+    if index_change_pct is not None:
+        try:
+            idx_pct = float(index_change_pct)
+        except (TypeError, ValueError):
+            idx_pct = None
+        if idx_pct is not None:
+            if idx_pct >= 1.0:
+                fallback_sentiment = "Bullish"
+            elif idx_pct <= -1.0:
+                fallback_sentiment = "Bearish"
+            else:
+                fallback_sentiment = "Neutral"
+            return {
+                "sentiment": fallback_sentiment,
+                "up_count": None,
+                "down_count": None,
+                "total_count": int(total_count),
+                "up_ratio": None,
+                "data_available": False,
+                "data_coverage_pct": data_coverage_pct,
+                "sentiment_basis": "index",
+                "summary": (
+                    f"漲跌家數不可用（有效資料 {valid_count}/{total_count} 筆）；"
+                    f"以加權指數漲跌幅 {idx_pct:+.2f}% 判斷情緒。"
+                ),
+            }
+
+    # ── 無任何可用資料：回傳 Neutral，不回傳 Bearish ──────────
     return {
-        "sentiment": sentiment,
-        "up_count": int(up_count),
-        "down_count": int(down_count),
+        "sentiment": "Neutral",
+        "up_count": None,
+        "down_count": None,
         "total_count": int(total_count),
-        "up_ratio": round(float(up_ratio), 3),
-        "summary": desc,
+        "up_ratio": None,
+        "data_available": False,
+        "data_coverage_pct": data_coverage_pct,
+        "sentiment_basis": "none",
+        "summary": f"漲跌家數不可用（有效 change_pct：{valid_count}/{total_count} 筆），情緒無法判斷。",
     }

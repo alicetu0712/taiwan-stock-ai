@@ -232,6 +232,32 @@ def _summary_stats(rows: list, market_calendar: list = None) -> dict:
     }
 
 
+@st.cache_data(ttl=600)
+def _load_v2_label(trade_date: str, stock_id: str) -> str | None:
+    """Return V2 entry_label for a given (trade_date, stock_id), or None if unavailable."""
+    try:
+        from src.database import get_engine
+        from src.research.models import ResearchBase, V2ShadowSignal
+
+        engine = get_engine()
+        ResearchBase.metadata.create_all(engine, checkfirst=True)
+        from src.database import get_session
+
+        s = get_session()
+        row = (
+            s.query(V2ShadowSignal.entry_label)
+            .filter(
+                V2ShadowSignal.trade_date == trade_date,
+                V2ShadowSignal.stock_id == stock_id,
+            )
+            .first()
+        )
+        s.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 def page_scorecard() -> None:
     st.markdown(
         '<div class="section-title">📋 模型成績單</div>',
@@ -440,6 +466,25 @@ def page_scorecard() -> None:
                     f"PT Score：{_fmt(r['pt_score'])}  \n"
                     f"分析品質：{_fmt(r['confidence'])} / 100"
                 )
+                # V2 Entry Timing badge (shadow, read-only)
+                _v2_label = _load_v2_label(r["trade_date"], r["stock_id"])
+                if _v2_label:
+                    _v2_colors = {
+                        "ENTRY_READY": "#16a34a",
+                        "WAIT_FOR_PULLBACK": "#ca8a04",
+                        "WAIT_FOR_BREAKOUT": "#2563eb",
+                        "TOO_EXTENDED": "#dc2626",
+                        "RISK_REWARD_UNFAVORABLE": "#9333ea",
+                        "NO_VALID_SETUP": "#6b7280",
+                        "INSUFFICIENT_DATA": "#9ca3af",
+                    }
+                    _vc = _v2_colors.get(_v2_label, "#6b7280")
+                    st.markdown(
+                        f"V2 進場時機："
+                        f"<span style='background:{_vc};color:#fff;padding:1px 6px;"
+                        f"border-radius:4px;font-size:0.75rem'>{_v2_label}</span>",
+                        unsafe_allow_html=True,
+                    )
 
             with col_c:
                 st.markdown("**績效結果**")

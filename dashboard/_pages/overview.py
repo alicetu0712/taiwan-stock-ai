@@ -1159,6 +1159,34 @@ def page_today(selected_date: date) -> None:
     except Exception:
         recs_cnt = int(today_log.iloc[0]["recs"]) if not today_log.empty else 0
 
+    # 漲跌家數顯示邏輯：
+    # - mkt 無 'up'/'down' key (N/A in report) → '—'（資料缺失）
+    # - up==down=='0' 時舊報告可能是資料缺失，顯示警告
+    _up_raw = mkt.get("up")
+    _down_raw = mkt.get("down")
+    _breadth_suspect = _up_raw == "0" and _down_raw == "0"
+    up_display = _up_raw if _up_raw is not None else "—"
+    down_display = _down_raw if _down_raw is not None else "—"
+    if _breadth_suspect:
+        up_display = "—"
+        down_display = "—"
+
+    # 情緒標籤（含資料來源標示）
+    if sentiment == "Bullish":
+        sentiment_html = "🟢 偏多"
+    elif sentiment == "Bearish":
+        sentiment_html = "🔴 偏空"
+    else:
+        sentiment_html = "⚪ 中性"
+
+    # 當漲跌家數不可用時加標示（新報告會觸發；舊報告 up==down==0 也觸發）
+    breadth_note = ""
+    if up_display == "—" or _breadth_suspect:
+        breadth_note = (
+            '<div style="font-size:0.65rem; color:#f39c12; margin-top:2px">'
+            "漲跌家數資料不足</div>"
+        )
+
     st.markdown(
         f"""
     <div class="market-card">
@@ -1170,13 +1198,12 @@ def page_today(selected_date: date) -> None:
         </div>
         <div style="text-align:right">
           <div style="font-size:0.75rem; opacity:0.7">市場情緒</div>
-          <div style="font-size:1.1rem; font-weight:700; margin-top:4px">{
-            '🟢 偏多' if sentiment == 'Bullish' else '🔴 偏空' if sentiment == 'Bearish' else '⚪ 中性'
-          }</div>
-          <div style="font-size:0.75rem; opacity:0.7; margin-top:4px">漲 {mkt.get('up', '—')} / 跌 {mkt.get('down', '—')}</div>
+          <div style="font-size:1.1rem; font-weight:700; margin-top:4px">{sentiment_html}</div>
+          <div style="font-size:0.75rem; opacity:0.7; margin-top:4px">漲 {up_display} / 跌 {down_display}</div>
+          {breadth_note}
         </div>
       </div>
-      <div class="market-meta">{selected_date} · AI Taiwan Equity Research v6.8</div>
+      <div class="market-meta">{selected_date} · 資料日期：{selected_date} · AI Taiwan Equity Research v6.8</div>
     </div>
     """,
         unsafe_allow_html=True,

@@ -303,6 +303,7 @@ def main() -> None:
             "🔒證據",
             # Level 2 — Research
             "🧪研究回測",
+            "⏱️進場時機",
             "🔍個股",
             "📋歷史",
             # Level 3 — Archive / Tools
@@ -336,10 +337,14 @@ def main() -> None:
     with tabs[5]:
         _render(page_research_backtest)
     with tabs[6]:
-        _render(page_search)
+        from dashboard._pages.entry_timing_research import page_entry_timing_research
+
+        _render(page_entry_timing_research)
     with tabs[7]:
-        _render(page_history)
+        _render(page_search)
     with tabs[8]:
+        _render(page_history)
+    with tabs[9]:
         # Archive: secondary selector for Level 3 pages
         st.markdown(
             '<div style="font-size:0.75rem;color:#888;margin-bottom:12px">'

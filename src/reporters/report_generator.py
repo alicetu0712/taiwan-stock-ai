@@ -149,6 +149,19 @@ class ReportGenerator:
             sentiment_emoji = {"Bullish": "📈", "Bearish": "📉", "Neutral": "➡️"}.get(
                 sentiment, ""
             )
+            # None → "N/A"（區分真正的 0 與資料缺失）
+            _up = market_summary.get("up_count")
+            _down = market_summary.get("down_count")
+            up_str = str(_up) if _up is not None else "N/A"
+            down_str = str(_down) if _down is not None else "N/A"
+            # 當漲跌家數不可用時，標示情緒的判斷依據
+            _basis = market_summary.get("sentiment_basis", "breadth")
+            if _basis == "index":
+                sentiment_note = "（以加權指數漲跌幅推估）"
+            elif _basis == "none":
+                sentiment_note = "（漲跌家數不可用，情緒無法判斷，顯示中性）"
+            else:
+                sentiment_note = ""
             lines.extend(
                 [
                     "| 指標 | 數值 |",
@@ -156,9 +169,9 @@ class ReportGenerator:
                     f"| 加權指數 | {market_summary.get('index_close', 'N/A')} |",
                     f"| 漲跌幅 | {market_summary.get('index_change_pct', 'N/A')}% |",
                     f"| 成交金額 | {market_summary.get('total_amount_b', 'N/A')} 億元 |",
-                    f"| 上漲家數 | {market_summary.get('up_count', 'N/A')} |",
-                    f"| 下跌家數 | {market_summary.get('down_count', 'N/A')} |",
-                    f"| 市場情緒 | {sentiment_emoji} {sentiment} |",
+                    f"| 上漲家數 | {up_str} |",
+                    f"| 下跌家數 | {down_str} |",
+                    f"| 市場情緒 | {sentiment_emoji} {sentiment}{sentiment_note} |",
                     "",
                 ]
             )

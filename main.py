@@ -338,8 +338,20 @@ def run_pipeline(trade_date: date = None, dry_run: bool = False, force: bool = F
         has_real_news = len(news_list) > 0
 
         # ── Step 4: 大盤情緒分析 ────────────────────────────
-        market_sentiment = analyze_market_sentiment(price_df, trade_date)
-        market_summary   = {**market_summary, **market_sentiment}
+        market_sentiment = analyze_market_sentiment(
+            price_df,
+            trade_date,
+            index_change_pct=market_summary.get("index_change_pct"),
+        )
+        # Merge: breadth up/down counts may be None when change_pct unavailable;
+        # keep existing API-sourced values in that case
+        _api_up = market_summary.get("up_count")
+        _api_down = market_summary.get("down_count")
+        market_summary = {**market_summary, **market_sentiment}
+        if market_sentiment.get("up_count") is None and _api_up is not None:
+            market_summary["up_count"] = _api_up
+        if market_sentiment.get("down_count") is None and _api_down is not None:
+            market_summary["down_count"] = _api_down
         market_ai_text   = analyst.generate_market_summary(market_summary, trade_date)
 
         # ── Step 5: 技術分析（全市場）───────────────────────
