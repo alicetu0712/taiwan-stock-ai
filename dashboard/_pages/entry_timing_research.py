@@ -42,14 +42,6 @@ def _load_v2_signals(limit: int = 300) -> list:
 
         s = get_session()
 
-        # Import ResearchBase tables into the same engine so they can be queried
-        # (they may not exist yet — handle gracefully)
-        from src.database import get_engine
-        from src.research.models import ResearchBase
-
-        engine = get_engine()
-        ResearchBase.metadata.create_all(engine, checkfirst=True)
-
         rows = (
             s.query(V2ShadowSignal)
             .order_by(

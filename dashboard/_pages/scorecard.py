@@ -236,12 +236,8 @@ def _summary_stats(rows: list, market_calendar: list = None) -> dict:
 def _load_v2_label(trade_date: str, stock_id: str) -> str | None:
     """Return V2 entry_label for a given (trade_date, stock_id), or None if unavailable."""
     try:
-        from src.database import get_engine
-        from src.research.models import ResearchBase, V2ShadowSignal
-
-        engine = get_engine()
-        ResearchBase.metadata.create_all(engine, checkfirst=True)
         from src.database import get_session
+        from src.research.models import V2ShadowSignal
 
         s = get_session()
         row = (
