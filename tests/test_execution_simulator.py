@@ -22,6 +22,9 @@ Tests (ES):
   ES18 — R-Multiple: (exit - fill) / (fill - stop)
   ES19 — No look-ahead: trigger from previous close only, entry at NEXT open
   ES20 — V2 WAIT_FOR_PULLBACK: second-day trigger (not first-day)
+  ES21 — V1 uses DIRECT_NEXT_OPEN entry_order_type
+  ES22 — WAIT_FOR_PULLBACK uses CONFIRMED_NEXT_OPEN entry_order_type
+  ES23 — ma20_trigger_price() = stop/(1-0.03)×(1+0.03) ≈ stop×1.062
 """
 
 from __future__ import annotations
@@ -32,6 +35,8 @@ import pandas as pd
 import pytest
 
 from src.research.execution_simulator import (
+    ENTRY_CONFIRMED_NEXT_OPEN,
+    ENTRY_DIRECT_NEXT_OPEN,
     EXPIRY_DAYS,
     EXIT_AMBIGUOUS_STOP,
     EXIT_GAP_STOP,
@@ -40,9 +45,11 @@ from src.research.execution_simulator import (
     EXIT_TARGET,
     FEES_PCT,
     HOLD_DAYS,
+    MA20_TRIGGER_BUFFER,
     NO_FILL_EXPIRED,
     NO_FILL_NO_HIST,
     NO_FILL_SKIP_LABEL,
+    STOP_BUFFER,
     EntryTimingExecutionSimulator,
 )
 
@@ -452,3 +459,41 @@ class TestNoLookAhead:
             f"Expected fill at 111.0 (day+2 open), got {t.fill_price}. "
             "Must use next-day open, not trigger-day close."
         )
+
+
+# ── Entry Order Type Tests (SA-1 clarification) ───────────────────────────────
+
+class TestEntryOrderType:
+    def test_ES21_v1_direct_next_open(self):
+        """V1 baseline uses DIRECT_NEXT_OPEN — no trigger condition."""
+        ohlcv = _make_ohlcv(SIGNAL_DATE + timedelta(days=1), 25)
+        t = sim.simulate_v1(SIGNAL_DATE, "T21", stop_price=80.0, target_price=130.0, ohlcv=ohlcv)
+        assert t.entry_order_type == ENTRY_DIRECT_NEXT_OPEN
+
+    def test_ES22_wait_pullback_confirmed_next_open(self):
+        """WAIT_FOR_PULLBACK uses CONFIRMED_NEXT_OPEN — enters only after trigger candle."""
+        # Build enough bars so the trigger fires
+        stop = 90.0
+        threshold = EntryTimingExecutionSimulator.ma20_trigger_price(stop)
+        # Trigger on day 1 (low < threshold), entry on day 2
+        rows = [
+            (SIGNAL_DATE + timedelta(days=1), 100.0, 102.0, threshold - 1.0, 100.0, 1_000_000),
+            (SIGNAL_DATE + timedelta(days=2), 100.0, 102.0, 98.0, 100.0, 1_000_000),
+        ] + [
+            (SIGNAL_DATE + timedelta(days=3 + i), 100.0, 102.0, 98.0, 100.0, 1_000_000)
+            for i in range(25)
+        ]
+        ohlcv = _custom_ohlcv(rows)
+        t = sim.simulate_v2(
+            SIGNAL_DATE, "T22", "WAIT_FOR_PULLBACK",
+            planned_entry=stop / (1 - STOP_BUFFER),  # MA20_estimate
+            stop_price=stop, target_price=130.0, ohlcv=ohlcv,
+        )
+        assert t.entry_order_type == ENTRY_CONFIRMED_NEXT_OPEN
+
+    def test_ES23_ma20_trigger_price_formula(self):
+        """MA20_trigger = stop / (1-STOP_BUFFER) × (1+MA20_TRIGGER_BUFFER)."""
+        stop = 92.23
+        expected = (stop / (1.0 - STOP_BUFFER)) * (1.0 + MA20_TRIGGER_BUFFER)
+        got = EntryTimingExecutionSimulator.ma20_trigger_price(stop)
+        assert abs(got - expected) < 0.001, f"Expected {expected:.4f}, got {got:.4f}"
