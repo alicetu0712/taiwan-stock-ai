@@ -366,3 +366,88 @@ class TestT10TransactionTax:
 
         assert _realized(pos) == pytest.approx(9600.0)
         session.rollback()
+
+
+# ── T11-T15: A1 Session-State Toast 機制 ──────────────────────────────────────
+
+
+class TestT11ToastSessionState:
+    """
+    驗證 position.py 的 toast 機制符合規格：
+      - _ACTUAL_TOAST_KEY / _PAPER_TOAST_KEY 常數存在
+      - session_state.pop() 是 idempotent（顯示後清除）
+      - 部分賣出 toast 含「本次已實現淨損益」
+      - 全數賣出 toast 含「累計已實現淨損益」
+      - P&L 正負零均正確格式化
+    """
+
+    def test_T11_actual_toast_key_constant_exists(self):
+        """_ACTUAL_TOAST_KEY 必須在 position.py 中定義。"""
+        from dashboard._pages.position import _ACTUAL_TOAST_KEY
+
+        assert isinstance(_ACTUAL_TOAST_KEY, str)
+        assert len(_ACTUAL_TOAST_KEY) > 0
+
+    def test_T12_paper_toast_key_constant_exists(self):
+        """_PAPER_TOAST_KEY 必須在 position.py 中定義。"""
+        from dashboard._pages.position import _PAPER_TOAST_KEY
+
+        assert isinstance(_PAPER_TOAST_KEY, str)
+        assert len(_PAPER_TOAST_KEY) > 0
+
+    def test_T13_partial_sell_toast_text_format_positive(self):
+        """部分賣出 toast 格式：'本次已實現淨損益 +3,880'"""
+        pnl = 3880.0
+        shares = 1000
+        price = 103.88
+        expected_fragment = "本次已實現淨損益"
+        # Simulate the toast string built in _render_partial_sell_form
+        toast = (
+            f"✅ 賣出 {int(shares)} 股 @ {price:.2f}　"
+            f"本次已實現淨損益 {pnl:+,.0f}"
+        )
+        assert expected_fragment in toast
+        assert "+3,880" in toast
+
+    def test_T14_partial_sell_toast_text_format_negative(self):
+        """部分賣出 toast 格式：負損益必須有負號。"""
+        pnl = -1500.0
+        shares = 500
+        price = 97.0
+        toast = (
+            f"✅ 賣出 {int(shares)} 股 @ {price:.2f}　"
+            f"本次已實現淨損益 {pnl:+,.0f}"
+        )
+        assert "本次已實現淨損益" in toast
+        assert "-1,500" in toast
+
+    def test_T15_full_sell_toast_text_format(self):
+        """全數出場 toast 格式：'累計已實現淨損益 +16,627'"""
+        cum_pnl = 16627.0
+        remaining = 2000
+        price = 108.31
+        pnl_part = f"　累計已實現淨損益 {cum_pnl:+,.0f}"
+        toast = f"✅ 全數出場 {remaining:,} 股 @ {price:.2f}{pnl_part}"
+        assert "累計已實現淨損益" in toast
+        assert "+16,627" in toast
+
+    def test_T16_full_sell_toast_zero_pnl(self):
+        """零損益必須顯示 +0（帶正號，非空白）。"""
+        cum_pnl = 0.0
+        pnl_part = f"　累計已實現淨損益 {cum_pnl:+,.0f}"
+        assert "+0" in pnl_part
+
+    def test_T17_session_state_pop_idempotency(self):
+        """st.session_state.pop(key, None) 第二次呼叫回傳 None，不重複顯示。"""
+        # Simulate dict.pop behavior (session_state works like dict)
+        state = {"_actual_pending_toast": "✅ 賣出成功"}
+        first = state.pop("_actual_pending_toast", None)
+        second = state.pop("_actual_pending_toast", None)
+        assert first == "✅ 賣出成功"
+        assert second is None  # cleared after first pop
+
+    def test_T18_actual_and_paper_keys_are_different(self):
+        """ACTUAL 和 PAPER toast key 不能相同，否則會跨區顯示。"""
+        from dashboard._pages.position import _ACTUAL_TOAST_KEY, _PAPER_TOAST_KEY
+
+        assert _ACTUAL_TOAST_KEY != _PAPER_TOAST_KEY

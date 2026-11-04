@@ -109,9 +109,15 @@ class EntryTimingResearchService:
         return processed, skipped, errors
 
     def _load_history(self, session, stock_id: str, as_of: date, lookback: int = 90):
-        """Load up to `lookback` bars of OHLCV ending on (and including) as_of."""
+        """Load the most-recent `lookback` bars of OHLCV ending on (and including) as_of.
+
+        Ordering: DESC + LIMIT to get the NEWEST lookback rows, then reverse in
+        Python to deliver chronological (oldest→newest) order to the analyzer.
+        The previous ASC+LIMIT implementation returned the OLDEST lookback rows
+        (e.g. data from years ago instead of recent 90 bars) — now fixed.
+        """
         import pandas as pd
-        from sqlalchemy import asc
+        from sqlalchemy import desc
 
         from src.database import DailyPrice
 
@@ -119,12 +125,13 @@ class EntryTimingResearchService:
             session.query(DailyPrice)
             .filter(DailyPrice.stock_id == stock_id)
             .filter(DailyPrice.date <= as_of)
-            .order_by(asc(DailyPrice.date))
+            .order_by(desc(DailyPrice.date))  # newest first → limit gives recent N bars
             .limit(lookback)
             .all()
         )
         if not rows:
             return None
+        rows = list(reversed(rows))  # restore chronological order (oldest → newest)
         return pd.DataFrame(
             [
                 {
