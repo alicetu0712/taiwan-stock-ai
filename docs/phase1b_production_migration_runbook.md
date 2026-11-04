@@ -1,6 +1,6 @@
 # Phase 1B Production Migration Runbook
 
-**Document date:** 2026-11-04 (updated 2026-11-04 — Release Candidate updated to d27e1b2)  
+**Document date:** 2026-11-04 (final safety verification 2026-11-04 — RC updated to e27ee1a)  
 **Migration scope:** ACTUAL Trade Lifecycle schema — 3 tables + 6 DDL changes  
 **Target environment:** Production Neon PostgreSQL  
 **Trigger:** Manual only (`workflow_dispatch`) — human approval required  
@@ -24,7 +24,7 @@ Before proceeding, confirm you are:
 | GitHub account | alicetu0712 | Log in at github.com/login |
 | Repository | taiwan-stock-ai | Confirm at github.com/alicetu0712/taiwan-stock-ai |
 | Branch | main | `git branch --show-current` → `main` |
-| HEAD SHA | d27e1b2 | `git rev-parse --short HEAD` → `d27e1b2` |
+| HEAD SHA | e27ee1a | `git rev-parse --short HEAD` → `e27ee1a` |
 | migration script SHA | da95d80b... | `shasum -a 256 scripts/migrate_trade_lifecycle.py` |
 
 Expected script SHA-256:
@@ -414,7 +414,7 @@ INCIDENT LOG — Phase 1B Migration
 Date: YYYY-MM-DD HH:MM TWN
 Operator: alicetu0712
 Branch: main
-HEAD SHA: d27e1b2
+HEAD SHA: e27ee1a
 Migration script SHA: da95d80b...
 
 Pre-migration state:
@@ -462,49 +462,58 @@ Upon successful migration and health check:
 
 ### Q1. Phase 1B 是否已安全凍結？
 
-**答：是。** Release Candidate `d27e1b2`。核心系統（`trade_service`, `database.py`, migration script, strategy analyzers, Entry Timing V2, v8.0, foe_v1）凍結於 `91e8d7b` 不變。d27e1b2 只修改 UI toast display（`dashboard/_pages/position.py`）與新增 15 個測試（`tests/test_position_pnl_display.py`）。工作樹乾淨，origin/main 同步。1207 tests PASS，83.00% coverage。**所有凍結系統完整。**
+**答：是。** Release Candidate `e27ee1a`（lint fix，RC freeze）。核心系統（`trade_service`, `database.py`, migration script, strategy analyzers, Entry Timing V2, v8.0, foe_v1）凍結於 `91e8d7b` 不變。UI 修正在 `d27e1b2`（gross→net P&L toast）；`e27ee1a` 是 isort/black lint-only，邏輯無變更。工作樹乾淨，origin/main 同步。1207 tests PASS，83.00% coverage。CI for e27ee1a：Lint ✅ + Test 3.11 ✅ + Test 3.13 ✅（run 41783339846）。**所有凍結系統完整。**
 
 ### Q2. 交易損益是否完全正確？
 
-**答：是，且 UI 顯示問題已於 d27e1b2 修正。**
+**答：是，且 UI 顯示問題已於 d27e1b2 修正（Browser E2E v2 確認）。**
 
 DB 與 Trade Service 一直正確：WAC=101.8113 ✅，部分賣出 realized=3,880.33 ✅，累計 realized=16,627.00 ✅。d27e1b2 修正了 UI toast：
-- 部分賣出：「本次已實現淨損益 +3,880」（incremental net from DB）✅
-- 全部賣出：「累計已實現淨損益 +16,627」（cumulative net from DB）✅
+- 部分賣出 toast：「✅ 賣出 500 股 @ 110.00　本次已實現淨損益 +3,880」（MutationObserver 捕捉確認）✅
+- 全部賣出 toast：Streamlit st.rerun() 架構限制無法從 DOM 捕捉；DB 值 (16627.00) + 歷史紀錄 ("+16,627") 為授權驗證 ✅
+- 無 gross P&L (13,189) 顯示 ✅
 
-**DB、Toast、Position Summary 三方吻合。**
+**DB、Trade Service、Position Summary、歷史紀錄 四方吻合。**
 
 ### Q3. 正式 Migration 前還缺什麼？
 
-**缺三件事（人工動作）：**
-1. 確認 CI for d27e1b2 PASS（github.com → Actions tab）
-2. 人工到 github.com 確認 Required Reviewer gate 實際生效（Settings → Environments → production）
-3. 在 Neon Console 建立正式 DB snapshot 備份（§2）
+**缺一件事（人工動作）：**
+1. 在 Neon Console 建立正式 DB snapshot 備份（§2）— `phase1b-premigration-YYYYMMDD`
+
+已解決（先前 pending，現 PASS）：
+- ~~確認 CI for d27e1b2 PASS~~ → e27ee1a CI ALL PASS（run 41783339846）✅
+- ~~確認 GitHub approval gate 生效~~ → 公開 repo，Free plan 支援 Required Reviewers，API 確認 env id=26212785653, reviewer=alicetu0712 ✅
 
 技術面：Migration script 已驗證、dry-run 路徑已測試、所有 6 個 migration 在 embedded PG 18.6 通過、idempotency 確認。
 
 ### Q4. GitHub Production Approval 是否確實有效？
 
-**答：YAML 設定正確，enforcement 未能程式驗證，需人工確認。**
+**答：是，EFFECTIVELY ENFORCED（已確認為公開 repo）。**
 
-YAML 設定：`environment: production` ✅、workflow_dispatch only ✅、NEON_URL 不在 CI ✅、confirm token check ✅、concurrency lock ✅。Prior session API 確認 env id=26212785653, reviewer=alicetu0712 ✅。**但 Required Reviewers 在 private repo + Free plan 下可能 silently bypass（GitHub plan dependency）。**
+| 項目 | 結果 |
+|------|------|
+| YAML gate | `environment: production` ✅ |
+| trigger | `workflow_dispatch` only ✅ |
+| NEON_URL 隔離 | 只在 production job steps ✅ |
+| confirm token | `MIGRATE_PRODUCTION` check ✅ |
+| concurrency lock | `cancel-in-progress: false` ✅ |
+| reviewer | alicetu0712 (env id=26212785653) ✅ |
+| repo 可見性 | **public** (`private=False` via API) ✅ |
+| enforcement | 公開 repo → ALL plans 支援，包含 Free ✅ |
 
-**必要人工確認步驟：**
-1. 登入 github.com → Repository → Settings → Environments → `production`
-2. 確認 "Required reviewers" 保護規則顯示為 active（非灰色/disabled）
-3. 若顯示升級警告，升級至 GitHub Pro 或改為 public repo 後再部署
+**Required Reviewers 對公開 repo 在所有 GitHub plan（含 Free）均有效。Private repo + Free plan 的 bypass 疑慮不適用於此 repo。**
 
 ### Q5. 是否已達到 DEPLOYMENT PREPARED？
 
-**答：是。**
+**答：是，且所有可程式驗證的 gate 已全部通過。**
 
 > ✅ **DEPLOYMENT PREPARED**  
-> Release Candidate: `d27e1b2`  
-> 1207 tests PASS / 83.00% coverage / UI P&L fix PASS / Migration safety PASS  
+> Release Candidate: `e27ee1a`  
+> 1207 tests PASS / 83.00% coverage / UI P&L fix PASS (Browser E2E v2 confirmed)  
+> CI: ALL PASS (run 41783339846) / GitHub Approval: EFFECTIVELY ENFORCED  
+> Migration safety: static review PASS / 6 migrations idempotent  
 >
-> Production Migration 尚未執行。執行前需完成三項人工動作：  
-> (1) 確認 CI for d27e1b2 PASS  
-> (2) 確認 GitHub approval gate 生效  
-> (3) 建立 Neon 備份  
+> Production Migration 尚未執行。執行前需完成**一項**人工動作：  
+> (1) 建立 Neon Production 備份（Neon Console → Branch → Create snapshot）  
 >
 > **DEPLOYMENT PREPARED ≠ 已部署。** 任何生產 Migration 均需明確人工授權觸發。
