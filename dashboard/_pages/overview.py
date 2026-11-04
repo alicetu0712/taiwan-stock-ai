@@ -1172,20 +1172,40 @@ def page_today(selected_date: date) -> None:
         down_display = "—"
 
     # 情緒標籤（含資料來源標示）
-    if sentiment == "Bullish":
-        sentiment_html = "🟢 偏多"
-    elif sentiment == "Bearish":
-        sentiment_html = "🔴 偏空"
-    else:
-        sentiment_html = "⚪ 中性"
+    # _breadth_ok: 漲跌家數可信；_has_index: 有指數漲跌幅可作為回落依據
+    _breadth_ok = not _breadth_suspect and _up_raw is not None
+    _has_index = idx_chg not in ("—", None, "")
+    _sentiment_known = sentiment in ("Bullish", "Bearish", "Neutral")
 
-    # 當漲跌家數不可用時加標示（新報告會觸發；舊報告 up==down==0 也觸發）
-    breadth_note = ""
-    if up_display == "—" or _breadth_suspect:
-        breadth_note = (
-            '<div style="font-size:0.65rem; color:#f39c12; margin-top:2px">'
-            "漲跌家數資料不足</div>"
-        )
+    if not _sentiment_known:
+        # 報告沒有情緒欄位
+        sentiment_html = "⚪ 資料不足，暫不判斷"
+        breadth_note = ""
+    else:
+        if sentiment == "Bullish":
+            sentiment_html = "🟢 偏多"
+        elif sentiment == "Bearish":
+            sentiment_html = "🔴 偏空"
+        else:
+            sentiment_html = "⚪ 中性"
+
+        # 當漲跌家數不可信時，標示情緒依指數趨勢判斷
+        if not _breadth_ok:
+            if _has_index:
+                sentiment_html += (
+                    '<div style="font-size:0.62rem;color:#f39c12;margin-top:2px">'
+                    "依指數趨勢</div>"
+                )
+            else:
+                # 指數資料也不完整
+                sentiment_html = "⚪ 資料不足，暫不判斷"
+
+        breadth_note = ""
+        if not _breadth_ok:
+            breadth_note = (
+                '<div style="font-size:0.65rem; color:#f39c12; margin-top:2px">'
+                "漲跌家數資料不足</div>"
+            )
 
     st.markdown(
         f"""

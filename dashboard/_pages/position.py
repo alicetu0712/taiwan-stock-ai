@@ -177,7 +177,15 @@ def _pnl_str(v, pct=None) -> str:
 # ── ACTUAL Section A ──────────────────────────────────────────────────────────
 
 
+_ACTUAL_TOAST_KEY = "_actual_pending_toast"
+
+
 def _render_actual_section() -> None:
+    # Persistent one-shot notification: set before rerun, consumed here, never repeated.
+    _pending_toast = st.session_state.pop(_ACTUAL_TOAST_KEY, None)
+    if _pending_toast:
+        st.success(_pending_toast)
+
     st.markdown(
         """
 <div style="background:#e8f5e9;border-left:4px solid #43a047;
@@ -414,7 +422,9 @@ def _render_add_buy_form(pos_id: int, sid: str, name: str) -> None:
                 s.commit()
                 s.close()
                 st.session_state[idem_key_name] = str(uuid.uuid4())
-                st.success(f"✅ 加碼記錄完成：{int(shares)} 股 @ {exec_price:.2f}")
+                st.session_state[_ACTUAL_TOAST_KEY] = (
+                    f"✅ 加碼記錄完成：{int(shares)} 股 @ {exec_price:.2f}"
+                )
                 st.rerun()
             except svc.TradeSvcError as e:
                 st.error(f"加碼失敗：{e}")
@@ -466,7 +476,7 @@ def _render_partial_sell_form(pos_id: int, sid: str, name: str, remaining: int) 
                 _this_pnl = float(_pos.realized_pnl) - _prev_realized
                 s.close()
                 st.session_state[idem_key_name] = str(uuid.uuid4())
-                st.success(
+                st.session_state[_ACTUAL_TOAST_KEY] = (
                     f"✅ 賣出 {int(shares)} 股 @ {exec_price:.2f}　"
                     f"本次已實現淨損益 {_this_pnl:+,.0f}"
                 )
@@ -531,7 +541,7 @@ def _render_full_sell_form(
                     if _cum_pnl is not None
                     else ""
                 )
-                st.success(
+                st.session_state[_ACTUAL_TOAST_KEY] = (
                     f"✅ 全數出場 {remaining:,} 股 @ {exec_price:.2f}{_pnl_part}"
                 )
                 st.rerun()
@@ -573,7 +583,9 @@ def _render_update_plan_form(
                     s.commit()
                     s.close()
                     label = "目標價" if field == "target_price" else "停損價"
-                    st.success(f"✅ {label} 已修改為 {new_val:.2f}")
+                    st.session_state[_ACTUAL_TOAST_KEY] = (
+                        f"✅ {label} 已修改為 {new_val:.2f}"
+                    )
                     st.rerun()
                 except svc.TradeSvcError as e:
                     st.error(f"修改失敗：{e}")
@@ -644,7 +656,7 @@ def _render_manual_add_form() -> None:
                     s.commit()
                     s.close()
                     st.session_state["idem_manual_add"] = str(uuid.uuid4())
-                    st.success(
+                    st.session_state[_ACTUAL_TOAST_KEY] = (
                         f"✅ 已建立持倉：{stock_name or stock_id}（{stock_id}）"
                         f"買進 {int(shares)} 股 @ {exec_price:.2f}"
                     )
@@ -656,6 +668,8 @@ def _render_manual_add_form() -> None:
 
 
 # ── PAPER Section B ───────────────────────────────────────────────────────────
+
+_PAPER_TOAST_KEY = "_paper_pending_toast"
 
 import plotly.graph_objects as go  # noqa: E402
 
@@ -717,6 +731,10 @@ def _monte_carlo_chart(pos: dict) -> None:
 
 
 def _render_paper_section() -> None:
+    _pending_paper_toast = st.session_state.pop(_PAPER_TOAST_KEY, None)
+    if _pending_paper_toast:
+        st.success(_pending_paper_toast)
+
     st.markdown(
         """
 <div style="background:#e3f2fd;border-left:4px solid #1565c0;
@@ -857,7 +875,9 @@ def _render_paper_section() -> None:
                                     s2.commit()
                                 s2.close()
                                 st.cache_data.clear()
-                                st.success(f"已關倉 {name}（{card.pnl_str}）")
+                                st.session_state[_PAPER_TOAST_KEY] = (
+                                    f"已關倉 {name}（{card.pnl_str}）"
+                                )
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"關倉失敗：{e}")
