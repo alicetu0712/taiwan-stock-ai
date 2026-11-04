@@ -32,20 +32,34 @@ class ResearchBase(DeclarativeBase):
 
 class V2ShadowSignal(ResearchBase):
     """
-    One row per (trade_date, stock_id) capturing the V2 entry timing label
-    alongside the v8.0 decision label for direct comparison.
+    One row per (trade_date, stock_id, research_version) capturing the V2 entry
+    timing label alongside the v8.0 decision label for direct comparison.
+
+    research_version tracks which algorithm iteration produced this row:
+      'v2_research_v1' — pre-DESC fix (may have stale lookback data, is_legacy=True)
+      'v2_research_v2' — post-DESC fix (_load_history returns newest 90 bars)
 
     Append-only: never UPDATE existing rows.
     """
 
     __tablename__ = "v2_shadow_signals"
     __table_args__ = (
-        UniqueConstraint("trade_date", "stock_id", name="uq_v2ss_date_stock"),
+        UniqueConstraint(
+            "trade_date", "stock_id", "research_version",
+            name="uq_v2ss_date_stock_version",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     trade_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     stock_id: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+
+    # Research version — identifies which algorithm iteration produced this row
+    research_version: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="v2_research_v1", index=True
+    )
+    # is_legacy=True marks rows computed before the _load_history DESC fix
+    is_legacy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # V8.0 (V1) signal snapshot — copied from ForwardSignal, never modified
     v1_decision_label: Mapped[Optional[str]] = mapped_column(String(30))

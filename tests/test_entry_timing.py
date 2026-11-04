@@ -419,7 +419,8 @@ class TestModelIsolation:
         from src.research.models import V2ShadowSignal
 
         constraints = {c.name for c in V2ShadowSignal.__table__.constraints}
-        assert "uq_v2ss_date_stock" in constraints
+        # B1 versioning: constraint expanded to include research_version
+        assert "uq_v2ss_date_stock_version" in constraints
 
     def test_v2_outcome_unique_constraint(self):
         from src.research.models import V2ShadowOutcome
