@@ -2072,7 +2072,7 @@ class TestV12PredicateVerification:
             if m["name"] == "v1.2_add_idempotency_key_unique_index"
         )
         state, reason = mod._assess_migration_state(
-            insp, tbl := "trade_executions", v12
+            insp, "trade_executions", v12
         )
         assert state == mod._MIG_BLOCKED
         assert "catalog" in reason or "verify" in reason.lower()
