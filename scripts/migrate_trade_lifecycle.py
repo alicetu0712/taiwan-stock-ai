@@ -126,9 +126,12 @@ def _normalize_pg_predicate(expr: str | None) -> str | None:
 
 # Single SQL for full partial-index catalog inspection.
 # Returns at most 2 rows (LIMIT 2 detects duplicate name collisions).
-# Columns: indisunique, indisvalid, indisready, predicate, tbl_schema, key_columns
+# Columns: indisunique, indisvalid, indisready, predicate, tbl_schema, key_columns,
+#          indnkeyatts_count, indnatts
 # key_columns: array_agg of non-expression key-only columns (INCLUDE excluded via
 #   indnkeyatts, expression columns excluded via attnum > 0), ordered by index pos.
+# indnkeyatts_count: number of key-only columns (excludes INCLUDE columns).
+# indnatts: total index columns (key + INCLUDE); indnatts > indnkeyatts → INCLUDE present.
 _PG_PARTIAL_INDEX_SQL = """
     SELECT
         pi.indisunique,
@@ -147,7 +150,9 @@ _PG_PARTIAL_INDEX_SQL = """
                    AND a.attnum   = k.attnum
             WHERE  k.attnum > 0
               AND  k.pos    <= pi.indnkeyatts
-        )                                                  AS key_columns
+        )                                                  AS key_columns,
+        pi.indnkeyatts                                     AS indnkeyatts_count,
+        pi.indnatts                                        AS indnatts
     FROM   pg_index     pi
     JOIN   pg_class     tc ON tc.oid = pi.indrelid
     JOIN   pg_class     ic ON ic.oid = pi.indexrelid
@@ -222,6 +227,8 @@ def _verify_pg_partial_index_catalog(
         predicate_raw,
         tbl_schema,
         key_columns,
+        indnkeyatts_count,
+        indnatts,
     ) = rows[0]
 
     errors: list[str] = []
@@ -232,7 +239,7 @@ def _verify_pg_partial_index_catalog(
 
     # Check 3: unique
     if not indisunique:
-        errors.append("indisunique=False — Index 非 Unique")
+        errors.append("Unique=False — Index 非 Unique")
 
     # Check 4: valid
     if not indisvalid:
@@ -252,8 +259,26 @@ def _verify_pg_partial_index_catalog(
             + "\n".join(f"  - {e}" for e in errors)
         )
 
-    # Check 6: key columns (including order)
+    # Check 6a: Expression index detection
+    # key_columns only contains attnum>0 entries; if fewer than indnkeyatts_count,
+    # some key positions have attnum=0 (expression columns).
     actual_cols = list(key_columns) if key_columns else []
+    if len(actual_cols) < indnkeyatts_count:
+        raise MigrationBlockedError(
+            f"Index {index_name!r} ({schema_name}.{tbl}) 包含 Expression Columns "
+            f"(key_columns={actual_cols!r}, indnkeyatts={indnkeyatts_count}) — "
+            "此平台不使用 Expression Index，請人工確認後刪除並重新執行 Migration。"
+        )
+
+    # Check 6b: INCLUDE columns detection (PG 11+ INCLUDE clause)
+    if indnatts > indnkeyatts_count:
+        raise MigrationBlockedError(
+            f"Index {index_name!r} ({schema_name}.{tbl}) 包含 INCLUDE Columns "
+            f"(indnatts={indnatts} > indnkeyatts={indnkeyatts_count}) — "
+            "此平台不使用 INCLUDE Columns，請人工確認後刪除並重新執行 Migration。"
+        )
+
+    # Check 6c: key columns (including order)
     if actual_cols != expected_columns:
         raise MigrationBlockedError(
             f"Index {index_name!r} ({schema_name}.{tbl}) key columns 不符合預期：\n"
@@ -368,6 +393,7 @@ def _verify_fk(
     ref_col: str,
     on_delete: str | None = None,
     *,
+    src_schema: str = "public",
     ref_schema: str | None = None,
     on_update: str | None = None,
 ) -> bool:
@@ -382,9 +408,12 @@ def _verify_fk(
       6. ON UPDATE rule  (authoritative from pg_constraint.confupdtype on PG)
       7. pg_constraint.convalidated = True
 
+    src_schema: schema of the source (FK-owning) table, used to scope the catalog query
+    so that a same-named table in another schema cannot produce a false PASS.
+
     on_delete / on_update are case-insensitive; empty / None from inspector → "NO ACTION".
     Raises MigrationBlockedError if FK exists but ANY attribute mismatches,
-    catalog read fails, or FK metadata is incomplete.
+    catalog returns 0 rows (metadata inconsistency), 2+ rows (unexpected), or read fails.
     """
     try:
         fks = insp.get_foreign_keys(tbl)
@@ -425,44 +454,55 @@ def _verify_fk(
         if engine is None:
             raise MigrationBlockedError(
                 f"PostgreSQL FK catalog 驗證失敗：無法從 Inspector 取得 engine "
-                f"({tbl}.{local_col})"
+                f"({src_schema}.{tbl}.{local_col})"
             )
         try:
             from sqlalchemy import text
 
             with engine.connect() as conn:
-                cat_row = conn.execute(
+                # Scope query to src_schema to prevent false PASS from a same-named
+                # table in another schema.  LIMIT 2 detects unexpected duplicates.
+                cat_rows = conn.execute(
                     text("""
                         SELECT
                             c.convalidated,
                             c.confdeltype,
                             c.confupdtype
                         FROM   pg_constraint c
-                        JOIN   pg_class      t  ON t.oid = c.conrelid
-                        JOIN   pg_attribute  a  ON a.attrelid = c.conrelid
-                                                AND a.attnum   = c.conkey[1]
-                        WHERE  t.relname = :tbl
-                          AND  a.attname = :col
-                          AND  c.contype = 'f'
+                        JOIN   pg_class      t   ON  t.oid  = c.conrelid
+                        JOIN   pg_namespace  ns  ON  ns.oid = t.relnamespace
+                        JOIN   pg_attribute  a   ON  a.attrelid = c.conrelid
+                                                 AND a.attnum   = c.conkey[1]
+                        WHERE  t.relname   = :tbl
+                          AND  ns.nspname  = :src_schema
+                          AND  a.attname   = :col
+                          AND  c.contype   = 'f'
+                        LIMIT 2
                         """),
-                    {"tbl": tbl, "col": local_col},
-                ).fetchone()
+                    {"tbl": tbl, "src_schema": src_schema, "col": local_col},
+                ).fetchall()
         except MigrationBlockedError:
             raise
         except Exception as exc:
             raise MigrationBlockedError(
-                f"PostgreSQL pg_constraint 讀取失敗 ({tbl}.{local_col}): {exc}"
+                f"PostgreSQL pg_constraint 讀取失敗 ({src_schema}.{tbl}.{local_col}): {exc}"
             ) from exc
 
-        if cat_row is None:
+        if len(cat_rows) == 0:
             # Inspector found the FK but pg_constraint has no matching row —
-            # metadata inconsistency, cannot validate safely.
+            # metadata inconsistency (or wrong src_schema), cannot validate safely.
             raise MigrationBlockedError(
-                f"FK {tbl}.{local_col} が Inspector に存在しますが "
+                f"FK {src_schema}.{tbl}.{local_col} が Inspector に存在しますが "
                 "pg_constraint に見つかりません — metadata 不整合、人工確認が必要です"
             )
 
-        convalidated, confdeltype_ch, confupdtype_ch = cat_row
+        if len(cat_rows) > 1:
+            raise MigrationBlockedError(
+                f"FK catalog 查詢回傳多筆結果 ({len(cat_rows)} rows) for "
+                f"{src_schema}.{tbl}.{local_col} — 資料庫 Schema 異常，請人工確認。"
+            )
+
+        convalidated, confdeltype_ch, confupdtype_ch = cat_rows[0]
 
         # Check 5: ON DELETE (authoritative from confdeltype)
         if on_delete is not None:
@@ -735,18 +775,22 @@ def _log_ddl_audit(
     ddl_attempted: int,
     ddl_committed: int,
     ddl_rolled_back: int,
+    ddl_unknown: int = 0,
 ) -> None:
     """Log the DDL execution audit trail.
 
     Counters are strictly separated:
       planned      — dry-run only: migrations that would execute DDL
       attempted    — real runs: DDL transactions started (engine.begin entered)
-      committed    — real runs: DDL transactions whose engine.begin() completed
-      rolled_back  — real runs: DDL transactions that raised (SQLAlchemy auto-rollback)
+      committed    — real runs: DDL transactions confirmed committed
+      rolled_back  — real runs: application-level exception, rollback confirmed
+      unknown      — real runs: connection-level error (OperationalError/InterfaceError);
+                     commit may or may not have reached the server — requires human review
     """
     logger.info(
         f"DDL Audit — planned={ddl_planned}, attempted={ddl_attempted}, "
-        f"committed={ddl_committed}, rolled_back={ddl_rolled_back}"
+        f"committed={ddl_committed}, rolled_back={ddl_rolled_back}, "
+        f"unknown={ddl_unknown}"
     )
     for rec in audit_log:
         logger.info(
@@ -819,8 +863,9 @@ def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> i
     # Counters are strictly separated — no arithmetic inference between them.
     ddl_planned = 0  # dry-run: migrations that would execute DDL
     ddl_attempted = 0  # real: DDL transactions started
-    ddl_committed = 0  # real: DDL transactions successfully committed
-    ddl_rolled_back = 0  # real: DDL transactions rolled back on exception
+    ddl_committed = 0  # real: DDL transactions confirmed committed
+    ddl_rolled_back = 0  # real: application-level error, rollback confirmed
+    ddl_unknown = 0  # real: connection-level error, commit result uncertain
     audit_log: list[dict] = []
 
     for mig, _reason in pending:
@@ -866,26 +911,71 @@ def _apply_pending_migrations(engine, existing_tables: list, dry_run: bool) -> i
             ddl_committed += 1  # incremented only on confirmed commit
             logger.info(f"  [{mig['name']}] ✓ COMMITTED")
         except Exception as exc:
-            # engine.begin() auto-rollbacks on exception
             record["end"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            record["result"] = "ROLLED_BACK"
-            ddl_rolled_back += 1
-            logger.error(f"  [{mig['name']}] ROLLED_BACK: {exc}")
-            audit_log.append(record)
-            _log_ddl_audit(
-                audit_log, ddl_planned, ddl_attempted, ddl_committed, ddl_rolled_back
-            )
-            raise RuntimeError(
-                f"已核准 Migration [{mig['name']}] 執行失敗：{exc}\n"
-                f"  DDL: attempted={ddl_attempted}, committed={ddl_committed}, "
-                f"rolled_back={ddl_rolled_back}\n"
-                "請人工確認資料庫狀態後重新執行。"
-            ) from exc
+
+            # Distinguish connection-level errors from application-level errors.
+            # OperationalError / InterfaceError may occur DURING COMMIT — in that case
+            # the transaction result is uncertain (UNKNOWN).  Application-level errors
+            # (IntegrityError, ProgrammingError, etc.) occur before commit and SQLAlchemy
+            # guarantees a rollback was attempted (ROLLED_BACK).
+            try:
+                from sqlalchemy.exc import InterfaceError as _IfErr
+                from sqlalchemy.exc import OperationalError as _OpErr
+
+                _is_conn_err = isinstance(exc, (_OpErr, _IfErr))
+            except ImportError:
+                _is_conn_err = False
+
+            if _is_conn_err:
+                record["result"] = "UNKNOWN"
+                ddl_unknown += 1
+                logger.error(f"  [{mig['name']}] UNKNOWN (connection error): {exc}")
+                audit_log.append(record)
+                _log_ddl_audit(
+                    audit_log,
+                    ddl_planned,
+                    ddl_attempted,
+                    ddl_committed,
+                    ddl_rolled_back,
+                    ddl_unknown,
+                )
+                raise RuntimeError(
+                    f"Migration [{mig['name']}] 連線中斷 — 交易結果 UNKNOWN，"
+                    f"必須人工確認資料庫狀態後再重新執行：{exc}\n"
+                    f"  DDL: attempted={ddl_attempted}, committed={ddl_committed}, "
+                    f"rolled_back={ddl_rolled_back}, unknown={ddl_unknown}\n"
+                    "請確認 Schema 狀態後重新執行。"
+                ) from exc
+            else:
+                # Application-level error — SQLAlchemy auto-rollback on exception
+                record["result"] = "ROLLED_BACK"
+                ddl_rolled_back += 1
+                logger.error(f"  [{mig['name']}] ROLLED_BACK: {exc}")
+                audit_log.append(record)
+                _log_ddl_audit(
+                    audit_log,
+                    ddl_planned,
+                    ddl_attempted,
+                    ddl_committed,
+                    ddl_rolled_back,
+                    ddl_unknown,
+                )
+                raise RuntimeError(
+                    f"已核准 Migration [{mig['name']}] 執行失敗：{exc}\n"
+                    f"  DDL: attempted={ddl_attempted}, committed={ddl_committed}, "
+                    f"rolled_back={ddl_rolled_back}\n"
+                    "請人工確認資料庫狀態後重新執行。"
+                ) from exc
         audit_log.append(record)
 
     # ── Phase 3: Audit Log ─────────────────────────────────────────────
     _log_ddl_audit(
-        audit_log, ddl_planned, ddl_attempted, ddl_committed, ddl_rolled_back
+        audit_log,
+        ddl_planned,
+        ddl_attempted,
+        ddl_committed,
+        ddl_rolled_back,
+        ddl_unknown,
     )
     # Return planned count for dry-run, committed count for real runs.
     return ddl_planned if dry_run else ddl_committed

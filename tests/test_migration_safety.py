@@ -1871,9 +1871,19 @@ class TestV12PredicateVerification:
         unique=True,
         schema="public",
         cols=None,
+        indnkeyatts=None,
+        indnatts=None,
     ):
-        """Build a correctly-structured catalog row."""
-        return (unique, valid, ready, predicate, schema, cols or ["idempotency_key"])
+        """Build a correctly-structured 8-field catalog row.
+
+        Row format: (indisunique, indisvalid, indisready, predicate, tbl_schema,
+                     key_columns, indnkeyatts_count, indnatts)
+        indnkeyatts defaults to len(cols); indnatts defaults to indnkeyatts (no INCLUDE).
+        """
+        cols = cols if cols is not None else ["idempotency_key"]
+        nkey = indnkeyatts if indnkeyatts is not None else len(cols)
+        nall = indnatts if indnatts is not None else nkey
+        return (unique, valid, ready, predicate, schema, cols, nkey, nall)
 
     def _mock_pg_insp(self, rows):
         """Return a mock PG inspector whose engine.connect() yields rows via fetchall().
@@ -2067,6 +2077,32 @@ class TestV12PredicateVerification:
         assert state == mod._MIG_BLOCKED
         assert "catalog" in reason or "verify" in reason.lower()
 
+    # ── Expression Index → BLOCKED ───────────────────────────────────────
+    def test_pg_expression_index_raises_blocked(self):
+        """Index with expression column (attnum=0, key_columns shorter than indnkeyatts)
+        → BLOCKED (expression indexes are not part of this platform's contract)."""
+        import pytest
+
+        mod = self._load_mod()
+        # cols=[] simulates attnum=0 expression column excluded from key_columns,
+        # while indnkeyatts=1 says there IS one key column position → mismatch.
+        insp = self._mock_pg_insp([self._good_row(cols=[], indnkeyatts=1, indnatts=1)])
+        with pytest.raises(mod.MigrationBlockedError, match="Expression"):
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
+
+    # ── INCLUDE Columns → BLOCKED ────────────────────────────────────────
+    def test_pg_include_columns_raises_blocked(self):
+        """Index with INCLUDE columns (indnatts > indnkeyatts) → BLOCKED."""
+        import pytest
+
+        mod = self._load_mod()
+        # indnkeyatts=1, indnatts=2 → one INCLUDE column present
+        insp = self._mock_pg_insp(
+            [self._good_row(cols=["idempotency_key"], indnkeyatts=1, indnatts=2)]
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="INCLUDE"):
+            mod._verify_idempotency_unique_index(insp, "trade_executions")
+
 
 # ── 12. v1.3 / v1.5 FK Strict Verification ───────────────────
 
@@ -2094,14 +2130,24 @@ class TestFKStrictVerification:
         """Mock PG inspector with given FK list.
 
         cat_row: (convalidated, confdeltype_ch, confupdtype_ch) returned by
-                 pg_constraint fetchone(), or None for metadata-inconsistency tests.
+                 pg_constraint fetchall() as a single-element list, or None to
+                 simulate 0 rows (metadata-inconsistency / wrong schema).
           'r'=RESTRICT  'c'=CASCADE  'a'=NO ACTION  'n'=SET NULL  'd'=SET DEFAULT
+
+        Pass cat_row as a LIST to inject multiple rows (e.g. duplicate FK test).
         """
         from unittest.mock import MagicMock
 
+        if cat_row is None:
+            cat_rows = []
+        elif isinstance(cat_row, list):
+            cat_rows = cat_row  # caller provides raw list (multi-row test)
+        else:
+            cat_rows = [cat_row]
+
         mock_conn = MagicMock()
         mock_result = MagicMock()
-        mock_result.fetchone.return_value = cat_row
+        mock_result.fetchall.return_value = cat_rows
         mock_conn.execute.return_value = mock_result
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -2416,6 +2462,51 @@ class TestFKStrictVerification:
         with pytest.raises(mod.MigrationBlockedError, match="ON DELETE"):
             v15["verify"](insp, "position_plan_changes")
 
+    # ── FK catalog: multiple rows → BLOCKED ───────────────────────────────
+    def test_multiple_fk_catalog_rows_raises_blocked(self):
+        """pg_constraint returns 2 rows for same col → BLOCKED (unexpected duplicate)."""
+        import pytest
+
+        mod = self._load_mod()
+        row = (True, "r", "a")
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+            cat_row=[row, row],  # list → injected directly as fetchall result
+        )
+        with pytest.raises(mod.MigrationBlockedError, match="多筆"):
+            mod._verify_fk(
+                insp,
+                "actual_positions",
+                "forward_signal_id",
+                "forward_signals",
+                "id",
+                "RESTRICT",
+            )
+
+    # ── FK catalog: src_schema param passed to execute ────────────────────
+    def test_src_schema_passed_to_catalog_query(self):
+        """_verify_fk() passes src_schema to the catalog execute() call."""
+        mod = self._load_mod()
+        insp = self._mock_pg_insp(
+            [self._good_fk("forward_signal_id", "forward_signals", "id")],
+        )
+        mod._verify_fk(
+            insp,
+            "actual_positions",
+            "forward_signal_id",
+            "forward_signals",
+            "id",
+            "RESTRICT",
+            src_schema="myschema",
+            on_update="NO ACTION",
+        )
+        # Verify the catalog execute() received src_schema='myschema'
+        exec_call = insp.engine.connect.return_value.__enter__.return_value.execute.call_args_list[
+            -1
+        ]
+        passed_params = exec_call[0][1]
+        assert passed_params.get("src_schema") == "myschema"
+
 
 # ── 13. Global Preflight Tests ────────────────────────────────
 
@@ -2674,3 +2765,126 @@ class TestGlobalPreflight:
         mod = self._load_mod()
         assert hasattr(mod, "_preflight_migration_plan")
         assert callable(mod._preflight_migration_plan)
+
+
+# ── 14. DDL Audit: UNKNOWN / ROLLED_BACK distinction ─────────
+
+
+class TestDDLAuditUnknown:
+    """Tests for DDL UNKNOWN state (OperationalError/InterfaceError during commit)."""
+
+    def _load_mod(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "migrate_trade_lifecycle",
+            str(
+                Path(__file__).parent.parent / "scripts" / "migrate_trade_lifecycle.py"
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _engine(self):
+        from sqlalchemy import create_engine
+
+        return create_engine("sqlite:///:memory:")
+
+    def _fake_mig(self, sql="SELECT 1"):
+        return {
+            "name": "test_mig",
+            "table": "t",
+            "description": "test",
+            "verify": lambda i, tbl: False,
+            "sql_sqlite": sql,
+        }
+
+    # ── OperationalError → UNKNOWN, blocks subsequent migrations ──────────
+    def test_operational_error_marked_unknown(self):
+        """OperationalError during execute → result=UNKNOWN, error message contains
+        UNKNOWN (not ROLLED_BACK)."""
+        from unittest.mock import MagicMock, patch
+
+        import pytest
+        from sqlalchemy.exc import OperationalError
+
+        mod = self._load_mod()
+        engine = self._engine()
+
+        mig = self._fake_mig()
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [mig]
+
+        op_err = OperationalError(
+            "COMMIT", {}, Exception("server closed the connection")
+        )
+
+        try:
+            with patch.object(engine, "begin") as mock_begin:
+                mock_ctx = MagicMock()
+                mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+                mock_ctx.__exit__ = MagicMock(
+                    side_effect=lambda *a: (_ for _ in ()).throw(op_err)
+                )
+                mock_begin.return_value = mock_ctx
+
+                with pytest.raises(RuntimeError) as exc_info:
+                    mod._apply_pending_migrations(engine, ["t"], dry_run=False)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        err = str(exc_info.value)
+        assert "UNKNOWN" in err
+        assert "ROLLED_BACK" not in err
+
+    # ── IntegrityError → ROLLED_BACK (not UNKNOWN) ───────────────────────
+    def test_integrity_error_marked_rolled_back(self):
+        """IntegrityError (application-level) → result=ROLLED_BACK (not UNKNOWN)."""
+        from unittest.mock import MagicMock, patch
+
+        import pytest
+        from sqlalchemy.exc import IntegrityError
+
+        mod = self._load_mod()
+        engine = self._engine()
+
+        mig = self._fake_mig()
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = [mig]
+
+        int_err = IntegrityError("INSERT", {}, Exception("unique violation"))
+
+        try:
+            with patch.object(engine, "begin") as mock_begin:
+                mock_ctx = MagicMock()
+                mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+                mock_ctx.__exit__ = MagicMock(
+                    side_effect=lambda *a: (_ for _ in ()).throw(int_err)
+                )
+                mock_begin.return_value = mock_ctx
+
+                with pytest.raises(RuntimeError) as exc_info:
+                    mod._apply_pending_migrations(engine, ["t"], dry_run=False)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        err = str(exc_info.value)
+        assert "ROLLED_BACK" in err or "執行失敗" in err
+        assert "UNKNOWN" not in err
+
+    # ── Dry-run never touches DDL counters ───────────────────────────────
+    def test_dry_run_returns_planned_count(self):
+        """dry_run=True → returns ddl_planned count, not ddl_committed."""
+        mod = self._load_mod()
+        engine = self._engine()
+
+        migs = [self._fake_mig(), {**self._fake_mig(), "name": "test_mig2"}]
+        original = mod._APPROVED_MIGRATIONS
+        mod._APPROVED_MIGRATIONS = migs
+        try:
+            n = mod._apply_pending_migrations(engine, ["t"], dry_run=True)
+        finally:
+            mod._APPROVED_MIGRATIONS = original
+
+        assert n == 2, f"dry_run should return ddl_planned=2, got {n}"
