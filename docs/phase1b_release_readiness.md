@@ -1,6 +1,6 @@
 # Phase 1B Release Readiness — Release Freeze Verification
 
-**Document date:** 2026-11-04  
+**Document date:** 2026-11-04 (updated 2026-11-04 — UI P&L fix applied)  
 **Status:** DEPLOYMENT PREPARED (pending human approval of Production Migration)  
 **Author:** Senior Release Engineer / QA Lead
 
@@ -10,39 +10,55 @@
 
 | Field | Value |
 |-------|-------|
-| Release Candidate SHA | **9b8203d** (HEAD, main) |
-| Last code-change SHA | **91e8d7b** — `fix(security): remove ResearchBase.metadata.create_all()` |
+| Release Candidate SHA | **d27e1b2** (HEAD, main) |
+| Previous freeze SHA | **9b8203d** (docs-only) |
+| Last accepted code SHA before P&L fix | **91e8d7b** |
+| This commit | **d27e1b2** — `fix(ui): replace gross P&L toast with net realized_pnl from Trade Service` |
 | Branch | main |
 | Working tree | Clean (nothing uncommitted) |
 | HEAD vs origin/main | In sync — `up to date with origin/main` |
-| Commits after last code change | 2 docs-only commits (`f75dc8c`, `9b8203d`) |
 
-### Code-freeze verification
+### Commit history since original acceptance
 
-Diff of all code files (`*.py`, `*.yml`, `*.yaml`) between acceptance code-change (`91e8d7b`) and HEAD (`9b8203d`):
+| SHA | Type | Description |
+|-----|------|-------------|
+| d27e1b2 | **fix(ui)** | Replace gross P&L toast — `dashboard/_pages/position.py` + `tests/test_position_pnl_display.py` |
+| 05119b5 | docs | Release readiness + migration runbook |
+| 9b8203d | docs | Phase 1B acceptance report (E2E gate) |
+| f75dc8c | docs | Phase 1B acceptance report (PG integration gate) |
+| **91e8d7b** | **fix(security)** | Last code change before UI fix |
 
-```
-(empty — zero code files changed)
-```
+### Code-freeze scope
 
-Only `.coverage` (binary artifact) and `docs/phase1b_acceptance_report.md` changed after `91e8d7b`.  
-**Conclusion: Release Candidate is code-identical to accepted commit `91e8d7b`.**
+**Non-frozen files (changed in d27e1b2):**
+- `dashboard/_pages/position.py` — UI toast display only (2 form handlers)
+- `tests/test_position_pnl_display.py` — New test file (15 tests)
+
+**Verified frozen (no changes):**
+- `src/services/trade_service.py` — Accounting rules unchanged ✅
+- `src/database.py` — Models unchanged ✅
+- `scripts/migrate_trade_lifecycle.py` — Migration unchanged ✅
+- `src/analyzers/` — Strategy logic unchanged ✅
+- All ForwardSignal / PAPER position code — Unchanged ✅
+- Entry Timing V2, v8.0 breakout, foe_v1 — Unchanged ✅
+
+**Conclusion: d27e1b2 adds UI display fix only. No accounting rule, migration, or model changed.**
 
 ---
 
 ## B. Acceptance Evidence Traceability
 
-### B.1 Regression Tests (HEAD = 9b8203d)
+### B.1 Regression Tests (HEAD = d27e1b2)
 
-Re-executed against current HEAD:
+Re-executed against current HEAD (after UI fix):
 
 ```
-1192 passed, 1150 warnings in 29.05s
+1207 passed, 901 warnings in 28.27s
 ```
 
 | Metric | Requirement | Actual |
 |--------|-------------|--------|
-| Pass count | 1192 | **1192 ✅** |
+| Pass count | 1192 (original) → **1207** (+ 15 new) | **1207 ✅** |
 | Fail count | 0 | **0 ✅** |
 | Coverage (CI scope) | ≥ 75% | **83.00% ✅** |
 
