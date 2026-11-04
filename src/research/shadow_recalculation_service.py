@@ -89,7 +89,6 @@ class ShadowRecalculationService:
         from sqlalchemy.exc import IntegrityError
 
         from src.analyzers.entry_timing import EntryTimingAnalyzer
-        from src.database import DailyPrice
         from src.research.models import V2ShadowSignal
 
         report = RecalcReport(
