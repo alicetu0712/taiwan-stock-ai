@@ -206,10 +206,11 @@ def page_entry_timing_research() -> None:
         else:
             st.success("v2_research_v2：最新版本（post-DESC fix），is_legacy=False。")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📋 訊號列表",
         "📊 完整回測（FOS）",
         "🔬 有效性分析",
+        "🔀 Hybrid 策略",
         "⚠️ 已知限制",
     ])
 
@@ -223,6 +224,9 @@ def page_entry_timing_research() -> None:
         _render_effectiveness_analysis()
 
     with tab4:
+        _render_hybrid_analysis()
+
+    with tab5:
         _render_known_limitations()
 
 
@@ -864,6 +868,389 @@ def _render_effectiveness_analysis() -> None:
             if rows:
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         st.caption("⚠️ 不得選擇表現最佳的參數版本作為正式設定。")
+
+
+@st.cache_data(ttl=600)
+def _load_hybrid_json() -> dict:
+    import json
+    import os
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "data", "hybrid_backtest.json",
+    )
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _render_hybrid_analysis() -> None:
+    st.markdown("### 🔀 Hybrid Entry Strategy V1 — 三策略比較")
+
+    # In-sample warning banner
+    st.markdown(
+        '<div style="background:#fff7ed;border:2px solid #f97316;'
+        'border-radius:6px;padding:10px 14px;margin-bottom:16px">'
+        '<span style="color:#c2410c;font-weight:700">⚠️ RETROSPECTIVE / IN-SAMPLE</span><br>'
+        'Hybrid V1 規則由同一組 2024-10 至 2026-09 研究資料推導出。'
+        '所有回顧性結果均屬<strong>樣本內 (IN-SAMPLE)</strong>，無法視為獨立驗證。<br>'
+        '真正的 OOS 驗證 = 2026-11-05 規則凍結後的前瞻影子 (Forward Shadow)。'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    data = _load_hybrid_json()
+
+    if not data:
+        st.info(
+            "尚無 Hybrid 分析結果。請執行：\n\n"
+            "`python scripts/run_hybrid_backtest.py`\n\n"
+            "結果將存入 data/hybrid_backtest.json。"
+        )
+        _render_hybrid_rule_reference()
+        return
+
+    # Meta
+    meta = data.get("meta", {})
+    if meta:
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("規則版本", meta.get("rule_version", "—"))
+        col_b.metric("規則凍結時間", meta.get("rule_frozen_at", "—")[:10])
+        col_c.metric("有效訊號數", f"{meta.get('n_valid_signals', '—'):,}" if isinstance(meta.get('n_valid_signals'), int) else "—")
+        st.caption(f"分析期間：{meta.get('signal_period', '—')} | 凍結 commit：{meta.get('rule_frozen_commit', '—')}")
+
+    htabs = st.tabs(["📊 三策略比較", "🎯 動作分佈", "🔍 子群分析", "🔮 前瞻影子", "📋 規則說明"])
+
+    # ── Tab: Three-strategy comparison ────────────────────────────────────────
+    with htabs[0]:
+        import pandas as pd
+        comp = data.get("comparison", {})
+        strategies = comp.get("strategies", {})
+        if strategies:
+            rows = []
+            for key, s in strategies.items():
+                rows.append({
+                    "策略": {"v1": "V1 (立即進場)", "v2_fos": "V2 FOS (等待進場)", "hybrid": "Hybrid V1 (條件選擇)"}.get(key, key),
+                    "訊號數": s.get("n", "—"),
+                    "平均淨報酬": f"{s.get('mean_net_ret', 0):+.3f}%" if s.get('mean_net_ret') is not None else "—",
+                    "勝率": f"{s.get('win_rate', 0):.1f}%" if s.get('win_rate') is not None else "—",
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        deltas = comp.get("paired_deltas", {})
+        if deltas:
+            st.markdown("#### 配對差值分析")
+            delta_rows = []
+            pair_labels = {
+                "v2_vs_v1": "V2 vs V1",
+                "hybrid_vs_v1": "Hybrid vs V1 ⭐",
+                "hybrid_vs_v2": "Hybrid vs V2",
+            }
+            for pair_key, pair_label in pair_labels.items():
+                s = deltas.get(pair_key, {})
+                ci = s.get("ci_95") or {}
+                verdict = s.get("ci_verdict", "—")
+                verdict_icon = {"POSITIVE_CI": "✅", "NEGATIVE_CI": "🔴", "CI_SPANS_ZERO": "⚪"}.get(verdict, "—")
+                delta_rows.append({
+                    "比較": pair_label,
+                    "平均差值": f"{s.get('mean', 0):+.3f}%" if s.get('mean') is not None else "—",
+                    "95% CI 下界": f"{ci.get('lo', '—'):.3f}%" if isinstance(ci.get('lo'), float) else "—",
+                    "95% CI 上界": f"{ci.get('hi', '—'):.3f}%" if isinstance(ci.get('hi'), float) else "—",
+                    "結論": f"{verdict_icon} {verdict}",
+                })
+            st.dataframe(pd.DataFrame(delta_rows), use_container_width=True, hide_index=True)
+
+        switch = data.get("switch_summary", {})
+        if switch:
+            st.markdown("#### Hybrid 動作切換摘要（WAIT_FOR_PULLBACK 訊號）")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("WAIT_FOR_PULLBACK 總數", switch.get("total_wait_for_pullback", "—"))
+            col2.metric("保持等待 (Bear/Flat → 維持V2)", switch.get("kept_waiting", "—"))
+            col3.metric("切換直接進場 (Bull/Rising → 改用V1)", switch.get("switched_to_direct", "—"))
+
+        st.caption(
+            "⚠️ 所有數字均為回顧性 (IN-SAMPLE)。Hybrid 規則由同一資料推導，無法視為 OOS。"
+        )
+
+    # ── Tab: Action distribution ───────────────────────────────────────────────
+    with htabs[1]:
+        import pandas as pd
+        dist = data.get("action_distribution", {})
+        if not dist:
+            st.info("無動作分佈資料。")
+        else:
+            st.markdown(f"**訊號總數：{dist.get('total', 0):,}**")
+            ac = dist.get("action_counts", {})
+            if ac:
+                st.markdown("#### 整體動作分佈")
+                rows = [{"動作": k, "數量": v, "佔比": f"{v / dist['total'] * 100:.1f}%"}
+                        for k, v in sorted(ac.items(), key=lambda x: -x[1])]
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            by_label = dist.get("by_entry_label", {})
+            if by_label:
+                st.markdown("#### 依 Entry Label 分佈")
+                rows = []
+                for lbl, actions in sorted(by_label.items()):
+                    total_lbl = sum(actions.values())
+                    for action, cnt in sorted(actions.items()):
+                        rows.append({"Entry Label": lbl, "Hybrid 動作": action,
+                                     "數量": cnt, "佔比": f"{cnt/total_lbl*100:.1f}%"})
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            by_regime = dist.get("by_market_regime", {})
+            if by_regime:
+                st.markdown("#### 依市場狀態分佈")
+                rows = []
+                for regime, actions in sorted(by_regime.items()):
+                    total_r = sum(actions.values())
+                    for action, cnt in sorted(actions.items()):
+                        rows.append({"市場狀態": regime, "Hybrid 動作": action,
+                                     "數量": cnt, "佔比": f"{cnt/total_r*100:.1f}%"})
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── Tab: Subgroup analysis ─────────────────────────────────────────────────
+    with htabs[2]:
+        import pandas as pd
+        sub = data.get("subgroup_analysis", {})
+        if not sub:
+            st.info("無子群分析資料。")
+        else:
+            def _render_sub_table(title: str, groups: dict) -> None:
+                st.markdown(f"#### {title}")
+                rows = []
+                for key, s in sorted(groups.items()):
+                    ci = s.get("ci_95") or {}
+                    verdict = s.get("ci_verdict", "—")
+                    verdict_icon = {"POSITIVE_CI": "✅", "NEGATIVE_CI": "🔴", "CI_SPANS_ZERO": "⚪", "INSUFFICIENT_SAMPLE": "⚫"}.get(verdict, "—")
+                    rows.append({
+                        "群組": key,
+                        "N": s.get("n", "—"),
+                        "Hybrid vs V1 均值": f"{s.get('mean_delta', 0):+.3f}%" if s.get('mean_delta') is not None else "—",
+                        "95% CI": f"[{ci.get('lo','—')}, {ci.get('hi','—')}]" if ci else "—",
+                        "結論": f"{verdict_icon} {verdict}",
+                    })
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            _render_sub_table("依 Hybrid 動作", sub.get("by_hybrid_action", {}))
+            _render_sub_table("依市場狀態", sub.get("by_market_regime", {}))
+            _render_sub_table("依 MA20 趨勢", sub.get("by_ma20_trend", {}))
+            _render_sub_table("依 Entry Label", sub.get("by_entry_label", {}))
+
+        st.caption("⚠️ 所有子群分析均為 IN-SAMPLE。需 Bonferroni 校正（~20 次比較 → α=0.0025）。")
+
+    # ── Tab: Forward shadow ────────────────────────────────────────────────────
+    with htabs[3]:
+        _render_hybrid_forward_shadow_status()
+
+    # ── Tab: Rule reference ────────────────────────────────────────────────────
+    with htabs[4]:
+        _render_hybrid_rule_reference()
+
+
+def _render_hybrid_forward_shadow_status() -> None:
+    """Display forward shadow operational health from hybrid_forward_decision/outcome tables."""
+    import sqlite3
+    import os
+    import pandas as pd
+
+    st.markdown("### 🔮 Hybrid 前瞻影子（True OOS）")
+    st.markdown(
+        "**規則凍結日：2026-11-05**  \n"
+        "只有 `capture_classification = PROSPECTIVE`（signal_date ≥ 2026-11-05 "
+        "且在規定時間內捕捉）的記錄才是真正的前瞻 OOS 驗證。"
+    )
+
+    db_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "data", "platform.db",
+    )
+    if not os.path.exists(db_path):
+        st.warning("找不到 data/platform.db。")
+        return
+
+    conn = sqlite3.connect(db_path)
+    try:
+        # Check new schema tables
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+
+        has_new_schema = "hybrid_forward_decision" in tables
+        has_old_schema = "hybrid_forward_shadow" in tables
+
+        if not has_new_schema and not has_old_schema:
+            st.info(
+                "forward shadow 表尚未建立。\n\n"
+                "執行：`python scripts/run_hybrid_forward_shadow.py`\n\n"
+                "每日市場收盤後定期執行以累積真實 OOS 記錄。"
+            )
+            conn.close()
+            return
+
+        if not has_new_schema and has_old_schema:
+            st.warning(
+                "⚠️ 偵測到舊版 `hybrid_forward_shadow` 表（V1 schema）。"
+                "請執行 `run_hybrid_forward_shadow.py` 一次以建立新版 V2 schema。"
+            )
+            conn.close()
+            return
+
+        # ── G1. Operational Health ─────────────────────────────────────────────
+        from src.research.hybrid_forward_db import (
+            get_operational_summary, get_matured_performance
+        )
+        summary = get_operational_summary(conn)
+
+        st.markdown("#### G1. 系統健康")
+        latest = summary.get("latest_run")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("最新執行日", latest["trade_date"] if latest else "—")
+        status_val = latest["status"] if latest else "—"
+        status_color = "✅" if status_val == "SUCCESS" else ("⚠️" if status_val in ("PARTIAL", "CONFLICT") else "🔴")
+        col2.metric("執行狀態", f"{status_color} {status_val}")
+        col3.metric("連續失敗次數", summary.get("consecutive_failures", 0))
+        col4.metric("衝突計數", latest["conflict_count"] if latest else 0)
+
+        # Data freshness from run log
+        if latest and latest.get("input_data_date"):
+            last_data = latest["input_data_date"]
+            st.caption(f"資料日期：{last_data} | 規則版本：hybrid_v1 | 規則凍結 commit：6602c3b")
+
+        # ── G2. Forward Cohort ────────────────────────────────────────────────
+        st.markdown("#### G2. 前瞻記錄池")
+        cls_counts = summary.get("decisions_by_classification", {})
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("PROSPECTIVE（真正 OOS）", summary.get("prospective_decisions", 0))
+        col2.metric("LATE_CAPTURE", cls_counts.get("LATE_CAPTURE", 0))
+        col3.metric("RETROSPECTIVE", cls_counts.get("RETROSPECTIVE_RECONSTRUCTION", 0))
+        col4.metric("INVALID_DATA", cls_counts.get("INVALID_DATA", 0))
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("成熟 5D", summary.get("matured_5d", 0))
+        col2.metric("成熟 10D", summary.get("matured_10d", 0))
+        col3.metric("成熟 20D", summary.get("matured_20d", 0))
+        pending = summary.get("prospective_decisions", 0) - summary.get("matured_20d", 0)
+        col4.metric("待成熟", max(0, pending))
+
+        if summary.get("prospective_decisions", 0) > 0:
+            col1b, col2b, _, _ = st.columns(4)
+            col1b.metric("唯一個股", summary.get("prospective_stocks", 0))
+            col2b.metric("唯一交易日", summary.get("prospective_trade_dates", 0))
+
+        # ── G3. Forward Performance ────────────────────────────────────────────
+        st.markdown("#### G3. 前瞻績效（僅 PROSPECTIVE 成熟記錄）")
+
+        matured_20d = summary.get("matured_20d", 0)
+        if matured_20d == 0:
+            st.markdown(
+                '<div style="background:#f0f9ff;border:1px solid #0284c7;'
+                'border-radius:4px;padding:10px 14px;margin:8px 0">'
+                '📊 <strong>尚無足夠前瞻樣本，等待未來交易日資料成熟。</strong><br>'
+                '需要至少 50 個成熟 PROSPECTIVE 記錄才能顯示有統計意義的績效。<br>'
+                '每日執行 <code>run_hybrid_forward_shadow.py</code> 累積記錄。'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            perf_rows = []
+            for h in ("5d", "10d", "20d"):
+                perf = get_matured_performance(conn, h)
+                if perf:
+                    n = perf["n_matured"]
+                    hyb_v1 = perf.get("hybrid_vs_v1_mean_delta")
+                    perf_rows.append({
+                        "持有期": h.upper(),
+                        "N（成熟）": n,
+                        "V1 均值": f"{perf.get('v1_mean_ret', 0):+.3f}%" if perf.get("v1_mean_ret") else "—",
+                        "V2 均值": f"{perf.get('v2_mean_ret', 0):+.3f}%" if perf.get("v2_mean_ret") else "—",
+                        "Hybrid 均值": f"{perf.get('hybrid_mean_ret', 0):+.3f}%" if perf.get("hybrid_mean_ret") else "—",
+                        "Hybrid vs V1 Δ": f"{hyb_v1:+.3f}%" if hyb_v1 is not None else "—",
+                        "統計意義": "樣本不足（<200）" if n < 200 else "需 CI 計算",
+                    })
+            if perf_rows:
+                st.dataframe(pd.DataFrame(perf_rows), use_container_width=True, hide_index=True)
+                if matured_20d < 200:
+                    st.warning(
+                        f"⚠️ 目前 OOS 20D 成熟樣本 ({matured_20d}) 不足 200，結果無統計意義。"
+                        "需累積至少 200 個成熟 PROSPECTIVE 記錄（約 2027-06）。"
+                    )
+
+        # ── Recent run log ─────────────────────────────────────────────────────
+        st.markdown("#### 最近執行記錄")
+        runs = conn.execute(
+            "SELECT trade_date, status, started_at, inserted_count, "
+            "skipped_count, conflict_count, error_count, outcome_filled_count, error_summary "
+            "FROM hybrid_forward_run_log ORDER BY started_at DESC LIMIT 10"
+        ).fetchall()
+        if runs:
+            run_rows = []
+            for r in runs:
+                run_rows.append({
+                    "日期": r[0],
+                    "狀態": r[1],
+                    "新增": r[3],
+                    "略過": r[4],
+                    "衝突": r[5],
+                    "錯誤": r[6],
+                    "結果回填": r[7],
+                    "說明": r[8] or "",
+                })
+            st.dataframe(pd.DataFrame(run_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("尚無執行記錄。")
+
+        # ── G4. Plain language explanations ───────────────────────────────────
+        with st.expander("📖 名詞白話解釋"):
+            st.markdown(
+                "**PROSPECTIVE（前瞻）：** 在訊號發出當天就已保存的決策，不是事後重建。"
+                "只有這類記錄才能作為策略驗證的依據。  \n\n"
+                "**成熟（Matured）：** 決策已經經過指定交易日數（5/10/20D），可以計算結果。  \n\n"
+                "**Paired Delta：** 同一批訊號使用不同策略，平均績效差多少。  \n\n"
+                "**Conflict：** 同一訊號重跑時產生不同結果，需要檢查資料或規則。  \n\n"
+                "**LATE_CAPTURE：** 訊號日期合規，但記錄是在事後才補存入的，可信度低於 PROSPECTIVE。  \n\n"
+                "**RETROSPECTIVE_RECONSTRUCTION：** 規則凍結前的歷史訊號，不能視為 OOS 驗證。"
+            )
+
+    finally:
+        conn.close()
+
+
+def _render_hybrid_rule_reference() -> None:
+    st.markdown("### 📋 Hybrid V1 規則說明")
+    st.markdown(
+        """
+| 優先級 | 條件 | Hybrid 動作 | 說明 |
+|--------|------|-------------|------|
+| P1（最高） | Bear 市場 + WAIT_FOR_PULLBACK | WAIT_PULLBACK | 熊市中繼續等待，避免買入下跌途中 |
+| P2 | Flat MA20 + WAIT_FOR_PULLBACK | WAIT_PULLBACK | 趨勢不明確時，回調進場更謹慎 |
+| P3 | Bull 市場 + Rising MA20 | DIRECT_NEXT_OPEN | 動能明確，直接進場捕捉上漲 |
+| P4（預設） | 其他所有情況 | DIRECT_NEXT_OPEN | 不符合 P1–P3 → 採 V1 立即進場 |
+        """
+    )
+    st.markdown("#### 規則凍結資訊")
+    st.code(
+        "rule_version:   hybrid_v1\n"
+        "frozen_at:      2026-11-05T00:00:00\n"
+        "frozen_commit:  6602c3b\n"
+    )
+    st.markdown(
+        "**市場狀態（Market Regime）定義：**\n\n"
+        "- bull: 0050 收盤 > MA20 且 MA20 10-bar 斜率 > 0.3%\n"
+        "- bear: 0050 收盤 < MA20 且 MA20 10-bar 斜率 < -0.3%\n"
+        "- neutral: 其他\n\n"
+        "**MA20 趨勢定義：**\n\n"
+        "- rising: 10-bar MA20 斜率 > 0.3%\n"
+        "- falling: 10-bar MA20 斜率 < -0.3%\n"
+        "- flat: 介於兩者之間\n\n"
+        "**重要：** WAIT_FOR_BREAKOUT 訊號一律直接進場（P4 預設）。"
+        "規則僅對 WAIT_FOR_PULLBACK 訊號有效。"
+    )
+    st.caption(
+        "來源：docs/hybrid_entry_v1_preregistration.md | "
+        "研究基礎：docs/entry_timing_v2_effectiveness_analysis.md"
+    )
 
 
 def _render_known_limitations() -> None:
