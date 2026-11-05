@@ -48,12 +48,15 @@ class EntryTimingResearchService:
             )
 
             for fs in signals:
-                # Skip if already computed
+                # Skip if v2_research_v1 row already exists for this (date, stock).
+                # Must filter by research_version to avoid blocking v1 creation when
+                # v2_research_v2 rows already exist for the same stock/date.
                 exists = (
                     session.query(V2ShadowSignal)
                     .filter(
                         V2ShadowSignal.trade_date == trade_date,
                         V2ShadowSignal.stock_id == fs.stock_id,
+                        V2ShadowSignal.research_version == "v2_research_v1",
                     )
                     .first()
                 )

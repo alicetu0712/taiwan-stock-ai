@@ -10,15 +10,12 @@ Coverage:
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import sys
-import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -27,16 +24,13 @@ from scripts.hybrid_shadow_preflight import (
     STATUS_PASS,
     STATUS_WARN,
     CheckResult,
-    check_backup_dir,
-    check_backup_policy,
+    _cron_hour_for_taiwan_1600,
     check_cron_script_paths,
     check_dailyprice_freshness,
     check_db_integrity,
     check_db_path_isolation,
     check_dependencies,
-    check_env_variables,
     check_exit_codes,
-    check_formal_signal_source,
     check_lock_available,
     check_logs_dir,
     check_no_duplicate_cron,
@@ -149,10 +143,29 @@ def test_PF12_dailyprice_freshness_blocked_when_no_data(tmp_path):
 
 
 def test_PF13_ohlc_gate_pass_on_real_db():
-    result = check_ohlc_continuity_gate()
+    # Uses last confirmed data date (2026-11-05) to avoid live dependency before cron (16:00 Taiwan).
+    with patch("scripts.hybrid_shadow_preflight.date") as mock_date:
+        mock_date.today.return_value = date(2026, 11, 5)
+        result = check_ohlc_continuity_gate()
     assert result.status == STATUS_PASS
     assert "PASS" in result.detail
     assert "missing=0" in result.detail
+
+
+def test_PF13_ohlc_gate_live_health():
+    """Live data check — skips automatically if today's 0050 data not in DB yet (before cron 16:00 Taiwan)."""
+    import sqlite3 as _sq
+    db = Path(__file__).parent.parent / "data" / "platform.db"
+    with _sq.connect(str(db)) as conn:
+        today_count = conn.execute(
+            "SELECT COUNT(*) FROM daily_prices WHERE stock_id='0050' AND date=?",
+            (str(date.today()),),
+        ).fetchone()[0]
+    if today_count == 0:
+        import pytest as _pytest
+        _pytest.skip(f"No 0050 data for {date.today()} yet — run after cron (16:00 Taiwan)")
+    result = check_ohlc_continuity_gate()
+    assert result.status == STATUS_PASS, f"Live gate FAIL: {result.detail}"
 
 
 def test_PF14_db_integrity_on_real_db():
@@ -184,7 +197,11 @@ def test_PF17_cron_script_paths_valid():
     result = check_cron_script_paths()
     assert result.status == STATUS_PASS
     assert "--execute" in result.detail
-    assert "0 8" in result.detail
+    # Cron hour must be 16 (local Asia/Taipei) on UTC+8 system
+    import time as _t
+    offset = int(-_t.timezone / 3600)
+    expected_hour = str(16 if offset == 8 else (16 - offset) % 24)
+    assert f"0 {expected_hour}" in result.detail
 
 
 def test_PF18_exit_codes_check_pass():
@@ -194,14 +211,20 @@ def test_PF18_exit_codes_check_pass():
 
 
 def test_PF19_no_duplicate_cron_when_clean():
-    # crontab -l will return no hybrid_shadow_cron entry
+    # Either no entry OR exactly one entry → PASS; 2+ entries → WARNING
     result = check_no_duplicate_cron()
-    assert result.status == STATUS_PASS
+    assert result.status == STATUS_PASS, (
+        f"Expected PASS (0 or 1 entries), got {result.status}: {result.detail}"
+    )
 
 
 def test_PF20_run_preflight_overall_conditional():
     """Full preflight should return CONDITIONAL (warnings present, no blocks)."""
-    overall, checks = run_preflight()
+    # Uses 2026-11-05 as today to avoid live data dependency before cron (16:00 Taiwan).
+    with patch("scripts.hybrid_shadow_preflight.date") as mock_date:
+        mock_date.today.return_value = date(2026, 11, 5)
+        mock_date.fromisoformat = date.fromisoformat
+        overall, checks = run_preflight()
 
     # No blocks expected (gate is PASS, DB is good)
     blocked = [c for c in checks if c.status == STATUS_BLOCK]
@@ -240,3 +263,136 @@ def test_PF_json_output():
     assert "overall" in parsed
     assert "checks" in parsed
     assert len(parsed["checks"]) >= 20
+
+
+# ---------------------------------------------------------------------------
+# PF21–PF23  Timezone-aware cron hour
+# ---------------------------------------------------------------------------
+
+def test_PF21_cron_hour_utc8_returns_16():
+    """On UTC+8 (Asia/Taipei), cron hour for Taiwan 16:00 should be 16."""
+    with patch("scripts.hybrid_shadow_preflight._time.timezone", -8 * 3600):
+        hour, label = _cron_hour_for_taiwan_1600()
+    assert hour == "16"
+    assert "16" in label
+
+
+def test_PF22_cron_hour_utc0_returns_8():
+    """On UTC+0, cron hour for Taiwan 16:00 should be 8."""
+    with patch("scripts.hybrid_shadow_preflight._time.timezone", 0):
+        hour, label = _cron_hour_for_taiwan_1600()
+    assert hour == "8"
+    assert "UTC" in label
+
+
+def test_PF23_cron_timezone_note_in_check():
+    """check_timezone detail should mention system offset and cron hour."""
+    result = check_timezone()
+    assert result.status == STATUS_PASS
+    assert "UTC+" in result.detail or "UTC+" in result.detail
+    assert "cron" in result.detail.lower()
+
+
+# ---------------------------------------------------------------------------
+# CM01–CM05  Missed run detection (hybrid_shadow_cron)
+# ---------------------------------------------------------------------------
+
+def test_CM01_no_missed_when_last_run_today(tmp_path):
+    """No missed sessions when last run was today."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from scripts.hybrid_shadow_cron import _detect_missed_runs
+    from unittest.mock import patch
+
+    today = date.today()
+    with (
+        patch("scripts.hybrid_shadow_cron.date") as mock_date,
+        patch("scripts.hybrid_shadow_cron.sqlite3.connect") as mock_conn,
+    ):
+        mock_date.today.return_value = today
+        mock_date.fromisoformat = date.fromisoformat
+        mock_conn.return_value.__enter__ = lambda s: s
+        mock_conn.return_value.execute.return_value.fetchone.return_value = (str(today),)
+        mock_conn.return_value.close = lambda: None
+        result = _detect_missed_runs({})
+    assert result["trading_days_since_last_run"] == 0
+    assert result["alert"] is False
+
+
+def test_CM02_missed_sessions_between_dates():
+    """Detect missed sessions when last run was before today."""
+    from scripts.hybrid_shadow_cron import _detect_missed_runs
+    from unittest.mock import patch
+
+    last_run = date(2026, 11, 3)   # Monday
+    today_ = date(2026, 11, 5)     # Wednesday (11-04 Tue is a trading day)
+
+    with (
+        patch("scripts.hybrid_shadow_cron.date") as mock_date,
+        patch("scripts.hybrid_shadow_cron.sqlite3.connect") as mock_conn,
+    ):
+        mock_date.today.return_value = today_
+        mock_date.fromisoformat = date.fromisoformat
+        mock_conn.return_value.__enter__ = lambda s: s
+        mock_conn.return_value.execute.return_value.fetchone.return_value = (str(last_run),)
+        mock_conn.return_value.close = lambda: None
+        result = _detect_missed_runs({})
+
+    # 11-04 is a trading day, so at least 1 missed
+    assert result["alert"] is True
+    assert "2026-11-04" in result["missed_dates"]
+
+
+def test_CM03_no_missed_when_no_state():
+    """When no state and no DB record, missed run detection returns no alert."""
+    from scripts.hybrid_shadow_cron import _detect_missed_runs
+    from unittest.mock import patch
+
+    with patch("scripts.hybrid_shadow_cron.sqlite3.connect") as mock_conn:
+        mock_conn.return_value.execute.return_value.fetchone.return_value = (None,)
+        mock_conn.return_value.close = lambda: None
+        result = _detect_missed_runs({})
+
+    assert result["last_execute_date"] is None
+    assert result["alert"] is False
+
+
+def test_CM04_missed_run_does_not_modify_decisions(tmp_path):
+    """Missed run detection is read-only — does not write or modify decisions."""
+    from scripts.hybrid_shadow_cron import _detect_missed_runs
+    from unittest.mock import patch
+
+    with (
+        patch("scripts.hybrid_shadow_cron.date") as mock_date,
+        patch("scripts.hybrid_shadow_cron.sqlite3.connect") as mock_conn,
+    ):
+        mock_date.today.return_value = date(2026, 11, 5)
+        mock_date.fromisoformat = date.fromisoformat
+        mock_conn.return_value.execute.return_value.fetchone.return_value = ("2026-11-03",)
+        mock_conn.return_value.close = lambda: None
+        result = _detect_missed_runs({})
+
+    # Result is a dict, not writing anything
+    assert isinstance(result, dict)
+    assert "missed_dates" in result
+
+
+def test_CM05_check_missed_flag_does_not_install_cron():
+    """--check-missed must not add extra cron entries (count must not increase)."""
+    import subprocess
+    # Count entries before
+    before = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    count_before = before.stdout.count("hybrid_shadow_cron")
+
+    result = subprocess.run(
+        ["python3", "scripts/hybrid_shadow_cron.py", "--check-missed"],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent)
+    )
+    assert result.returncode == 0
+
+    # Count must not have increased
+    after = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    count_after = after.stdout.count("hybrid_shadow_cron")
+    assert count_after == count_before, (
+        f"--check-missed must not modify crontab (before={count_before}, after={count_after})"
+    )

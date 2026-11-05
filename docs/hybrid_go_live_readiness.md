@@ -44,17 +44,16 @@ No BLOCKED checks. Cron installation is safe to proceed once warnings acknowledg
 
 ---
 
-## Corrected Cron Entry
-
-**Previous entry in this doc was INCORRECT** — missing `--execute` flag and used `python3` without full path.
+## Verified Cron Entry
 
 ### Correct entry (use this):
 
 ```cron
-0 8 * * 1-5  /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 /Users/alicetu/Desktop/Antigravity/stock_platform/scripts/hybrid_shadow_cron.py --execute >> /Users/alicetu/Desktop/Antigravity/stock_platform/logs/hybrid_cron.log 2>&1
+0 16 * * 1-5  /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 /Users/alicetu/Desktop/Antigravity/stock_platform/scripts/hybrid_shadow_cron.py --execute >> /Users/alicetu/Desktop/Antigravity/stock_platform/logs/hybrid_cron.log 2>&1
 ```
 
-**Time:** 08:00 UTC = 16:00 Asia/Taipei (Taiwan is UTC+8, no DST)  
+**Time:** 16:00 LOCAL (Asia/Taipei, UTC+8) — macOS cron uses system timezone, NOT UTC  
+**Why `0 16` not `0 8`:** This Mac runs Asia/Taipei (UTC+8). `0 8` would fire at 08:00 Taiwan time (wrong). `0 16` fires at 16:00 Taiwan time (correct — market closes at 13:30, data published ~15:30).  
 **Days:** Mon–Fri (cron schedule + `is_trading_day()` double-check)  
 **Flag:** `--execute` is required; without it the cron only dry-runs and writes nothing
 
@@ -88,7 +87,7 @@ crontab -e
 ```
 Add this line:
 ```
-0 8 * * 1-5  /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 /Users/alicetu/Desktop/Antigravity/stock_platform/scripts/hybrid_shadow_cron.py --execute >> /Users/alicetu/Desktop/Antigravity/stock_platform/logs/hybrid_cron.log 2>&1
+0 16 * * 1-5  /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 /Users/alicetu/Desktop/Antigravity/stock_platform/scripts/hybrid_shadow_cron.py --execute >> /Users/alicetu/Desktop/Antigravity/stock_platform/logs/hybrid_cron.log 2>&1
 ```
 
 ### Step 5: Verify installation

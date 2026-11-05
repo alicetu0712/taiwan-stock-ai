@@ -12,14 +12,19 @@ SAFETY CONSTRAINTS (enforced at startup):
 
 NOT installed automatically. Configure crontab with explicit approval only.
 
-Recommended crontab line (Taiwan 16:00 = UTC 08:00):
-  0 8 * * 1-5  /path/to/python3 /path/to/stock_platform/scripts/hybrid_shadow_cron.py --execute >> /path/to/stock_platform/logs/cron.log 2>&1
+Recommended crontab line — macOS cron uses SYSTEM TIMEZONE, not UTC:
+  If Mac is Asia/Taipei (UTC+8): schedule at local 16:00
+  0 16 * * 1-5  /path/to/python3 /path/to/stock_platform/scripts/hybrid_shadow_cron.py --execute >> /path/to/logs/cron.log 2>&1
+
+  If Mac is UTC: schedule at UTC 08:00
+  0 8 * * 1-5   /path/to/python3 /path/to/stock_platform/scripts/hybrid_shadow_cron.py --execute >> /path/to/logs/cron.log 2>&1
 
 Usage:
   python scripts/hybrid_shadow_cron.py                 # dry-run, all checks only
   python scripts/hybrid_shadow_cron.py --execute        # full run with writes
   python scripts/hybrid_shadow_cron.py --execute --no-backup  # skip backup (testing only)
   python scripts/hybrid_shadow_cron.py --status         # print last run status and exit
+  python scripts/hybrid_shadow_cron.py --check-missed   # detect missed trading sessions
 """
 
 from __future__ import annotations
@@ -32,7 +37,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from datetime import date, datetime, timezone
+import time as _time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +48,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH
 from src.core.trading_calendar import TaiwanTradingCalendar
+from src.research.full_market_freshness_gate import (
+    FreshnessStatus,
+    check_market_freshness,
+)
+from src.research.alert_state import AlertStateManager
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -60,6 +71,20 @@ MIN_BACKUP_SIZE_BYTES = 100_000  # safety: refuse backup if DB seems empty
 SCRIPTS_DIR = Path(__file__).parent
 PYTHON = sys.executable
 CALENDAR = TaiwanTradingCalendar()
+
+# ── Retry policy (PART C) ──────────────────────────────────────────────────
+# When TWSE/TPEx data is not yet published at cron start time (16:00 Taiwan),
+# retry up to RETRY_MAX times with RETRY_INTERVAL_MINUTES between attempts.
+# Only retries for recoverable statuses: BENCHMARK_ONLY_UPDATED, PARTIAL_MARKET_UPDATE,
+# PROVIDER_NOT_READY. STALE and UNKNOWN do NOT retry (data is genuinely missing).
+# Max total wait = RETRY_MAX * RETRY_INTERVAL_MINUTES = 3 * 30 = 90 minutes.
+RETRY_MAX = 3
+RETRY_INTERVAL_MINUTES = 30
+_RETRYABLE_STATUSES = frozenset({
+    FreshnessStatus.BENCHMARK_ONLY_UPDATED,
+    FreshnessStatus.PARTIAL_MARKET_UPDATE,
+    FreshnessStatus.PROVIDER_NOT_READY,
+})
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -108,6 +133,16 @@ def _log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
+
+
+def _alert(trade_date: date, alert_type: str, message: str) -> None:
+    """Record an alert without letting failures disrupt the pipeline."""
+    try:
+        mgr = AlertStateManager()
+        is_new = mgr.record(trade_date, alert_type, message)
+        _log(f"[alert] {'NEW' if is_new else 'DUP'} {alert_type} on {trade_date}: {message}")
+    except Exception as exc:
+        _log(f"[alert] ERROR recording {alert_type}: {exc}")
 
 
 # ── File lock ─────────────────────────────────────────────────────────────────
@@ -322,6 +357,7 @@ def run_cron_pipeline(execute: bool = False, skip_backup: bool = False) -> dict:
         if backfill_result["exit_code"] != 0:
             _log("[cron] Backfill FAILED — aborting pipeline")
             result["status"] = "BACKFILL_FAILED"
+            _alert(today, "STALE_DATA", f"backfill_daily_prices.py failed (exit={backfill_result['exit_code']}) on {today}")
             _save_state(result)
             return result
 
@@ -331,26 +367,76 @@ def run_cron_pipeline(execute: bool = False, skip_backup: bool = False) -> dict:
             _save_state(result)
             return result
 
-        # ── Step 4b: Fail-closed data freshness verification ─────────────────
-        # backfill returning exit_code=0 does NOT guarantee today's data was written.
-        # QG-5 may block a wrong-date API response with exit_code=0 and 0 rows written.
-        # FAIL-CLOSED: if today's data is not in DB, abort — do NOT run shadow runner.
-        # This prevents generating PROSPECTIVE decisions with stale input_data_as_of.
-        last_date_post_backfill = _get_db_last_date()
-        if last_date_post_backfill != today:
-            _log(
-                f"[cron] BLOCKED_STALE_DATA — backfill did not update DB to today ({today}). "
-                f"last_data_date={last_date_post_backfill}. "
-                f"Possible causes: data not yet published (try after 15:30), "
-                f"QG-5 blocked wrong-date API response, or API unavailable. "
-                f"Aborting shadow runner — no PROSPECTIVE decision will be generated."
+        # ── Step 4b: Fail-closed full-market freshness verification (with retry) ──
+        # FAIL-CLOSED: shadow runner only runs when FULL_MARKET_FRESH.
+        # Recoverable statuses (BENCHMARK_ONLY_UPDATED, PARTIAL_MARKET_UPDATE,
+        # PROVIDER_NOT_READY) trigger a retry loop: re-run backfill + re-check,
+        # up to RETRY_MAX times with RETRY_INTERVAL_MINUTES between attempts.
+        # STALE / UNKNOWN do not retry (data genuinely missing; no point waiting).
+        for _retry_attempt in range(RETRY_MAX + 1):
+            db_conn_check = sqlite3.connect(str(DB_PATH))
+            freshness_report = check_market_freshness(
+                db_conn_check, today, is_trading_day=True
             )
-            result["status"] = "BLOCKED_STALE_DATA"
-            result["steps"]["data_freshness"] = f"STALE: last={last_date_post_backfill}"
+            db_conn_check.close()
+
+            freshness_status = freshness_report.status
+            result["steps"]["data_freshness"] = freshness_status.value
+            result["steps"]["data_freshness_detail"] = freshness_report.detail
+            result["steps"]["freshness_retry_attempt"] = _retry_attempt
+
+            if freshness_status == FreshnessStatus.FULL_MARKET_FRESH:
+                _log(
+                    f"[cron] Full-market freshness PASS: "
+                    f"{freshness_report.non_benchmark_count:,} non-0050 stocks on {today} ✓"
+                    + (f" (retry {_retry_attempt})" if _retry_attempt > 0 else "")
+                )
+                break  # proceed to Step 5
+
+            if freshness_status in _RETRYABLE_STATUSES and _retry_attempt < RETRY_MAX:
+                _log(
+                    f"[cron] {freshness_status.value} — retry {_retry_attempt + 1}/{RETRY_MAX} "
+                    f"in {RETRY_INTERVAL_MINUTES}m. {freshness_report.detail}"
+                )
+                result["steps"]["freshness_retry_attempt"] = _retry_attempt + 1
+                _save_state(result)
+                _time.sleep(RETRY_INTERVAL_MINUTES * 60)
+                if execute:
+                    _log(f"[cron] Retry {_retry_attempt + 1}: re-running backfill")
+                    _run_backfill(execute=True)
+                continue
+
+            # Retries exhausted or non-retryable → fail-closed + record alert
+            if freshness_status in (
+                FreshnessStatus.STALE, FreshnessStatus.PROVIDER_NOT_READY
+            ):
+                retry_note = f" (after {_retry_attempt} retries)" if _retry_attempt > 0 else ""
+                _log(
+                    f"[cron] BLOCKED_STALE_DATA{retry_note} — "
+                    f"0050 last_date={freshness_report.benchmark_date}, today={today}."
+                )
+                result["status"] = "BLOCKED_STALE_DATA"
+                _alert(today, "STALE_DATA", f"{freshness_status.value}: {freshness_report.detail}")
+            elif freshness_status in (
+                FreshnessStatus.BENCHMARK_ONLY_UPDATED, FreshnessStatus.PARTIAL_MARKET_UPDATE
+            ):
+                retry_note = f" (after {_retry_attempt} retries)" if _retry_attempt > 0 else ""
+                _log(
+                    f"[cron] BLOCKED_PARTIAL_MARKET{retry_note} — {today}: only "
+                    f"{freshness_report.non_benchmark_count:,} non-0050 stocks "
+                    f"(need >= {freshness_report.min_required:,}). "
+                    f"{freshness_report.human_readable()}"
+                )
+                result["status"] = "BLOCKED_PARTIAL_MARKET"
+                _alert(today, "PARTIAL_MARKET",
+                       f"{freshness_status.value} after {_retry_attempt} retries: "
+                       f"{freshness_report.non_benchmark_count} stocks on {today}")
+            else:
+                _log(f"[cron] BLOCKED_STALE_DATA — freshness unknown: {freshness_report.detail}")
+                result["status"] = "BLOCKED_STALE_DATA"
+                _alert(today, "STALE_DATA", f"UNKNOWN freshness: {freshness_report.detail}")
             _save_state(result)
             return result
-        result["steps"]["data_freshness"] = "OK"
-        _log(f"[cron] Data freshness verified: last_data_date={last_date_post_backfill} ✓")
 
         # ── Step 5: Backup ────────────────────────────────────────────────────
         if skip_backup:
@@ -361,6 +447,7 @@ def run_cron_pipeline(execute: bool = False, skip_backup: bool = False) -> dict:
             if backup_path is None:
                 _log("[cron] Backup FAILED — continuing anyway (shadow will still run)")
                 result["steps"]["backup"] = "failed"
+                _alert(today, "BACKUP_FAILURE", f"create_backup returned None on {today}")
             else:
                 result["steps"]["backup"] = str(backup_path.name)
 
@@ -377,6 +464,8 @@ def run_cron_pipeline(execute: bool = False, skip_backup: bool = False) -> dict:
         if shadow_result["exit_code"] != 0:
             _log("[cron] Shadow runner FAILED")
             result["status"] = "SHADOW_FAILED"
+            _alert(today, "SHADOW_FAILED",
+                   f"run_hybrid_forward_shadow.py exit={shadow_result['exit_code']} on {today}")
         else:
             result["status"] = "SUCCESS"
             _log("[cron] Pipeline SUCCESS ✓")
@@ -387,6 +476,96 @@ def run_cron_pipeline(execute: bool = False, skip_backup: bool = False) -> dict:
         _save_state(result)
 
     return result
+
+
+# ── Missed run detection ───────────────────────────────────────────────────────
+
+def _detect_missed_runs(state: dict) -> dict:
+    """
+    Compare last successful --execute run against today's trading calendar.
+    Returns a dict with keys:
+      - last_execute_date: str | None
+      - today: str
+      - missed_dates: List[str]  (trading days with no run between last run and today)
+      - trading_days_since_last_run: int
+      - alert: bool
+    """
+    today = date.today()
+    result: dict = {
+        "today": str(today),
+        "last_execute_date": None,
+        "missed_dates": [],
+        "trading_days_since_last_run": 0,
+        "alert": False,
+    }
+
+    # Find last successful execute run from DB run log
+    last_execute_date: Optional[date] = None
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        row = conn.execute(
+            "SELECT MAX(trade_date) FROM hybrid_forward_run_log "
+            "WHERE status IN ('SUCCESS','BLOCKED_MISSING_SIGNALS','BLOCKED_STALE_DATA')"
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            last_execute_date = date.fromisoformat(row[0])
+    except Exception:
+        pass
+
+    # Fallback: use state file date (last --execute run, any status)
+    if last_execute_date is None and state.get("execute") and state.get("today"):
+        try:
+            last_execute_date = date.fromisoformat(state["today"])
+        except (ValueError, TypeError):
+            pass
+
+    if last_execute_date is None:
+        return result
+
+    result["last_execute_date"] = str(last_execute_date)
+
+    # Count trading days between last run and today (exclusive on both ends)
+    missed: list[date] = []
+    d = last_execute_date + timedelta(days=1)
+    while d < today:
+        if CALENDAR.is_trading_day(d):
+            missed.append(d)
+        d += timedelta(days=1)
+
+    result["missed_dates"] = [str(x) for x in missed]
+    result["trading_days_since_last_run"] = len(missed)
+    result["alert"] = len(missed) > 0
+    return result
+
+
+def _print_missed_runs(state: dict) -> None:
+    info = _detect_missed_runs(state)
+    if info["last_execute_date"] is None:
+        print("  No previous --execute run found in DB or state file.")
+        print("  Cannot determine missed sessions (expected for first run).")
+        return
+
+    print(f"  Last recorded session date: {info['last_execute_date']}")
+    print(f"  Today:                      {info['today']}")
+
+    if not info["alert"]:
+        print("  Missed sessions:            0  ✓")
+    else:
+        missed = info["missed_dates"]
+        print(f"  ⚠ MISSED_RUN detected: {len(missed)} session(s) skipped:")
+        for d in missed:
+            print(f"    - {d}")
+        print()
+        print("  Recovery options (do NOT auto-mark as PROSPECTIVE):")
+        print("    1. Manually backfill DailyPrice for missed dates:")
+        print("       python3 scripts/backfill_daily_prices.py --execute")
+        print("    2. Re-run shadow for each missed date (decisions = LATE_CAPTURE or RETROSPECTIVE):")
+        for d in missed:
+            print(f"       python3 scripts/run_hybrid_forward_shadow.py --date {d}")
+        print("    3. Decisions captured now for missed dates will be classified automatically:")
+        print("       LATE_CAPTURE  if trading_days_since_trade <= MAX_PROSPECTIVE_CAPTURE_DAYS (1)")
+        print("       RETROSPECTIVE if trade_date < RULE_FREEZE_DATE (2026-11-05)")
 
 
 # ── Status command ─────────────────────────────────────────────────────────────
@@ -430,11 +609,18 @@ def print_status() -> None:
     else:
         print("  No backups found in data/backups/")
 
+    print("\n── Missed Run Detection ──────────────────────────────────────")
+    _print_missed_runs(state)
+
     print("\n── Recommended Crontab ───────────────────────────────────────")
     proj_dir = str(Path(__file__).parent.parent.resolve())
     py = sys.executable
-    print("  # Taiwan 16:00 = UTC 08:00; Mon–Fri")
-    print(f"  0 8 * * 1-5  {py} {proj_dir}/scripts/hybrid_shadow_cron.py --execute >> {proj_dir}/logs/cron.log 2>&1")
+    import time as _time_mod
+    offset_hrs = int(-_time_mod.timezone / 3600)
+    cron_hour = 16 if offset_hrs == 8 else ((16 - offset_hrs) % 24)
+    tz_note = "local Asia/Taipei 16:00" if offset_hrs == 8 else f"UTC+{offset_hrs} local = Taiwan 16:00"
+    print(f"  # {tz_note}; Mon–Fri")
+    print(f"  0 {cron_hour} * * 1-5  {py} {proj_dir}/scripts/hybrid_shadow_cron.py --execute >> {proj_dir}/logs/cron.log 2>&1")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -459,11 +645,25 @@ def _cli() -> None:
         action="store_true",
         help="Print last run status and backup inventory, then exit",
     )
+    parser.add_argument(
+        "--check-missed",
+        dest="check_missed",
+        action="store_true",
+        help="Detect and report missed trading sessions since last --execute run",
+    )
     args = parser.parse_args()
 
     if args.status:
         print_status()
         sys.exit(0)
+
+    if args.check_missed:
+        state = _load_state()
+        _print_missed_runs(state)
+        sys.exit(0)
+
+    # Detect trigger source: when cron runs, stdout is NOT a tty (redirected to log file).
+    trigger_source = "manual" if sys.stdout.isatty() else "cron_scheduled"
 
     result = run_cron_pipeline(execute=args.execute, skip_backup=args.skip_backup)
 
@@ -471,9 +671,15 @@ def _cli() -> None:
     # FAILED_* and SHADOW_FAILED use exit_code=1 to trigger cron failure notifications.
     clean_statuses = {
         "SUCCESS", "DRY_RUN_OK", "SKIPPED_NON_TRADING_DAY", "DATA_NOT_READY",
-        "BLOCKED_STALE_DATA", "BLOCKED_LOCK",
+        "BLOCKED_STALE_DATA", "BLOCKED_LOCK", "BLOCKED_PARTIAL_MARKET",
     }
     exit_code = 0 if result["status"] in clean_statuses else 1
+
+    # Persist exit_code and trigger_source into state so dashboard can display both.
+    result["exit_code"] = exit_code
+    result["trigger_source"] = trigger_source
+    _save_state(result)
+
     sys.exit(exit_code)
 
 

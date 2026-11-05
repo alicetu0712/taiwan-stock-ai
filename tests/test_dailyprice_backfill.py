@@ -383,10 +383,14 @@ def test_BF21_find_missing_detects_low_coverage_even_when_0050_present():
 
 
 def test_BF22_find_missing_passes_when_coverage_met():
-    """Date with 0050 AND >= 1,000 non-0050 stocks = not missing."""
+    """Date with 0050 AND >= _MIN_COVERED_STOCKS non-0050 stocks = not missing.
+
+    Uses 5,100 stocks (> 5,000 threshold) — represents a full TWSE+TPEx day.
+    1,100 was the old value when threshold was 1,000; that value is no longer sufficient.
+    """
     db = _make_sqlite(dates_for_0050=["2026-11-05"])
     conn = sqlite3.connect(db)
-    for i in range(1_100):
+    for i in range(5_100):  # > _MIN_COVERED_STOCKS (5,000); represents TWSE+TPEx universe
         conn.execute(
             "INSERT INTO daily_prices (stock_id, date, open, high, low, close, volume) VALUES (?,?,100,105,98,102,5000)",
             (str(2000 + i), "2026-11-05"),
@@ -396,6 +400,28 @@ def test_BF22_find_missing_passes_when_coverage_met():
     conn.close()
     os.unlink(db)
     assert date(2026, 11, 5) not in missing
+
+
+def test_BF24_twse_only_1976_in_missing_dates():
+    """Date with TWSE-only (~1,976 non-0050) must stay in missing_dates → backfill retries TPEx.
+
+    With _MIN_COVERED_STOCKS=5,000: 1,976 < 5,000 → date is still missing → TPEx will be re-fetched.
+    With old threshold=1,000: 1,976 >= 1,000 → date would appear covered → TPEx never retried.
+    """
+    db = _make_sqlite(dates_for_0050=["2026-11-05"])
+    conn = sqlite3.connect(db)
+    for i in range(1_976):  # TWSE-only count (4-digit stocks, no TPEx)
+        conn.execute(
+            "INSERT INTO daily_prices (stock_id, date, open, high, low, close, volume) VALUES (?,?,100,105,98,102,5000)",
+            (str(2000 + i), "2026-11-05"),
+        )
+    conn.commit()
+    missing = _find_missing_dates(conn, date(2026, 11, 5), date(2026, 11, 5))
+    conn.close()
+    os.unlink(db)
+    assert date(2026, 11, 5) in missing, (
+        "TWSE-only (1,976 stocks) should be in missing_dates so TPEx can be re-fetched"
+    )
 
 
 def test_BF23_find_missing_legacy_mode_respects_min_zero():

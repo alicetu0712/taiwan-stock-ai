@@ -21,6 +21,7 @@ import json
 import os
 import sqlite3
 import sys
+import time as _time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
@@ -55,6 +56,24 @@ SHADOW_SCRIPT = SCRIPTS_DIR / "run_hybrid_forward_shadow.py"
 BACKFILL_SCRIPT = SCRIPTS_DIR / "backfill_daily_prices.py"
 LOCK_FILE = DATA_DIR / ".cron.lock"
 STATE_FILE = DATA_DIR / ".cron_state.json"
+
+
+def _cron_hour_for_taiwan_1600() -> tuple[str, str]:
+    """
+    Return (cron_hour, label) for scheduling Taiwan market close (16:00 CST).
+    macOS cron uses system local time — NOT UTC.
+    - UTC+8 (Asia/Taipei) → schedule at local 16 → cron hour = "16"
+    - UTC+0              → schedule at UTC 08  → cron hour = "8"
+    """
+    offset_hrs = int(-_time.timezone / 3600)
+    if offset_hrs == 8:
+        return ("16", "local Asia/Taipei 16:00")
+    elif offset_hrs == 0:
+        return ("8", "UTC 08:00 = Taiwan 16:00")
+    else:
+        # Fallback: compute UTC hour equivalent and warn
+        utc_hour = (16 - offset_hrs) % 24
+        return (str(utc_hour), f"local {utc_hour:02d}:00 = Taiwan 16:00 (UTC+{offset_hrs})")
 
 
 # ── Check helpers ─────────────────────────────────────────────────────────────
@@ -132,7 +151,13 @@ def check_timezone() -> CheckResult:
         import pytz
         tz = pytz.timezone("Asia/Taipei")
         now_taipei = datetime.now(tz)
-        return _ok("timezone_taipei", f"Asia/Taipei available; now={now_taipei.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        offset_hrs = int(-_time.timezone / 3600)
+        hour, label = _cron_hour_for_taiwan_1600()
+        note = (
+            f"Asia/Taipei available; now={now_taipei.strftime('%Y-%m-%d %H:%M:%S %Z')}; "
+            f"system UTC+{offset_hrs}; cron Taiwan 16:00 → schedule at local hour {hour} ({label})"
+        )
+        return _ok("timezone_taipei", note)
     except Exception as e:
         return _block("timezone_taipei", f"pytz.timezone('Asia/Taipei') failed: {e}")
 
@@ -375,15 +400,18 @@ def check_lock_available() -> CheckResult:
 
 
 def check_no_duplicate_cron() -> CheckResult:
-    """Check if a crontab with our cron script is already installed."""
+    """Check for duplicate cron entries: 0 or 1 entries is fine, 2+ is a duplicate."""
     try:
         import subprocess
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         if result.returncode != 0:
-            return _ok("no_duplicate_cron", "No existing crontab found")
-        if "hybrid_shadow_cron.py" in result.stdout:
-            return _warn("no_duplicate_cron", "hybrid_shadow_cron.py already appears in crontab — check for duplicates before adding")
-        return _ok("no_duplicate_cron", "No existing hybrid_shadow_cron.py entry in crontab")
+            return _ok("no_duplicate_cron", "No existing crontab found (not yet installed)")
+        count = result.stdout.count("hybrid_shadow_cron.py")
+        if count == 0:
+            return _ok("no_duplicate_cron", "No hybrid_shadow_cron.py entry (not yet installed)")
+        if count == 1:
+            return _ok("no_duplicate_cron", "hybrid_shadow_cron.py installed once — no duplicates")
+        return _warn("no_duplicate_cron", f"hybrid_shadow_cron.py appears {count}x in crontab — DUPLICATE detected, remove extras")
     except Exception as e:
         return _warn("no_duplicate_cron", f"Could not check crontab: {e}")
 
@@ -406,12 +434,13 @@ def check_cron_script_paths() -> CheckResult:
     if issues:
         return _block("cron_script_paths", "; ".join(issues))
 
+    hour, _label = _cron_hour_for_taiwan_1600()
     cron_entry = (
-        f"0 8 * * 1-5  "
+        f"0 {hour} * * 1-5  "
         f"{python_exe} {CRON_SCRIPT} --execute "
         f">> {LOGS_DIR}/hybrid_cron.log 2>&1"
     )
-    return _ok("cron_script_paths", f"All paths valid. Cron entry:\n    {cron_entry}")
+    return _ok("cron_script_paths", f"All paths valid. Cron entry ({_label}):\n    {cron_entry}")
 
 
 def check_exit_codes() -> CheckResult:
@@ -553,11 +582,12 @@ def print_results(overall: str, checks: List[CheckResult], verbose: bool) -> Non
         print(f"  {icon} OVERALL: PASS — cron installation may proceed with manual approval")
     print(f"{'='*70}\n")
 
-    # Print corrected cron entry
+    # Print corrected cron entry (timezone-aware)
     python_exe = Path(sys.executable)
-    print("  Recommended cron entry (Taiwan 16:00 = UTC 08:00):")
+    hour, label = _cron_hour_for_taiwan_1600()
+    print(f"  Recommended cron entry ({label}):")
     print("  ─────────────────────────────────────────────────")
-    print(f"  0 8 * * 1-5  {python_exe} {CRON_SCRIPT} --execute >> {LOGS_DIR}/hybrid_cron.log 2>&1")
+    print(f"  0 {hour} * * 1-5  {python_exe} {CRON_SCRIPT} --execute >> {LOGS_DIR}/hybrid_cron.log 2>&1")
     print()
     print("  IMPORTANT: This script does NOT install the cron.")
     print("  To install: provide explicit approval, then run:")

@@ -58,27 +58,52 @@ def _research_badge(version: str, is_legacy: bool) -> str:
     )
 
 
+_V2_SIGNALS_SCHEMA_ERROR = "__schema_error__"
+_V2_SIGNALS_CONNECTION_ERROR = "__connection_error__"
+
+
 @st.cache_data(ttl=300)
 def _load_v2_signals(research_version: str, limit: int = 300) -> list:
+    """Return list of signal dicts, [] if no data, or a sentinel string on error.
+
+    Callers must check: if isinstance(result, str) → error type encoded in string.
+    """
     try:
         from sqlalchemy import desc
+        from sqlalchemy.exc import OperationalError, ProgrammingError
 
         from src.database import get_session
         from src.research.models import V2ShadowSignal
 
         s = get_session()
-        query = s.query(V2ShadowSignal).filter(
-            V2ShadowSignal.research_version == research_version
-        )
-        rows = (
-            query.order_by(
-                desc(V2ShadowSignal.trade_date),
-                V2ShadowSignal.stock_id,
+        try:
+            query = s.query(V2ShadowSignal).filter(
+                V2ShadowSignal.research_version == research_version
             )
-            .limit(limit)
-            .all()
-        )
-        s.close()
+            rows = (
+                query.order_by(
+                    desc(V2ShadowSignal.trade_date),
+                    V2ShadowSignal.stock_id,
+                )
+                .limit(limit)
+                .all()
+            )
+        except ProgrammingError as e:
+            # PostgreSQL: missing column (42703), missing table (42P01), permission
+            logger.warning(f"V2 shadow signals schema/permission error: {e}")
+            return [_V2_SIGNALS_SCHEMA_ERROR]
+        except OperationalError as e:
+            # SQLite schema errors: "no such column", "no such table"
+            # PostgreSQL OperationalError: connection timeout, refused (NOT schema errors)
+            err_lower = str(e).lower()
+            if "no such column" in err_lower or "no such table" in err_lower:
+                logger.warning(f"V2 shadow signals schema error (SQLite): {e}")
+                return [_V2_SIGNALS_SCHEMA_ERROR]
+            logger.warning(f"V2 shadow signals connection/operational error: {e}")
+            return [_V2_SIGNALS_CONNECTION_ERROR]
+        finally:
+            s.close()
+
         return [
             {
                 "trade_date": str(r.trade_date),
@@ -100,7 +125,7 @@ def _load_v2_signals(research_version: str, limit: int = 300) -> list:
         ]
     except Exception as e:
         logger.warning(f"V2 shadow signals load failed: {e}")
-        return []
+        return [_V2_SIGNALS_CONNECTION_ERROR]
 
 
 @st.cache_data(ttl=600)
@@ -200,11 +225,23 @@ def page_entry_timing_research() -> None:
     with col_info:
         if research_version == "v2_research_v1":
             st.info(
-                "v2_research_v1：舊版資料（pre-DESC fix），is_legacy=True。"
-                "僅供歷史對照。"
+                "v2_research_v1：初始研究基準（Approval B，2026-11-05），is_legacy=False。"
+                " _load_history DESC+LIMIT fix 已包含在內（commit fadafdb）。"
+                " V1 與 V2 使用相同演算法 — 請見下方等價聲明。"
             )
         else:
-            st.success("v2_research_v2：最新版本（post-DESC fix），is_legacy=False。")
+            st.success("v2_research_v2：重算版本（Approval C，2026-11-05），is_legacy=False。"
+                       " 與 v2_research_v1 使用相同邏輯，結果完全一致。")
+
+    # V1/V2 EQUIVALENCE NOTICE — always shown
+    st.warning(
+        "⚠️ **V1/V2 CURRENTLY EQUIVALENT — NO PERFORMANCE ADVANTAGE ESTABLISHED**  \n\n"
+        "v2_research_v1 與 v2_research_v2 均使用相同的 EntryTimingAnalyzer 與修復後的"
+        " _load_history（DESC+LIMIT）。Approval C 重算結果：1,021/1,021 配對，"
+        "**0 Label Changes，0 Entry Price Changes**。  \n\n"
+        "目前無法宣稱 V2 優於 V1。兩者為相同策略之不同版本標籤。  \n"
+        "Forward return 驗證最早於 2026-11-26（Oct 29 訊號 20D 成熟日）後開始。"
+    )
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📋 訊號列表",
@@ -232,11 +269,32 @@ def page_entry_timing_research() -> None:
 
 def _render_signal_list(research_version: str) -> None:
     rows = _load_v2_signals(research_version)
+
+    if rows and rows[0] == _V2_SIGNALS_SCHEMA_ERROR:
+        st.error(
+            "**資料庫 Schema 不完整或權限不足** — 查詢 `v2_shadow_signals` 時發生錯誤。  \n\n"
+            "最常見原因：表存在但缺少 `research_version` / `is_legacy` 欄位。  \n\n"
+            "修復方式（需 Neon DDL 授權）：\n\n"
+            "```bash\npython scripts/migrate_entry_timing_v2.py --dry-run  # 預覽\n"
+            "python scripts/migrate_entry_timing_v2.py             # 執行\n```"
+        )
+        return
+
+    if rows and rows[0] == _V2_SIGNALS_CONNECTION_ERROR:
+        st.error(
+            "**無法連線研究資料庫** — 請確認 `USE_NEON` / `DATABASE_URL` 設定正確，"
+            "並查看後台日誌。"
+        )
+        return
+
     if not rows:
         st.info(
-            f"尚無 {research_version} Shadow Signal。"
-            "請執行 EntryTimingResearchService.run_for_date() 或 "
-            "ShadowRecalculationService.recalculate() 產生資料。"
+            f"**{research_version} 尚無 Shadow Signal 資料。**  \n\n"
+            "資料來源 `v2_shadow_signals` 表目前為空。  \n\n"
+            "若要產生資料，需依序執行：  \n"
+            "1. `EntryTimingResearchService.run_for_date()` — 從 ForwardSignal 產生 v2_research_v1 資料  \n"
+            "2. `ShadowRecalculationService.recalculate()` — 從 v1 重算 v2_research_v2 資料  \n\n"
+            "*(需獲得研究資料庫寫入授權後執行)*"
         )
         return
 
@@ -1345,14 +1403,40 @@ def _render_hybrid_forward_shadow_status() -> None:
         _backup_dir = _Path(db_path).parent / "backups"
         _backup_count = len(list(_backup_dir.glob("*.db.bak"))) if _backup_dir.exists() else 0
 
+        # Load alert state
+        _alert_state_file = _Path(db_path).parent / ".alert_state.json"
+        _active_alerts: list = []
+        if _alert_state_file.exists():
+            try:
+                _alert_data = _json.loads(_alert_state_file.read_text())
+                _today_str = str(date.today())
+                _active_alerts = [
+                    a for a in _alert_data.get("alerts", [])
+                    if not a.get("resolved", False) and a.get("trade_date") == _today_str
+                ]
+            except Exception:
+                pass
+
         st.markdown("#### G0. 自動化排程（Cron）")
         _run_at = _cron_state.get("run_at", "")
         _run_at_display = _run_at[:16] if len(_run_at) >= 16 else (_run_at or "—")
+        _trigger_src = _cron_state.get("trigger_source", "—")
+        _exit_code = _cron_state.get("exit_code")
+        _exit_display = f"exit={_exit_code}" if _exit_code is not None else "—"
+        _steps = _cron_state.get("steps", {}) if _cron_state else {}
+        _retry_attempt = _steps.get("freshness_retry_attempt")
+        _retry_display = f"{_retry_attempt}/{3}" if _retry_attempt is not None else "—"
+
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Cron 已安裝", "✅ 是" if _cron_installed else "⏳ 未安裝")
         col2.metric("最後執行時間", _run_at_display)
-        col3.metric("最後執行狀態", _cron_state.get("status", "—"))
+        col3.metric("執行狀態", _cron_state.get("status", "—"))
         col4.metric("備份檔案數", _backup_count)
+        col1b, col2b, col3b, col4b = st.columns(4)
+        col1b.metric("觸發來源", "排程觸發" if _trigger_src == "cron_scheduled" else ("手動" if _trigger_src == "manual" else _trigger_src))
+        col2b.metric("Process Exit Code", _exit_display)
+        col3b.metric("新鮮度重試次數", _retry_display)
+        col4b.metric("今日未解警報", len(_active_alerts))
 
         if not _cron_installed:
             st.info(
@@ -1363,24 +1447,70 @@ def _render_hybrid_forward_shadow_status() -> None:
             _last_status = _cron_state.get("status", "")
             _last_data = _cron_state.get("last_data_date", "—")
             _execute_flag = _cron_state.get("execute", False)
-            if not _execute_flag:
+            _freshness_status = _steps.get("data_freshness", "")
+            _freshness_detail = _steps.get("data_freshness_detail", "")
+
+            _STATUS_DESCRIPTIONS = {
+                "SUCCESS": "全流程完成 — 資料已補齊、備份已存、Shadow 研究已寫入",
+                "BLOCKED_PARTIAL_MARKET": "市場資料尚未完整發布（正常，非錯誤）— 等待 TWSE/TPEx 全市場更新",
+                "BLOCKED_STALE_DATA": "0050 基準股資料過期，無法確認交易日完整性",
+                "SKIPPED_NON_TRADING_DAY": "非交易日，跳過（正常）",
+                "NON_TRADING_DAY": "非交易日，跳過（正常）",
+                "BLOCKED_LOCK": "另一個 Cron 程序正在執行中（FileLock 保護）",
+                "DATA_NOT_READY": "TWSE/TPEx 15:30 前資料尚未發布，Dry-run 中止",
+                "DRY_RUN_OK": "Dry-run 完成（無 --execute，未實際寫入）",
+                "BACKFILL_FAILED": "補價格資料失敗 — 請查看 logs/hybrid_cron.log",
+                "SHADOW_FAILED": "Shadow 研究執行失敗 — 請查看 logs/hybrid_cron.log",
+            }
+
+            _info_statuses = {
+                "BLOCKED_STALE_DATA", "SKIPPED_NON_TRADING_DAY",
+                "NON_TRADING_DAY", "BLOCKED_LOCK", "BLOCKED_PARTIAL_MARKET",
+                "DATA_NOT_READY",
+            }
+
+            if not _execute_flag and _last_status not in ("SKIPPED_NON_TRADING_DAY", "NON_TRADING_DAY"):
                 st.warning(
                     "⚠️ 最後執行為 dry-run（無 `--execute` 旗標）。"
                     "請確認 crontab 包含 `--execute`。"
                 )
             elif _last_status == "SUCCESS":
                 st.success(f"✅ 最後執行成功。資料日期：{_last_data}")
-            elif _last_status in (
-                "BLOCKED_STALE_DATA",
-                "SKIPPED_NON_TRADING_DAY",
-                "BLOCKED_LOCK",
-            ):
-                st.info(f"ℹ️ 最後執行：{_last_status}（非異常狀態）。資料日期：{_last_data}")
+            elif _last_status in _info_statuses:
+                _desc = _STATUS_DESCRIPTIONS.get(_last_status, _last_status)
+                _detail_str = f"  \n詳情：{_freshness_detail}" if _freshness_detail else ""
+                st.info(f"ℹ️ **{_last_status}** — {_desc}{_detail_str}")
             else:
+                _desc = _STATUS_DESCRIPTIONS.get(_last_status, "")
+                _desc_str = f" — {_desc}" if _desc else ""
                 st.warning(
-                    f"⚠️ 最後執行狀態：{_last_status}。"
+                    f"⚠️ 最後執行狀態：**{_last_status}**{_desc_str}。"
                     "請檢查 `logs/hybrid_cron.log`。"
                 )
+
+            # Full-market freshness status caption
+            if _freshness_status and _freshness_status not in ("FULL_MARKET_FRESH", "MARKET_CLOSED"):
+                _freshness_labels = {
+                    "BENCHMARK_ONLY_UPDATED": "🕐 0050 已更新，等待全市場資料（約 16:30 後到齊）",
+                    "PARTIAL_MARKET_UPDATE": "⚠️ 部分股票資料已到齊，尚未達最低門檻",
+                    "PROVIDER_NOT_READY": "🕐 TWSE/TPEx 資料尚未發布",
+                    "STALE": "⚠️ 資料過期（非今日資料）",
+                    "UNKNOWN": "❓ 無法判斷新鮮度",
+                }
+                _label = _freshness_labels.get(_freshness_status, _freshness_status)
+                st.caption(f"全市場新鮮度：{_label}")
+
+            # Retry detail
+            if _retry_attempt and int(_retry_attempt) > 0:
+                st.caption(f"已重試 {_retry_attempt} 次（最多 3 次，每次等待 30 分鐘）")
+
+        # Active alert banner
+        if _active_alerts:
+            _alert_lines = [
+                f"- **{a['alert_type']}**：{a['message']}（觸發 {a['count']} 次）"
+                for a in _active_alerts
+            ]
+            st.warning("⚠️ 今日未解警報：\n" + "\n".join(_alert_lines))
 
         # ── G1. Operational Health ─────────────────────────────────────────────
         from src.research.hybrid_forward_db import (

@@ -565,7 +565,9 @@ def run_backfill(
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-_MIN_COVERED_STOCKS = 1_000  # minimum non-0050 stocks to consider a date fully covered
+_MIN_COVERED_STOCKS = 5_000  # minimum non-0050 stocks to consider a date fully covered
+# Must stay in sync with full_market_freshness_gate.MIN_COVERED_STOCKS (also 5,000).
+# A date with TWSE-only data (~1,976 stocks) stays in missing_dates → backfill retries TPEx.
 
 
 def _default_start() -> date:

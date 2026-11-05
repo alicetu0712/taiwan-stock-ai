@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.research.effectiveness_analyzer import STOP_BUFFER, classify_ma_slope, compute_ma_slope
 from src.research.execution_simulator import FEES_PCT
 from src.research.hybrid_entry_strategy import HybridDecisionService, RULE_VERSION
+from src.research.full_market_freshness_gate import FreshnessStatus, check_market_freshness
 from src.research.ohlc_continuity_gate import GateResult, OHLCContinuityGate
 from src.research.hybrid_forward_db import (
     CALCULATION_VERSION,
@@ -367,6 +368,35 @@ def run_shadow(
                     "detail": msg,
                     "missing_sessions": [str(d) for d in _market_report.missing_dates],
                     "continuity_window": _market_report.continuity_window,
+                }
+
+        # ── Full-Market Freshness Gate ────────────────────────────────────────
+        # Blocks PROSPECTIVE decisions when 0050 updated but full stock universe missing.
+        # Allows force_stale to bypass (for historical backfill of RETROSPECTIVE records).
+        if not force_stale:
+            _freshness = check_market_freshness(conn, today, is_trading_day=True)
+            if _freshness.is_blocked:
+                msg = _freshness.detail
+                if _freshness.status in (
+                    FreshnessStatus.PARTIAL_MARKET_UPDATE,
+                    FreshnessStatus.BENCHMARK_ONLY_UPDATED,
+                ):
+                    _run_status = RunStatus.BLOCKED_PARTIAL_MARKET
+                else:
+                    _run_status = RunStatus.BLOCKED_STALE_DATA
+                log.status = _run_status
+                log.error_summary = f"{_freshness.status.value}: {msg}"
+                log.finished_at = datetime.now(timezone.utc)
+                upsert_run_log(conn, log)
+                conn.close()
+                print(
+                    f"[hybrid_shadow] {_run_status}: {_freshness.human_readable()} | {msg}"
+                )
+                return {
+                    "status": _run_status,
+                    "trade_date": str(today),
+                    "freshness_status": _freshness.status.value,
+                    "detail": msg,
                 }
 
         # ── Decide: PROSPECTIVE or RETROSPECTIVE? ─────────────────────────────
