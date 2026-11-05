@@ -1049,6 +1049,72 @@ def _render_hybrid_analysis() -> None:
         _render_hybrid_rule_reference()
 
 
+def _render_dailyprice_freshness_panel(db_path: str) -> None:
+    """H2. DailyPrice data freshness — last date, gap, missing days, cron status."""
+    import os as _os
+    import sqlite3 as _sqlite3
+    from datetime import date as _date
+
+    st.markdown("#### H2. DailyPrice 資料新鮮度")
+    if not _os.path.exists(db_path):
+        st.error("SQLite not found")
+        return
+
+    try:
+        conn = _sqlite3.connect(db_path)
+        last_row = conn.execute(
+            "SELECT MAX(date) FROM daily_prices WHERE stock_id='0050'"
+        ).fetchone()
+        total_rows = conn.execute("SELECT COUNT(*) FROM daily_prices").fetchone()[0]
+        stocks_today = conn.execute(
+            "SELECT COUNT(*) FROM daily_prices WHERE date=(SELECT MAX(date) FROM daily_prices)"
+        ).fetchone()[0]
+        conn.close()
+    except Exception as e:
+        st.error(f"DB read error: {e}")
+        return
+
+    last_date_str = last_row[0] if last_row else None
+    today = _date.today()
+
+    if last_date_str:
+        last_date = _date.fromisoformat(last_date_str)
+        gap_days = (today - last_date).days
+        stale = gap_days > 7
+    else:
+        last_date = None
+        gap_days = None
+        stale = True
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("最新日期 (0050)", str(last_date) if last_date else "無資料")
+    with col2:
+        gap_label = f"{gap_days}天" if gap_days is not None else "—"
+        st.metric("距今天數", gap_label, delta=None)
+    with col3:
+        st.metric("最新日股票數", f"{stocks_today:,}")
+    with col4:
+        st.metric("DB 總行數", f"{total_rows:,}")
+
+    if stale:
+        st.warning(
+            f"DailyPrice 已過期 {gap_days} 天（閾值 7 天）。"
+            "Shadow runner 將被 BLOCKED_STALE_DATA 阻擋。\n\n"
+            "修復：`python3 scripts/backfill_daily_prices.py --execute`"
+        )
+    elif gap_days is not None and gap_days > 2:
+        st.info(
+            f"DailyPrice 距今 {gap_days} 天。Shadow runner 仍可運行（< 7 天閾值）。"
+        )
+    else:
+        st.success(f"DailyPrice 新鮮（{gap_days} 天前）")
+
+    st.caption(
+        "Cron 自動化狀態見 G0 面板。手動補資料：`python3 scripts/backfill_daily_prices.py --execute`"
+    )
+
+
 def _render_storage_health_panel(db_path: str) -> None:
     """
     H. Storage health panel — shows backend status without exposing credentials.
@@ -1112,6 +1178,90 @@ def _render_storage_health_panel(db_path: str) -> None:
     )
 
 
+def _render_ohlc_continuity_panel(db_path: str) -> None:
+    """H3. OHLC Continuity Gate — 30-day window status for Hybrid signal generation."""
+    import os as _os
+    import sqlite3 as _sqlite3
+    from datetime import date as _date
+
+    st.markdown("#### H3. OHLC 連續性閘門")
+    if not _os.path.exists(db_path):
+        st.error("SQLite not found")
+        return
+
+    try:
+        from src.research.ohlc_continuity_gate import GateResult, OHLCContinuityGate
+        conn = _sqlite3.connect(db_path)
+        gate = OHLCContinuityGate()
+        trade_date = _date.today()
+        report = gate.check_market(conn, trade_date)
+        conn.close()
+    except Exception as e:
+        st.error(f"Gate check error: {e}")
+        return
+
+    result = report.gate_result
+    gate_color = {
+        GateResult.PASS: "✅",
+        GateResult.UNKNOWN_CALENDAR: "🟡",
+        GateResult.BLOCKED_MISSING_OHLC: "🔴",
+        GateResult.BLOCKED_STALE_DATA: "🔴",
+        GateResult.BLOCKED_INSUFFICIENT_HISTORY: "🔴",
+        GateResult.NOT_APPLICABLE: "⚪",
+    }.get(result, "❓")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("閘門狀態", f"{gate_color} {result.value}")
+    col2.metric("檢查窗口（天）", report.continuity_window)
+    col3.metric("資料齊全", report.present_sessions)
+    col4.metric("資料缺失", report.missing_sessions)
+
+    if result == GateResult.PASS:
+        st.success(
+            f"OHLC 連續性 PASS — 最近 {report.continuity_window} 個交易日資料完整，"
+            "MA20 / MA20_SLOPE / REGIME 計算可信。"
+        )
+    elif result == GateResult.UNKNOWN_CALENDAR:
+        st.info(
+            f"OHLC 閘門：UNKNOWN_CALENDAR — {report.unknown_sessions} 個日曆矛盾日期"
+            "（日曆標記休市但 DB 有資料，如 2026-10-09）。不阻擋信號產生。"
+        )
+    elif result == GateResult.BLOCKED_MISSING_OHLC:
+        st.warning(
+            f"🔴 BLOCKED_MISSING_OHLC — {report.missing_sessions} 個預期交易日缺乏 0050 資料。"
+            " Hybrid 信號產生已暫停。\n\n"
+            f"缺失日期：{', '.join(str(d) for d in report.missing_dates[:10])}"
+            + (" ..." if len(report.missing_dates) > 10 else "")
+        )
+    elif result == GateResult.BLOCKED_STALE_DATA:
+        st.error(
+            "🔴 BLOCKED_STALE_DATA — 最後 0050 資料日距今超過 7 天。"
+            "請執行 `python scripts/backfill_daily_prices.py --execute`。"
+        )
+    elif result == GateResult.NOT_APPLICABLE:
+        st.info(f"今天（{trade_date}）非交易日，閘門不適用。")
+
+    # Feature audit table
+    if report.feature_audits:
+        import pandas as pd
+        audit_rows = [
+            {
+                "特徵": fa.feature_name,
+                "需要 Bars": fa.required_lookback_bars,
+                "可用 Bars": fa.available_bars,
+                "缺失工作日": fa.missing_expected_sessions,
+                "閘門": fa.gate_result.value,
+            }
+            for fa in report.feature_audits
+        ]
+        st.dataframe(pd.DataFrame(audit_rows), use_container_width=True, hide_index=True)
+
+    st.caption(
+        f"檢查基準：{trade_date} | 市場代理：0050 | 窗口：{report.continuity_window} 交易日 | "
+        "阻擋條件：任一預期交易日缺 0050 資料"
+    )
+
+
 def _render_hybrid_forward_shadow_status() -> None:
     """Display forward shadow operational health from hybrid_forward_decision/outcome tables."""
     import sqlite3
@@ -1132,6 +1282,12 @@ def _render_hybrid_forward_shadow_status() -> None:
 
     # ── H. Storage health panel ───────────────────────────────────────────────
     _render_storage_health_panel(db_path)
+
+    # ── H2. DailyPrice freshness ──────────────────────────────────────────────
+    _render_dailyprice_freshness_panel(db_path)
+
+    # ── H3. OHLC Continuity Gate ──────────────────────────────────────────────
+    _render_ohlc_continuity_panel(db_path)
     st.divider()
 
     if not os.path.exists(db_path):
@@ -1163,6 +1319,68 @@ def _render_hybrid_forward_shadow_status() -> None:
             )
             conn.close()
             return
+
+        # ── G0. Automation / Cron Panel ───────────────────────────────────────
+        import json as _json
+        import subprocess
+        from pathlib import Path as _Path
+
+        _state_file = _Path(db_path).parent / ".cron_state.json"
+        _cron_state: dict = {}
+        if _state_file.exists():
+            try:
+                _cron_state = _json.loads(_state_file.read_text())
+            except Exception:
+                pass
+
+        _cron_installed = False
+        try:
+            _cron_result = subprocess.run(
+                ["crontab", "-l"], capture_output=True, text=True, timeout=5
+            )
+            _cron_installed = "hybrid_shadow_cron" in _cron_result.stdout
+        except Exception:
+            pass
+
+        _backup_dir = _Path(db_path).parent / "backups"
+        _backup_count = len(list(_backup_dir.glob("*.db.bak"))) if _backup_dir.exists() else 0
+
+        st.markdown("#### G0. 自動化排程（Cron）")
+        _run_at = _cron_state.get("run_at", "")
+        _run_at_display = _run_at[:16] if len(_run_at) >= 16 else (_run_at or "—")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Cron 已安裝", "✅ 是" if _cron_installed else "⏳ 未安裝")
+        col2.metric("最後執行時間", _run_at_display)
+        col3.metric("最後執行狀態", _cron_state.get("status", "—"))
+        col4.metric("備份檔案數", _backup_count)
+
+        if not _cron_installed:
+            st.info(
+                "Local cron 尚未安裝。每日 Taiwan 16:00 自動執行需手動設定。  \n"
+                "安裝指令見 `docs/hybrid_go_live_readiness.md`。"
+            )
+        elif _cron_state:
+            _last_status = _cron_state.get("status", "")
+            _last_data = _cron_state.get("last_data_date", "—")
+            _execute_flag = _cron_state.get("execute", False)
+            if not _execute_flag:
+                st.warning(
+                    "⚠️ 最後執行為 dry-run（無 `--execute` 旗標）。"
+                    "請確認 crontab 包含 `--execute`。"
+                )
+            elif _last_status == "SUCCESS":
+                st.success(f"✅ 最後執行成功。資料日期：{_last_data}")
+            elif _last_status in (
+                "BLOCKED_STALE_DATA",
+                "SKIPPED_NON_TRADING_DAY",
+                "BLOCKED_LOCK",
+            ):
+                st.info(f"ℹ️ 最後執行：{_last_status}（非異常狀態）。資料日期：{_last_data}")
+            else:
+                st.warning(
+                    f"⚠️ 最後執行狀態：{_last_status}。"
+                    "請檢查 `logs/hybrid_cron.log`。"
+                )
 
         # ── G1. Operational Health ─────────────────────────────────────────────
         from src.research.hybrid_forward_db import (

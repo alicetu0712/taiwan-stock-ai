@@ -157,8 +157,9 @@ class TestEffectiveTradeDateEdgeCases:
         """週一凌晨 → 跳過週六週日，回傳上週五。"""
         from src.core.trading_calendar import effective_trade_date
 
-        mon = date(2026, 10, 26)  # Monday
-        fri = date(2026, 10, 23)  # Friday
+        # 10-26 and 10-23 are typhoon closures; use 10-19 (Mon) / 10-16 (Fri) instead
+        mon = date(2026, 10, 19)  # Monday (trading day)
+        fri = date(2026, 10, 16)  # Friday (trading day)
 
         now = _dt(mon, hour=2, minute=0)
         result = effective_trade_date(now_taipei=now)
@@ -170,7 +171,8 @@ class TestEffectiveTradeDateEdgeCases:
         """週一 15:55 → 回傳當天（週一是交易日且資料已可用）。"""
         from src.core.trading_calendar import effective_trade_date
 
-        mon = date(2026, 10, 26)
+        # 10-26 is a typhoon bridge holiday; use 10-19 (Mon) instead
+        mon = date(2026, 10, 19)
         now = _dt(mon, hour=15, minute=55)
         result = effective_trade_date(now_taipei=now)
         assert result == mon

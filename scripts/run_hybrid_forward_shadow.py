@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.research.effectiveness_analyzer import STOP_BUFFER, classify_ma_slope, compute_ma_slope
 from src.research.execution_simulator import FEES_PCT
 from src.research.hybrid_entry_strategy import HybridDecisionService, RULE_VERSION
+from src.research.ohlc_continuity_gate import GateResult, OHLCContinuityGate
 from src.research.hybrid_forward_db import (
     CALCULATION_VERSION,
     RESEARCH_VERSION,
@@ -341,6 +342,33 @@ def run_shadow(
             return {"status": RunStatus.BLOCKED_STALE_DATA, "trade_date": str(today), "detail": msg}
 
     if not backfill_outcomes_only:
+        # ── OHLC Continuity Gate ──────────────────────────────────────────────
+        if not force_stale:
+            _gate = OHLCContinuityGate()
+            _market_report = _gate.check_market(conn, today)
+            if _market_report.gate_result == GateResult.BLOCKED_MISSING_OHLC:
+                _n_missing = _market_report.missing_sessions
+                _last_missing = str(_market_report.missing_dates[-1]) if _market_report.missing_dates else "?"
+                msg = (
+                    f"OHLC continuity gate blocked: {_n_missing} missing expected trading days "
+                    f"in {_market_report.continuity_window}-day window. "
+                    f"Most recent missing: {_last_missing}. "
+                    f"PROSPECTIVE decisions cannot be generated with incomplete MA20/MA60 data."
+                )
+                log.status = RunStatus.BLOCKED_MISSING_OHLC
+                log.error_summary = msg
+                log.finished_at = datetime.now(timezone.utc)
+                upsert_run_log(conn, log)
+                conn.close()
+                print(f"[hybrid_shadow] BLOCKED_MISSING_OHLC: {msg}")
+                return {
+                    "status": RunStatus.BLOCKED_MISSING_OHLC,
+                    "trade_date": str(today),
+                    "detail": msg,
+                    "missing_sessions": [str(d) for d in _market_report.missing_dates],
+                    "continuity_window": _market_report.continuity_window,
+                }
+
         # ── Decide: PROSPECTIVE or RETROSPECTIVE? ─────────────────────────────
         # Count trading days since trade_date
         trading_days_since: int
