@@ -1049,6 +1049,69 @@ def _render_hybrid_analysis() -> None:
         _render_hybrid_rule_reference()
 
 
+def _render_storage_health_panel(db_path: str) -> None:
+    """
+    H. Storage health panel — shows backend status without exposing credentials.
+    Status: HEALTHY / DEGRADED / BLOCKED / UNKNOWN.
+    Never exposes DB URL, password, token, or full file path.
+    """
+    import os
+
+    from src.research.storage_adapter import SQLiteResearchStorage, StorageHealthStatus
+
+    st.markdown("#### H. 儲存系統健康")
+
+    # Backend info (non-sensitive)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("儲存後端", "SQLite (Option A)")
+    col2.metric("環境", "research_local")
+    col3.metric("是否為正式資料庫", "否")
+    col4.metric("DB 檔案", "platform.db")
+
+    if not os.path.exists(db_path):
+        st.error("🔴 BLOCKED — data/platform.db 不存在")
+        st.info("執行 `python scripts/run_hybrid_forward_shadow.py` 建立研究資料庫。")
+        return
+
+    try:
+        file_size_kb = round(os.path.getsize(db_path) / 1024, 1)
+    except OSError:
+        file_size_kb = None
+
+    with SQLiteResearchStorage(db_path) as store:
+        health = store.health_check()
+
+    status = health.get("status", StorageHealthStatus.UNKNOWN)
+    tables_present = health.get("tables_present", [])
+    tables_missing = health.get("tables_missing", [])
+
+    status_display = {
+        StorageHealthStatus.HEALTHY:  "✅ HEALTHY",
+        StorageHealthStatus.DEGRADED: "⚠️ DEGRADED",
+        StorageHealthStatus.BLOCKED:  "🔴 BLOCKED",
+        StorageHealthStatus.UNKNOWN:  "❓ UNKNOWN",
+    }.get(status, f"❓ {status}")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("連線狀態", status_display)
+    col2.metric("研究表 (3/3)", f"{len(tables_present)}/3")
+    col3.metric("DB 大小", f"{file_size_kb} KB" if file_size_kb else "未知")
+    col4.metric("持久化方案", "GitHub Actions Option A")
+
+    if tables_missing:
+        st.warning(
+            f"⚠️ 以下研究表尚未建立：{', '.join(tables_missing)}。"
+            "執行 `python scripts/run_hybrid_forward_shadow.py` 建立。"
+        )
+
+    if status == StorageHealthStatus.HEALTHY and not tables_missing:
+        st.success("✅ 儲存系統正常 — 三個研究表均已存在，連線可用。")
+
+    st.caption(
+        "儲存路徑已遮蔽。資料庫不含正式交易資料，不連結正式 Neon PostgreSQL。"
+    )
+
+
 def _render_hybrid_forward_shadow_status() -> None:
     """Display forward shadow operational health from hybrid_forward_decision/outcome tables."""
     import sqlite3
@@ -1066,8 +1129,12 @@ def _render_hybrid_forward_shadow_status() -> None:
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "data", "platform.db",
     )
+
+    # ── H. Storage health panel ───────────────────────────────────────────────
+    _render_storage_health_panel(db_path)
+    st.divider()
+
     if not os.path.exists(db_path):
-        st.warning("找不到 data/platform.db。")
         return
 
     conn = sqlite3.connect(db_path)

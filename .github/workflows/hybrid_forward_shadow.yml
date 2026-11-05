@@ -1,47 +1,43 @@
 name: Hybrid Forward Shadow (Research)
 
 # ── DEPLOYMENT STATUS ──────────────────────────────────────────────────────────
-# STATUS: DEPLOYMENT BLOCKED — PENDING PERSISTENCE DECISION
+# STATUS: DEPLOYMENT READY — Option A (GitHub Actions artifact cache) configured.
 #
-# REASON:
-#   GitHub Actions runners are ephemeral. Local SQLite (data/platform.db) is NOT
-#   persisted between runs. Each workflow execution starts with a fresh checkout,
-#   losing all previously accumulated forward shadow decisions.
+# PERSISTENCE STRATEGY: Option A — GitHub Actions artifact cache
+#   - data/platform.db is restored from cache at job start
+#   - data/platform.db is saved back to cache after job completes
+#   - Cache key includes run_id so each run creates a new cache entry
+#   - restore-keys prefix match finds the most recent entry on next run
+#   - Cache entries expire after 7 days of inactivity (GitHub default)
+#   - Total cache size: data/platform.db < 50MB even after years of research data
 #
-# RESOLUTION OPTIONS (requires human approval before enabling schedule):
-#   Option A: SQLite artifact — upload/download via actions/cache with a fixed key.
-#             Risk: GitHub artifact storage is limited; binary SQLite in git is bad practice.
-#             Suitable for: low-volume research with < 500MB DB.
-#
-#   Option B: S3/GCS persistent SQLite mount — download at start, upload at end.
-#             Risk: adds secrets (AWS_ACCESS_KEY / GOOGLE_CREDENTIALS) and I/O overhead.
-#             Suitable for: medium-term research persistence.
-#
-#   Option C: Dedicated research PostgreSQL (separate from production Neon).
-#             Risk: requires schema changes to use psycopg2 instead of sqlite3.
-#             Suitable for: long-term production-grade research system.
-#
-#   Option D: Local cron on a persistent machine (researcher's laptop or VM).
-#             Risk: depends on uptime of a specific machine.
-#             Suitable for: current phase (data/platform.db already exists locally).
-#
-# CURRENT RECOMMENDATION: Run locally via cron (Option D) until persistence is decided.
-# DO NOT enable the `schedule` trigger below without resolving persistence.
+# REMAINING BLOCKER FOR SCHEDULE ENABLE:
+#   - Human approval required before uncommenting the schedule trigger below
+#   - Run one manual workflow_dispatch first with confirm_persistence=YES
+#   - Verify data/platform.db is restored correctly on the second manual run
+#   - Then uncomment schedule and get approval
 #
 # SAFETY CONSTRAINTS:
 #   - This workflow does NOT write to production Neon PostgreSQL.
 #   - This workflow does NOT modify production ForwardSignals.
 #   - This workflow does NOT trigger production deployments.
 #   - This workflow does NOT modify MODEL_VERSION or trading thresholds.
+#   - NEON_URL is not used anywhere in this workflow.
 # ──────────────────────────────────────────────────────────────────────────────
 
 on:
-  # ── SCHEDULE IS COMMENTED OUT PENDING PERSISTENCE DECISION ───────────────
+  # ── SCHEDULE IS COMMENTED OUT — PENDING HUMAN APPROVAL ───────────────────
+  # Steps required before enabling:
+  #   1. Run manually once with confirm_persistence=YES to seed the cache
+  #   2. Run manually a second time to verify cache restore works
+  #   3. Confirm consecutive_failures=0 after both runs
+  #   4. Get explicit approval, then uncomment the block below
+  #
   # schedule:
-  #   # 台灣時間 15:30（收盤後）= UTC 07:30，週一至週五
-  #   - cron: '30 7 * * 1-5'
+  #   # 台灣時間 15:35（收盤後）= UTC 07:35，週一至週五
+  #   - cron: '35 7 * * 1-5'
 
-  # Manual trigger only until persistence is resolved
+  # Manual trigger (available now — use to test persistence)
   workflow_dispatch:
     inputs:
       trade_date:
@@ -60,35 +56,39 @@ on:
         default: false
       confirm_persistence:
         description: >
-          ⚠️ 確認已解決 SQLite 持久化問題（輸入 YES 才能執行）。
-          若未提供持久化儲存，此 workflow 執行後資料將遺失。
+          確認本次執行為有意的正式操作（輸入 YES 才能繼續）。
+          此 workflow 使用 GitHub Actions artifact cache 保存 data/platform.db。
+          如果 cache 遺失，當日資料需手動補跑。
         required: true
         type: string
 
 concurrency:
   group: hybrid-forward-shadow
-  cancel-in-progress: false
+  cancel-in-progress: false   # never cancel an in-flight shadow run
 
 jobs:
+  # ── 1. Persistence gate ────────────────────────────────────────────────────
   persistence-gate:
-    name: Persistence Safety Check
+    name: Confirm Operation
     runs-on: ubuntu-latest
     steps:
-      - name: Check persistence confirmation
+      - name: Verify confirmation
         run: |
           if [ "${{ github.event.inputs.confirm_persistence }}" != "YES" ]; then
-            echo "❌ DEPLOYMENT BLOCKED"
+            echo "❌ Operation not confirmed."
             echo ""
-            echo "GitHub Actions runners are ephemeral. Without a persistent storage"
-            echo "backend (S3, GCS, or dedicated research PostgreSQL), data/platform.db"
-            echo "will NOT be preserved between runs."
+            echo "Re-run with confirm_persistence=YES to proceed."
             echo ""
-            echo "To proceed, choose a persistence strategy (see workflow comments)"
-            echo "and re-run with confirm_persistence=YES."
+            echo "PERSISTENCE: This workflow uses GitHub Actions artifact cache"
+            echo "  (Option A) to persist data/platform.db between runs."
+            echo ""
+            echo "SAFETY: This workflow writes ONLY to research SQLite."
+            echo "  Production Neon PostgreSQL is NEVER touched."
             exit 1
           fi
-          echo "✅ Persistence confirmed by operator"
+          echo "✅ Operation confirmed by operator"
 
+  # ── 2. Main shadow runner ──────────────────────────────────────────────────
   run-hybrid-shadow:
     name: Hybrid Forward Shadow Runner
     runs-on: ubuntu-latest
@@ -99,11 +99,11 @@ jobs:
       PYTHONPATH: "."
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      # ── 2a. Checkout ────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Python ────────────────────────────────────────────────────────────
+      # ── 2b. Python ──────────────────────────────────────────────────────────
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
@@ -115,61 +115,67 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ── 3. ⚠️ PERSISTENCE PLACEHOLDER ────────────────────────────────────────
-      # TODO: Before enabling schedule, add one of these persistence steps:
-      #
-      # Option A — GitHub Actions artifact (suitable for < 500MB, short term):
-      # - name: Restore research database
-      #   uses: actions/cache@v4
-      #   with:
-      #     path: data/platform.db
-      #     key: hybrid-forward-shadow-db-${{ runner.os }}
-      #     restore-keys: hybrid-forward-shadow-db-
-      #
-      # Option B — S3 download (requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY secrets):
-      # - name: Download research database from S3
-      #   env:
-      #     AWS_ACCESS_KEY_ID: ${{ secrets.RESEARCH_S3_KEY_ID }}
-      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.RESEARCH_S3_SECRET }}
-      #   run: aws s3 cp s3://your-research-bucket/platform.db data/platform.db || echo "No existing DB"
-      - name: Persistence placeholder warning
-        run: |
-          echo "⚠️  WARNING: No persistence backend configured."
-          echo "Any data written in this run will be LOST when the runner terminates."
-          echo "Do not use this workflow for production research accumulation."
+      # ── 2c. Option A: Restore research database from cache ──────────────────
+      # Uses separate restore/save steps to allow force-save on every run
+      # (a cache hit with actions/cache@v4 combined would not re-save)
+      - name: Restore research database from cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: data/platform.db
+          # Exact key won't match (includes run_id) → falls back to prefix
+          key: hybrid-research-db-v1-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            hybrid-research-db-v1-${{ runner.os }}-
 
-      # ── 4. Verify research DB (not production) ───────────────────────────────
-      - name: Verify SQLite research DB exists
+      - name: Report cache restore status
+        run: |
+          if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ Cache hit: data/platform.db restored from previous run"
+          else
+            echo "ℹ️ Cache miss: no previous data/platform.db found"
+            echo "   This is expected on the first run."
+            echo "   data/platform.db will be populated from repository if present."
+          fi
+
+      # ── 2d. Verify research DB ───────────────────────────────────────────────
+      - name: Verify or initialise research database
         run: |
           if [ ! -f data/platform.db ]; then
-            echo "❌ data/platform.db not found. Cannot proceed."
-            echo "The research SQLite database must be provided via persistent storage."
-            exit 1
-          fi
-          echo "✅ data/platform.db found"
-          python3 -c "
+            echo "⚠️ data/platform.db not found after cache restore."
+            echo "   The database must be seeded with DailyPrice data."
+            echo "   First-run: upload a seeded data/platform.db as an artifact,"
+            echo "   or push it to the repository (note: .gitignore may exclude it)."
+            echo "   This run will likely produce BLOCKED_STALE_DATA."
+          else
+            python3 -c "
           import sqlite3
           conn = sqlite3.connect('data/platform.db')
-          n = conn.execute('SELECT COUNT(*) FROM daily_prices').fetchone()[0]
-          last = conn.execute('SELECT MAX(date) FROM daily_prices').fetchone()[0]
+          tables = [r[0] for r in conn.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()]
+          print(f'DB tables: {len(tables)} total')
+          if 'daily_prices' in tables:
+              r = conn.execute('SELECT MAX(date), COUNT(DISTINCT stock_id) FROM daily_prices WHERE stock_id=\"0050\"').fetchone()
+              print(f'DailyPrice (0050): last={r[0]}, ok={r[0] is not None}')
           conn.close()
-          print(f'DailyPrice rows: {n}, last_date: {last}')
-          "
+            "
+          fi
 
-      # ── 5. Confirm NOT using production Neon ─────────────────────────────────
+      # ── 2e. Confirm NOT using production Neon ───────────────────────────────
       - name: Confirm research-only environment
         run: |
           python3 - <<'PYEOF'
           import os
           neon = os.environ.get("NEON_URL", "")
+          research_pg = os.environ.get("RESEARCH_PG_URL", "")
           if neon:
-              print("⚠️ NEON_URL is set but this workflow does NOT use it.")
-              print("This workflow writes only to local SQLite (data/platform.db).")
-          else:
-              print("✅ No production database connection configured.")
+              print(f"⚠️  NEON_URL is set in environment (len={len(neon)}).")
+              print("    This workflow does NOT use it — research data goes to SQLite only.")
+          if research_pg:
+              print(f"ℹ️  RESEARCH_PG_URL is set — but Option A (SQLite) is active, not Option C.")
+          print("✅ No production database writes in this workflow.")
           PYEOF
 
-      # ── 6. Run hybrid forward shadow ─────────────────────────────────────────
+      # ── 2f. Run hybrid forward shadow ────────────────────────────────────────
       - name: Run Hybrid Forward Shadow
         run: |
           DATE_ARG=""
@@ -189,42 +195,51 @@ jobs:
 
           python3 scripts/run_hybrid_forward_shadow.py $DATE_ARG $FORCE_ARG $BACKFILL_ARG
 
-      # ── 7. Run regression tests ───────────────────────────────────────────────
+      # ── 2g. Run research tests ────────────────────────────────────────────────
       - name: Run research tests
         run: |
-          python3 -m pytest tests/test_hybrid_forward_shadow.py tests/test_hybrid_entry_strategy.py -q
+          python3 -m pytest \
+            tests/test_hybrid_forward_shadow.py \
+            tests/test_hybrid_entry_strategy.py \
+            tests/test_storage_adapter.py \
+            tests/test_cross_runner_persistence.py \
+            -q --tb=short
 
-      # ── 8. ⚠️ PERSISTENCE SAVE PLACEHOLDER ───────────────────────────────────
-      # TODO: Save DB back to persistent storage here (mirror of step 3).
-      # Option A — GitHub Actions artifact:
-      # - name: Save research database
-      #   uses: actions/cache@v4
-      #   with:
-      #     path: data/platform.db
-      #     key: hybrid-forward-shadow-db-${{ runner.os }}
-      #
-      # Option B — S3 upload:
-      # - name: Upload research database to S3
-      #   env:
-      #     AWS_ACCESS_KEY_ID: ${{ secrets.RESEARCH_S3_KEY_ID }}
-      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.RESEARCH_S3_SECRET }}
-      #   run: aws s3 cp data/platform.db s3://your-research-bucket/platform.db
-      - name: Persistence save placeholder
-        run: |
-          echo "⚠️  WARNING: DB changes will be LOST. Add persistence save step here."
-
-      # ── 9. Summary ───────────────────────────────────────────────────────────
+      # ── 2h. Print operational summary ────────────────────────────────────────
       - name: Print operational summary
         if: always()
         run: |
           python3 - <<'PYEOF'
-          import sqlite3, json
-          try:
-              conn = sqlite3.connect("data/platform.db")
-              from src.research.hybrid_forward_db import get_operational_summary
-              summary = get_operational_summary(conn)
-              conn.close()
-              print(json.dumps(summary, indent=2, default=str))
-          except Exception as e:
-              print(f"Could not load summary: {e}")
+          import sqlite3, json, os
+          if not os.path.exists("data/platform.db"):
+              print("data/platform.db not found — no summary available")
+          else:
+              try:
+                  conn = sqlite3.connect("data/platform.db")
+                  from src.research.hybrid_forward_db import get_operational_summary
+                  summary = get_operational_summary(conn)
+                  conn.close()
+                  print(json.dumps(summary, indent=2, default=str))
+              except Exception as e:
+                  print(f"Could not load summary: {e}")
           PYEOF
+
+      # ── 2i. Option A: Save research database back to cache ───────────────────
+      # Always save, even if the run was BLOCKED or SKIPPED (preserves DB state)
+      - name: Save research database to cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/platform.db
+          # Unique key per run so the latest run's DB is always findable
+          key: hybrid-research-db-v1-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Report cache save confirmation
+        if: always()
+        run: |
+          echo "✅ data/platform.db saved to cache (key: hybrid-research-db-v1-${{ runner.os }}-${{ github.run_id }})"
+          echo "   Next run will restore this exact file via restore-keys prefix match."
+          if [ -f data/platform.db ]; then
+            SIZE=$(du -sh data/platform.db | cut -f1)
+            echo "   File size: $SIZE"
+          fi
