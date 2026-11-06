@@ -42,7 +42,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -62,13 +61,10 @@ from src.research.v3_entry_strategy import (
     RC_INSUFFICIENT_DATA,
     RC_MA60_NOT_RISING,
     RC_MA20_PULLBACK_ZONE,
-    RC_MA60_SUPPORT_ZONE,
     RC_TOO_EXTENDED,
     RC_BELOW_BOTH_MAS,
-    RC_VOL_CONTRACTING,
     RC_VOL_EXPANDING,
     RC_NEAR_RESISTANCE,
-    V3EntryDecision,
     V3EntryTimingAnalyzer,
 )
 
@@ -167,17 +163,44 @@ _ANALYZER = V3EntryTimingAnalyzer()
 
 # ── V3-01: MA20 pullback → DIRECT_ENTRY (high confidence) ────────────────────
 
+def _make_ma20_pullback_deep(n: int = MIN_BARS_FULL) -> pd.DataFrame:
+    """
+    Strong uptrend then 7% pullback.
+    Prior 20D high is from the peak (10%+ above final price) → NOT near resistance.
+    Volume contracts in the last 10 bars.
+    """
+    n = max(n, MIN_BARS_FULL)
+    closes = []
+    for i in range(n - 25):
+        closes.append(60.0 * 1.006 ** i)
+    peak = closes[-1]
+    for i in range(1, 26):
+        closes.append(peak * (1.0 - 0.0028 * i))
+    dates = [date(2026, 1, 1) + timedelta(days=i) for i in range(n)]
+    highs = [c * 1.01 for c in closes]
+    lows = [c * 0.99 for c in closes]
+    volumes = [1_000_000.0] * (n - 10) + [
+        1_000_000.0 * max(0.4, 0.95 - 0.05 * i) for i in range(10)
+    ]
+    return pd.DataFrame({
+        "date": dates, "open": closes, "high": highs,
+        "low": lows, "close": closes, "volume": volumes,
+    })
+
+
 def test_V3_01_ma20_pullback_direct_entry():
     """
-    Uptrend with mild pullback to MA20 zone, rising MA20 slope, contracting volume,
-    positive R/R → should give DIRECT_ENTRY with confidence >= 55.
+    Strong uptrend with 7% pullback: price in MA20 zone, NOT near resistance
+    (prior 20D high is well above current price), rising MA20 slope,
+    contracting volume → DIRECT_ENTRY with confidence >= 55.
     """
-    hist = _make_pullback_history(n=MIN_BARS_FULL, trend_up_pct=0.4, pullback_pct=-1.5, vol_contract=True)
+    hist = _make_ma20_pullback_deep(n=MIN_BARS_FULL)
     result = _ANALYZER.analyze("TEST", hist, market_regime="bull")
 
     assert result.entry_decision == DIRECT_ENTRY, (
         f"Expected DIRECT_ENTRY, got {result.entry_decision} | "
-        f"ma20_gap={result.ma20_gap_pct}, ma20_trend={result.ma20_trend}, "
+        f"ma20_gap={result.ma20_gap_pct}, near_res={result.near_resistance}, "
+        f"dist_to_res={result.dist_to_resistance_pct}, "
         f"confidence={result.confidence}, reasons={result.reason_codes}"
     )
     assert result.confidence >= 55.0
@@ -358,32 +381,43 @@ def test_V3_07_avoid_chasing_too_extended():
 
 def test_V3_08_no_entry_below_both_mas():
     """
-    Price below both MA20 and MA60 → NO_ENTRY (don't catch falling knife).
+    Price below both MA20 and MA60 → NO_ENTRY (RC_BELOW_BOTH_MAS).
+    Build steep decline: 50 bars up, then 21 bars sharply down so
+    final price is well below both MA20 and MA60.
     """
-    n = MIN_BARS_FULL
-    # Uptrend for 70 bars, then steep decline
-    closes = [100.0 + i * 0.5 for i in range(70)] + [135.0 - i * 3.0 for i in range(1, n - 69)]
+    n = MIN_BARS_FULL  # 71
+    # 50 bars uptrend: 100 → 115
+    up_bars = 50
+    closes_up = [100.0 + i * 0.3 for i in range(up_bars)]   # 100 → 114.7
+    # 21 bars steep decline: 114.7 → 70
+    peak = closes_up[-1]
+    closes_dn = [peak - (peak - 70.0) * i / 20 for i in range(1, n - up_bars + 1)]
+    closes = closes_up + closes_dn
     closes = closes[:n]
-    # Last close < MA20 and < MA60
+
+    # Verify the scenario: final price must be below MA20 and MA60
+    ma20_val = float(np.mean(closes[-20:]))
+    ma60_val = float(np.mean(closes[-60:]))
+    final = closes[-1]
+    assert final < ma20_val and final < ma60_val, (
+        f"Test setup error: final={final:.1f} not below MA20={ma20_val:.1f}/MA60={ma60_val:.1f}"
+    )
+
     dates = [date(2026, 1, 1) + timedelta(days=i) for i in range(n)]
     highs = [c * 1.01 for c in closes]
     lows = [c * 0.99 for c in closes]
-    volumes = [1_000_000.0] * n
     hist = pd.DataFrame({
         "date": dates, "open": closes, "high": highs,
-        "low": lows, "close": closes, "volume": volumes,
+        "low": lows, "close": closes,
+        "volume": [1_000_000.0] * n,
     })
     result = _ANALYZER.analyze("TEST", hist, market_regime="neutral")
 
-    # Should not give a bullish entry
-    assert result.entry_decision in (NO_ENTRY, AVOID_CHASING, WAIT_MA20_PULLBACK), (
-        f"Got unexpected entry with price below both MAs: {result.entry_decision}"
+    assert result.entry_decision == NO_ENTRY, (
+        f"Expected NO_ENTRY, got {result.entry_decision} | "
+        f"ma20_gap={result.ma20_gap_pct}, reasons={result.reason_codes}"
     )
-    if result.ma20 and result.ma60 and result.entry_price:
-        below_ma20 = result.entry_price < result.ma20
-        below_ma60 = result.entry_price < result.ma60
-        if below_ma20 and below_ma60:
-            assert RC_BELOW_BOTH_MAS in result.reason_codes
+    assert RC_BELOW_BOTH_MAS in result.reason_codes
 
 
 # ── V3-09: Failed breakout → AVOID_CHASING ───────────────────────────────────
@@ -439,7 +473,7 @@ def test_V3_10_near_resistance_wait_breakout():
     })
     result = _ANALYZER.analyze("TEST", hist, market_regime="neutral")
 
-    assert result.near_resistance is True, f"Expected near_resistance=True"
+    assert result.near_resistance is True, "Expected near_resistance=True"
     assert result.entry_decision == WAIT_BREAKOUT_CONFIRMATION, (
         f"Expected WAIT_BREAKOUT_CONFIRMATION, got {result.entry_decision}"
     )
@@ -684,6 +718,10 @@ def test_V3_21_no_production_imports():
     v3_source = Path(__file__).parent.parent / "src" / "research" / "v3_entry_strategy.py"
     source_text = v3_source.read_text()
 
+    # Split off the module docstring — FORBIDDEN reminders in the docstring are acceptable;
+    # check only executable code (everything after the closing `"""` of the module docstring).
+    code_section = source_text.split('"""', 2)[-1]
+
     forbidden = [
         "from src.engines.decision",
         "import decision",
@@ -695,7 +733,7 @@ def test_V3_21_no_production_imports():
         "hybrid_forward_decision",  # must not write to hybrid_forward_decision
     ]
     for f in forbidden:
-        assert f not in source_text, f"V3 prototype contains forbidden reference: {f!r}"
+        assert f not in code_section, f"V3 prototype contains forbidden reference: {f!r}"
 
 
 # ── V3-22: Frozen Hybrid isolation ───────────────────────────────────────────
@@ -831,9 +869,12 @@ def test_V3_28_conflict_ma20_wins_over_ma60():
     })
     result = _ANALYZER.analyze("TEST", hist)
 
-    # With perfectly flat prices, MA20 == MA60 == close → both zones overlap
-    # Decision should be consistent (not crash), and reason codes should reflect it
-    assert result.entry_decision in (DIRECT_ENTRY, WAIT_MA20_PULLBACK, NO_ENTRY), (
+    # With perfectly flat prices, MA20 == MA60 == close → price sits at MA20 ≈ MA60.
+    # prior_20d_high = max(high[-21:-1]) = 101.0 (1% above 100), dist=1% ≤ 3% → near_resistance.
+    # Decision should be consistent (not crash).
+    assert result.entry_decision in (
+        DIRECT_ENTRY, WAIT_MA20_PULLBACK, WAIT_BREAKOUT_CONFIRMATION, NO_ENTRY
+    ), (
         f"Unexpected decision in conflict scenario: {result.entry_decision}"
     )
     assert len(result.reason_codes) >= 1
@@ -847,9 +888,12 @@ def test_V3_29_bear_regime_avoid_chasing_lower_threshold():
     A 13% MA20 gap should trigger AVOID_CHASING in bear but not neutral.
     """
     n = MIN_BARS_FULL
-    closes = [100.0] * (n - 1) + [113.0]  # +13% above MA20 ≈ 100
+    closes = [100.0] * (n - 1) + [113.0]  # today spikes +13% above MA20 ≈ 100
     dates = [date(2026, 1, 1) + timedelta(days=i) for i in range(n)]
     highs = [c * 1.01 for c in closes]
+    # Inject a historical spike into the prior_20d_high window (high[-21:-1]) so that
+    # prior_20d_high = 150 > 113 → resistance NOT broken → too_extended path fires, not stale breakout.
+    highs[n - 15] = 150.0  # index in [-21:-1] window (indices 50–69 for n=71)
     lows = [c * 0.99 for c in closes]
     hist = pd.DataFrame({
         "date": dates, "open": closes, "high": highs,
@@ -860,13 +904,19 @@ def test_V3_29_bear_regime_avoid_chasing_lower_threshold():
     result_bear = _ANALYZER.analyze("TEST", hist, market_regime="bear")
     result_neutral = _ANALYZER.analyze("TEST", hist, market_regime="neutral")
 
-    # bear threshold=12% → 13% gap should trigger AVOID_CHASING in bear
+    # Verify prior_20d_high captured the 150 spike → resistance_broken is False
+    assert result_bear.prior_20d_high is not None and result_bear.prior_20d_high >= 150.0, (
+        f"prior_20d_high should capture 150 spike, got {result_bear.prior_20d_high}"
+    )
+    assert not result_bear.resistance_broken, "Resistance should NOT be broken (113 < 150)"
+
+    # bear threshold=12% → MA20 gap ≈12.3% ≥ 12% → AVOID_CHASING
     assert result_bear.entry_decision == AVOID_CHASING, (
         f"Bear 13% gap should be AVOID_CHASING, got {result_bear.entry_decision}"
     )
-    # neutral threshold=15% → 13% gap should NOT trigger AVOID_CHASING in neutral
+    # neutral threshold=15% → MA20 gap ≈12.3% < 15% → NOT AVOID_CHASING
     assert result_neutral.entry_decision != AVOID_CHASING, (
-        f"Neutral 13% gap should NOT be AVOID_CHASING, got {result_neutral.entry_decision}"
+        f"Neutral 12.3% gap should NOT be AVOID_CHASING, got {result_neutral.entry_decision}"
     )
 
 

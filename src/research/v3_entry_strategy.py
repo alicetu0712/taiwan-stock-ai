@@ -278,7 +278,6 @@ class V3EntryTimingAnalyzer:
         hist = history.sort_values("date").reset_index(drop=True)
         close = hist["close"].values.astype(float)
         high = hist["high"].values.astype(float) if "high" in hist.columns else close
-        low = hist["low"].values.astype(float) if "low" in hist.columns else close
         volume = (
             hist["volume"].values.astype(float)
             if "volume" in hist.columns
