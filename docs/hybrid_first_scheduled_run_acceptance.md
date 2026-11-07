@@ -3,7 +3,7 @@
 **Date:** 2026-11-05 (updated after installation + initial operational verification)  
 **Cron installed:** ✅ 2026-11-05 18:09 Taiwan  
 **Manual pipeline run:** ✅ BLOCKED_PARTIAL_MARKET (correct fail-closed, 18:28 Taiwan)  
-**Status:** `AWAITING_FIRST_SCHEDULED_RUN` — next scheduled trigger: **2026-11-06 (五) 16:00 Taiwan**
+**Status:** `CRON_EXECUTION_FAILURE` — 2026-11-06 16:00 scheduled window PASSED; job did not fire (see `hybrid_cron_postwindow_acceptance_2026_11_06.md`)
 
 ---
 

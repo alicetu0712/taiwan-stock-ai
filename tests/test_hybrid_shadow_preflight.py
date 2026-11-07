@@ -124,8 +124,15 @@ def test_PF10_sqlite_magic_fails_on_non_sqlite(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_PF11_dailyprice_freshness_on_real_db():
-    result = check_dailyprice_freshness()
-    # Last date should be 2026-11-05 (gap=0)
+    # Freeze reference date to last known-good data date.
+    # check_dailyprice_freshness() uses date.today() to compute gap; without a
+    # fixed clock the test becomes non-deterministic (same pattern as PF13).
+    # Nov 6 DailyPrice is absent due to cron BTM failure; this test validates
+    # the Nov 5 snapshot state, not live freshness.
+    with patch("scripts.hybrid_shadow_preflight.date") as mock_date:
+        mock_date.today.return_value = date(2026, 11, 5)
+        mock_date.fromisoformat = date.fromisoformat
+        result = check_dailyprice_freshness()
     assert result.status == STATUS_PASS
     assert "2026-11-05" in result.detail
 

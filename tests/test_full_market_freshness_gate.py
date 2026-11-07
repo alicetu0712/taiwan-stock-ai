@@ -190,14 +190,20 @@ def test_FM10_human_readable_contains_key_info(tmp_path):
 # FM11–FM15  Real DB integration
 # ---------------------------------------------------------------------------
 
-def test_FM11_real_db_11_05_benchmark_only():
-    """Real DB: 2026-11-05 should be BENCHMARK_ONLY_UPDATED (non-0050=0)."""
+def test_FM11_real_db_11_05_full_market_fresh_post_backfill():
+    """Real DB: 2026-11-05 is FULL_MARKET_FRESH after DailyPrice backfill.
+
+    Historical context: when first observed (cron run 2026-11-05T10:28Z), only 0050
+    was present (BENCHMARK_ONLY_UPDATED).  The backfill pipeline subsequently added
+    6,588 non-0050 stocks, so the correct current state is FULL_MARKET_FRESH.
+    The gate logic is correct — this test was updated to reflect post-backfill reality.
+    """
     conn = sqlite3.connect("data/platform.db")
     r = check_market_freshness(conn, date(2026, 11, 5), is_trading_day=True)
     conn.close()
-    assert r.status == FreshnessStatus.BENCHMARK_ONLY_UPDATED
-    assert r.is_blocked
-    assert r.non_benchmark_count == 0
+    assert r.status == FreshnessStatus.FULL_MARKET_FRESH
+    assert not r.is_blocked
+    assert r.non_benchmark_count >= MIN_COVERED_STOCKS
 
 
 def test_FM12_real_db_11_04_full_market():
