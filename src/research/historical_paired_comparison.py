@@ -113,7 +113,6 @@ def _build_v1v2_pair(artifact: dict) -> PairedComparisonResult:
         (w for w in artifact.get("walk_forward", []) if w.get("is_oos")),
         None,
     )
-    n = overall.get("n", 0)
     n_filled = overall.get("n_filled", 0)
     delta = overall.get("paired_delta_mean")
     ci = overall.get("paired_delta_ci95", {})

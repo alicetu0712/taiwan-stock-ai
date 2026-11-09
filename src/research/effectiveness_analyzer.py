@@ -213,7 +213,7 @@ def compute_group_stats(signals: List[EnrichedSignal], label: str = "") -> Dict:
             "avg_waiting_days": None,
             "positive_missed_upside": None, "avoided_loss": None, "n_no_fill": 0,
             "insufficient_sample": True,
-            "stat_note": f"INSUFFICIENT SAMPLE (n=0, CI omitted)",
+            "stat_note": "INSUFFICIENT SAMPLE (n=0, CI omitted)",
         }
 
     n_filled = sum(1 for s in valid if s.v2_filled)
