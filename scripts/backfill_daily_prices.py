@@ -95,7 +95,7 @@ def _is_excluded(name: str, stock_id: str) -> bool:
     if any(kw.upper() in name_up for kw in EXCLUDE_KEYWORDS):
         return True
     sid = str(stock_id).strip()
-    if len(sid) > 4 and not sid.isdigit():
+    if len(sid) > 4:
         return True
     return False
 
