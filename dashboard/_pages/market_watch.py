@@ -552,6 +552,13 @@ def page_market_watch(selected_date: date) -> None:
         config={"scrollZoom": True, "displayModeBar": False},
     )
 
+    # ── 資料新鮮度標示（K 線截至日期）─────────────────────────────
+    # chart_max_date 來自該股票實際 price_df，不使用全域 MAX 或系統日期
+    from dashboard.components import chart_freshness_header
+    _chart_max_date = price_df["date"].max() if not price_df.empty else None
+    _analysis_date = analysis.get("date") if analysis else None
+    chart_freshness_header(_chart_max_date, _analysis_date)
+
     # ── MA 說明 ───────────────────────────────────────────────────
     st.markdown(
         """

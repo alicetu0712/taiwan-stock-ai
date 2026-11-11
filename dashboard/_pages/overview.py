@@ -96,6 +96,29 @@ def _render_trading_reference(
     chase_gap = ENTRY_QUALITY.get("chase_gap_pct", 5.0)
     td_label = next_td.strftime("%Y/%m/%d") if next_td else "—"
 
+    # ── 持久性資料時間標示（永遠顯示）─────────────────────────────
+    # Signal As-of = selected_date（訊號分析日）
+    # Price As-of  = latest_date（最近成功執行日，作為資料更新狀態的 proxy）
+    # 注意：two values can differ; latest_date may be None if execution_log has no success
+    from dashboard.components import data_freshness_banner
+
+    try:
+        from src.database import MODEL_VERSION as _MV
+    except Exception:
+        _MV = "v8.0"
+
+    _sig_lag = days_old  # calendar days since selected_date
+    _price_as_of = latest_date  # may differ from selected_date
+    _price_lag = (today - latest_date).days if latest_date else -1
+
+    data_freshness_banner(
+        selected_date, _sig_lag, source_label="AI 訊號", compact=True
+    )
+    if _price_as_of and _price_as_of != selected_date:
+        data_freshness_banner(
+            _price_as_of, _price_lag, source_label="股價資料", compact=True
+        )
+
     # — freshness note —
     freshness_html = ""
     if days_old > 1:

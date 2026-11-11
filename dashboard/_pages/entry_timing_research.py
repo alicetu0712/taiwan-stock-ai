@@ -200,17 +200,14 @@ def _render_stats_col(label: str, stats: dict) -> None:
 def page_entry_timing_research() -> None:
     st.markdown("## V2 進場時機研究（Shadow Mode）")
 
-    # Prominent research-only banner
-    st.markdown(
-        '<div style="background:#fef2f2;border:2px solid #dc2626;'
-        'border-radius:6px;padding:10px 14px;margin-bottom:12px">'
-        '<span style="color:#dc2626;font-weight:700;font-size:0.85rem">'
-        "🔬 RESEARCH ONLY — NOT A LIVE BUY SIGNAL</span><br>"
-        '<span style="color:#7f1d1d;font-size:0.78rem">'
-        "此頁為 V2 Entry Timing 研究輸出。V2 標籤不影響正式買賣決策、"
-        "持倉、ForwardSignal 或 MODEL_VERSION v8.0 任何元件。"
-        "</span></div>",
-        unsafe_allow_html=True,
+    # Prominent research-only banner（shared component）
+    from dashboard.components import research_only_banner
+
+    research_only_banner(compact=False)
+    # V2-specific isolation note (preserved from original)
+    st.caption(
+        "V2 標籤不影響正式買賣決策、持倉、ForwardSignal 或 MODEL_VERSION v8.0 任何元件。"
+        " Shadow Mode — 尚未啟用於正式決策。"
     )
 
     # Research version selector (global, affects all tabs)

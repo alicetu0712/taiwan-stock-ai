@@ -232,6 +232,15 @@ def _overall_stats(si: dict | None, key: str = "dedup_20") -> dict:
 
 
 def page_research_backtest() -> None:
+    # ── 研究用途標示（頁面最頂端，永遠顯示）────────────────────
+    from dashboard.components import research_only_banner
+
+    try:
+        from src.database import MODEL_VERSION as _MV
+    except Exception:
+        _MV = "v8.0"
+    research_only_banner(protocol_version=_MV, cutoff_date=_CUTOFF_LABEL)
+
     # ── 頁面標題與目的說明 ─────────────────────────────────────
     st.html("""
 <div style="margin-bottom:16px">

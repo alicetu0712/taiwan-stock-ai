@@ -265,7 +265,12 @@ def main() -> None:
         try:
             from sqlalchemy import func
 
-            from src.database import DailyPrice, Recommendation, get_session
+            from src.database import (
+                MODEL_VERSION as _MV,
+                DailyPrice,
+                Recommendation,
+                get_session,
+            )
 
             s = get_session()
             cnt = s.query(func.count(DailyPrice.id)).scalar()
@@ -275,11 +280,17 @@ def main() -> None:
             if cnt > 0:
                 st.metric("股價資料", f"{cnt:,} 筆")
                 if newest:
-                    st.caption(f"最新：{newest}")
+                    # 以新鮮度色彩標示資料庫最新日期（全域 MAX，非個股日期）
+                    from dashboard.components import data_freshness_banner
+
+                    data_freshness_banner(newest, source_label="股價庫", compact=True)
                 if first_rec:
                     st.caption(f"研究起始：{first_rec}")
             else:
                 st.caption("股價資料存於本機\n需在家中執行分析")
+            # Production model version
+            st.caption(f"正式模型：{_MV}")
+            st.caption("研究結果不代表正式交易建議")
         except Exception as e:
             logger.debug(f"guide page stock info query failed: {e}")
         st.markdown("---")

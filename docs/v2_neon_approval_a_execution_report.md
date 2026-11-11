@@ -14,7 +14,7 @@
 | Check | Result |
 |---|---|
 | Git HEAD | 1c42cb3 |
-| DB host | Neon PostgreSQL (ep-lively-butterfly-…-pooler) |
+| DB host | Neon PostgreSQL (db-host.example.invalid) |
 | Target table | `v2_shadow_signals` |
 | Column count (baseline) | 18 (research_version: absent, is_legacy: absent) |
 | Row count | 0 ✅ |
