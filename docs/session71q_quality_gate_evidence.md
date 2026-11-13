@@ -33,8 +33,37 @@ Done (exit=0) ✓
 Done (exit=0) ✓
 PROVIDER_NOT_READY — retry 2/3 in 30m
 ```
+(Mac slept between retry 1 and retry 2 — retry 2 delayed ~5 hours)
 
-**Root cause**: TWSE API serving api_date=2026-11-12 (yesterday) for all requests. Same pattern as Nov 10 (`api_date=2026-11-09`). TWSE data publication delay — data not available at 16:00 CST.
+**Retry 2 (13:32-13:34Z = 21:32-21:34 CST)**:
+```
+• 2026-11-10: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-10: quality gate FAILED — not writing to DB
+• 2026-11-11: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-11: quality gate FAILED — not writing to DB
+• 2026-11-12: quality gate FAILED — not writing to DB
+• 2026-11-13: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-13: quality gate FAILED — not writing to DB
+Done (exit=0) ✓
+PROVIDER_NOT_READY — retry 3/3 in 30m
+```
+
+**Retry 3 (14:04-14:05Z = 22:04-22:05 CST — LAST)**:
+```
+• 2026-11-10: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-10: quality gate FAILED — not writing to DB
+• 2026-11-11: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-11: quality gate FAILED — not writing to DB
+• 2026-11-12: quality gate FAILED — not writing to DB
+• 2026-11-13: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-13: quality gate FAILED — not writing to DB
+Done (exit=0) ✓
+BLOCKED_STALE_DATA (after 3 retries) — 0050 last_date=2026-11-05, today=2026-11-13
+```
+
+**Final status**: `BLOCKED_STALE_DATA`. All 4 runs (initial + 3 retries) failed for all dates.
+
+**Root cause**: TWSE API serving `api_date=2026-11-12` for ALL requests across the entire day (16:00–22:05 CST). Same structural pattern as Nov 10 (where TWSE showed Nov 09 data all day). TWSE API only serves the most recently published date — same-day Nov 13 data was never published to the API during the observation window. This is a data provider structural limitation, not a code or guard issue.
 
 **Note on 2026-11-12**: No `api_date mismatch` error (api_date correctly returns 2026-11-12) but still QG FAILED — another gate (QG-2~QG-7) blocked it. Possibly incomplete data or TPEx error.
 

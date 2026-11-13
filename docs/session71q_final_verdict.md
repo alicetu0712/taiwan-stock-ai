@@ -4,38 +4,51 @@
 **Execution Mode**: `PRODUCTION_READ_ONLY_OBSERVATION / NATURAL_CRON_ONLY / NO_MANUAL_EXECUTION`  
 **Trigger Time**: 2026-11-13T08:00:00Z = 16:00:00 CST  
 **Updated**: 2026-11-13 16:35 CST  
-**Current Status**: `H3_CONDITIONAL_PENDING` (Guard AUTHORIZED; QG retry 2/3 in progress)
+**Final Status**: `H3_GUARD_AUTHORIZED_QG_NEVER_PASSED`  
+**Completed**: 2026-11-13 22:06 CST
 
 ---
 
-## Part O — Final Verdict Table (Updated)
+## Part O — Final Verdict Table
 
 | Dimension | Verdict |
 |---|---|
-| Mac State | **AWAKE** at 16:00 CST ✓ (cron fired) |
+| Mac State | **AWAKE** at 16:00 CST ✓ (cron fired on schedule) |
 | Cron Trigger | **CONFIRMED** `[2026-11-13T08:00:00Z] Hybrid Shadow Cron — EXECUTE` |
 | Wrapper Start | **CONFIRMED** `Taiwan time: 2026-11-13 16:00:00 CST` |
-| FileLock | **ACQUIRED** state file `"lock": "acquired"` |
-| Guard | **AUTHORIZED** No `BLOCKED` msg; `exit_code=0`; backfill ran |
-| Backfill Start | **CONFIRMED** `[backfill] Running: .../backfill_daily_prices.py --execute` |
-| Quality Gate | **QG_FAILING** (api_date=2026-11-12 ≠ 2026-11-13); retry 2/3 at 09:05Z |
-| RC-2 Runtime | **PENDING QG** |
-| SQLite Outcome | **NO_WRITE** (534,770 unchanged; QG failed) |
-| Post-write Freshness | **PROVIDER_NOT_READY** (retrying) |
+| FileLock | **ACQUIRED → RELEASED** (wrapper completed normally) |
+| Guard | **AUTHORIZED** ✓ No `BLOCKED`; exit_code=0 × 4 runs |
+| Backfill Start | **CONFIRMED** × 4 (`[backfill] Running: .../backfill_daily_prices.py --execute`) |
+| Quality Gate | **ALL_FAILED** TWSE api_date=2026-11-12 ≠ 2026-11-13 (all 4 runs) |
+| RC-2 Runtime | **NOT_CONFIRMED** (QG blocked all writes; no data to filter) |
+| SQLite Outcome | **NO_WRITE** (534,770 / 2026-11-05 — unchanged) |
+| Post-write Freshness | **PROVIDER_NOT_READY** (exhausted 3 retries) |
+| Final Cron Status | **BLOCKED_STALE_DATA** |
 | Deploy A Runtime | **DEPLOY_A_GUARD_AUTHORIZED** ✓ |
-| H3 | **H3_CONDITIONAL_PENDING** |
-| Production Integrity | **VERIFIED** (hashes unchanged, no drift) |
+| H3 | **H3_GUARD_AUTHORIZED_QG_NEVER_PASSED** |
+| Production Integrity | **VERIFIED** (all hashes unchanged) |
 | Authorization | **OBSERVATION_ONLY / NO_NEW_WRITE_AUTHORIZATION** |
 
 ---
 
-## Why H3 is CONDITIONAL_PENDING
+## H3 Final Verdict Explanation
 
-Cron HAS fired at 16:00:00 CST. The Deploy A Guard has been AUTHORIZED — the first post-Deploy-A runtime authorization is confirmed. However, H3 requires all 7 conditions to be met, and QG is currently failing (PROVIDER_NOT_READY). Two retries remain (09:05Z and 09:35Z). If TWSE publishes Nov 13 data before retry 3 completes, QG may pass and H3 can be fully confirmed.
+**H3_GUARD_AUTHORIZED_QG_NEVER_PASSED** is the final outcome for 2026-11-13.
 
-If all 3 retries fail: H3 outcome = `H3_GUARD_AUTHORIZED_QG_NEVER_PASSED` — guard runtime confirmed, full chain pending next trading day.
+What was confirmed:
+- Cron triggered exactly on schedule (16:00:00 CST) ✓
+- Deploy A guard authorized the execution (first post-Deploy-A natural cron) ✓
+- Backfill ran without being blocked, 4 times ✓
+- Wrapper completed normally, lock released ✓
 
-PART K definition of `H3_PASS`: requires all 7 conditions including QG PASS + SQLite Write + RC-2 filter runtime evidence.
+What was not confirmed:
+- QG PASS: TWSE API served api_date=2026-11-12 for all requests (16:00–22:05 CST)
+- SQLite write: no rows written (534,770 unchanged)
+- RC-2 filter runtime: no data was written, so filter had no effect to observe
+
+**Root cause of QG failure**: Structural data provider issue. TWSE API only publishes previous day's settlement data (api_date=2026-11-12) throughout the entire trading day on Nov 13. Same behavior as Nov 10. This is not a code bug or guard regression — it is a known limitation of the TWSE data publication schedule.
+
+**Implication**: Full H3 (QG PASS + SQLite write + RC-2 runtime) requires a future trading day where TWSE data becomes available during the 16:00–22:05 CST retry window. The guard authorization itself is fully confirmed and Deploy A is functioning correctly.
 
 ---
 

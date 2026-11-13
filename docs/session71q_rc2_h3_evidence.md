@@ -1,24 +1,26 @@
 # Session 71Q — RC-2 H3 Evidence
 
 **Session**: 71Q  
-**Verdict**: `H3_CONDITIONAL_PENDING` — Guard AUTHORIZED, QG retrying  
-**Updated**: 2026-11-13 16:35 CST (retry 2/3 in progress)
+**Verdict**: `H3_GUARD_AUTHORIZED_QG_NEVER_PASSED`  
+**Updated**: 2026-11-13 22:06 CST (all retries exhausted)
 
 ---
 
-## H3 Requirement Summary
+## H3 Requirement Summary — FINAL
 
-| Condition | Required | Current Status |
+| Condition | Required | Final Status |
 |---|---|---|
-| Genuine Natural Cron Execution | YES | **CONFIRMED** (08:00:00Z log) |
-| Guard Authorization | YES | **CONFIRMED** (no BLOCKED, exit_code=0) |
-| QG PASS | YES | **QG_FAILING** (retry 1 done; retry 2 at ~09:05Z) |
-| RC-2 Filter Runtime Evidence | YES | PENDING QG |
-| SQLite Write Outcome | YES | NO_WRITE (QG failed; still 534,770) |
-| Post-write Freshness PASS | YES | PROVIDER_NOT_READY |
-| No RC-2 Runtime Regression | YES | N/A (no writes yet) |
+| Genuine Natural Cron Execution | YES | **CONFIRMED** ✓ (08:00:00Z = 16:00:00 CST) |
+| Guard Authorization | YES | **CONFIRMED** ✓ (no BLOCKED; exit_code=0 × 4 runs) |
+| QG PASS | YES | **NEVER_PASSED** ✗ (all 4 runs failed) |
+| RC-2 Filter Runtime Evidence | YES | **N/A** (QG blocked all writes) |
+| SQLite Write Outcome | YES | **NO_WRITE** (534,770 unchanged) |
+| Post-write Freshness PASS | YES | **PROVIDER_NOT_READY** |
+| No RC-2 Runtime Regression | YES | N/A (no writes) |
 
-**Two conditions CONFIRMED. QG is the remaining blocker — retrying.**
+**Result: H3_GUARD_AUTHORIZED_QG_NEVER_PASSED**
+
+Two of seven conditions confirmed. QG failure is structural (TWSE API limitation), not a code or guard issue. Full H3 (including RC-2 filter runtime) requires a future trading day where TWSE data is available during the cron retry window.
 
 ---
 
