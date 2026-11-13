@@ -106,6 +106,46 @@ print('SQLite:', c.fetchone())
 
 ---
 
-## 6. Verdict
+## 6. Post-Scheduled Investigation (17:13 CST)
 
-**Current**: `H3_PENDING` — Natural cron has not yet executed at time of initial check (14:31 CST). To be updated after 16:00 CST execution.
+Executed 73 minutes after scheduled fire time:
+
+```bash
+date
+# → Wed Nov 11 17:13:48 CST 2026
+
+grep "[2026-11-11" logs/hybrid_cron.log | wc -l
+# → 0
+
+ls -la logs/hybrid_cron.log
+# → -rw-r--r--  9618 Nov 10 17:37  (unchanged since Nov 10)
+
+pgrep -x cron
+# → 20488 CRON_RUNNING (daemon active)
+
+log show --last 4h --predicate 'eventMessage CONTAINS "cron" ...'
+# → (no output)
+```
+
+### Root Cause Assessment
+
+| Hypothesis | Evidence | Verdict |
+|---|---|---|
+| Machine sleeping at 16:00 | No log entry; macOS cron doesn't wake machine | **LIKELY** |
+| cron daemon not running | PID 20488 found | RULED OUT |
+| Stale lock file | Lock PID 91460 dead; flock advisory = freed | RULED OUT |
+| Non-trading day | 2026-11-11 is_trading_day=True | RULED OUT |
+| Script import error | Would appear in stderr → log via 2>&1 | RULED OUT |
+| Crontab misconfigured | Verified: `0 16 * * 1-5 ...` correct | RULED OUT |
+
+**Most probable**: macOS traditional cron (`/usr/sbin/cron`) does NOT wake the machine from sleep. If the machine entered sleep mode at or before 16:00 CST, the job would be silently missed.
+
+---
+
+## 7. Verdict
+
+**`CRON_TRIGGER_NOT_OBSERVED`**
+
+Trigger window (16:00 CST = 08:00 UTC) passed without evidence of execution. Per spec PART H: "若排程已過卻沒有自然觸發紀錄，請明確記錄 TRIGGER_NOT_OBSERVED."
+
+**H3**: Still `H3_PENDING` — no natural cron execution observed; condition "尚未發生可供查驗的自然 Cron" applies. Next opportunity: 2026-11-12 16:00 CST.

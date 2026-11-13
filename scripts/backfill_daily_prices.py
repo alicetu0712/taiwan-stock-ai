@@ -1,5 +1,8 @@
 """
-backfill_daily_prices.py — Safe DailyPrice backfill for local research SQLite
+backfill_daily_prices_guarded.py — Safe DailyPrice backfill with S71M entry guard
+
+Entry guard (S71M): --execute requires authorized context (lock-based check).
+See BackfillEntryGuard.check_original_entry() in scheduler_safety_guards.py.
 
 SAFETY CONSTRAINTS (enforced at startup):
   1. Only writes to local SQLite (data/platform.db) — NEVER to production Neon.
@@ -37,12 +40,15 @@ import time
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
 
+from pathlib import Path
+
 import pandas as pd
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH
+from scripts.scheduler_safety_guards import BackfillEntryGuard
 from src.core.trading_calendar import TaiwanTradingCalendar
 from src.research.dailyprice_quality_gate import run_quality_gate
 
@@ -63,6 +69,21 @@ EXCLUDE_KEYWORDS = [
     "DR", "DEPOSITARY", "WARRANT", "WARRANTS",
 ]
 _CALENDAR = TaiwanTradingCalendar()
+
+# Production lock file path (must match hybrid_shadow_cron.py's LOCK_FILE)
+_DEFAULT_LOCK_FILE = Path(DB_PATH).parent / ".cron.lock"
+
+
+def _get_cron_lock_path(db_path=None, _override=None):
+    """Derive .cron.lock path. _override and BACKFILL_LOCK_PATH are for test isolation only."""
+    if _override:
+        return Path(_override)
+    env_override = os.environ.get("BACKFILL_LOCK_PATH")
+    if env_override:
+        return Path(env_override)
+    if db_path and db_path != ":memory:":
+        return Path(db_path).parent / ".cron.lock"
+    return _DEFAULT_LOCK_FILE
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -424,19 +445,36 @@ def run_backfill(
     end: date,
     execute: bool = False,
     db_path: Optional[str] = None,
+    _lock_path: Optional[str] = None,
 ) -> dict:
     """
     Backfill DailyPrice for missing trading days in [start, end].
 
     Parameters
     ----------
-    execute : if False (default), dry-run only — no DB writes.
-    db_path : override for the target SQLite file (default: config.DB_PATH).
+    execute    : if False (default), dry-run only — no DB writes.
+    db_path    : override for the target SQLite file (default: config.DB_PATH).
+    _lock_path : override lock file path for test isolation (not for production use).
 
-    Returns summary dict with dates_processed, total_inserted, total_skipped, errors.
+    Returns summary dict. If guard blocks --execute, returns dict with guard_blocked=True.
     """
     if db_path is None:
         db_path = str(DB_PATH)
+
+    # S71M Entry Guard (defense-in-depth; also checked in main())
+    if execute:
+        lock_path = _get_cron_lock_path(db_path, _lock_path)
+        authorized, reason = BackfillEntryGuard.check_original_entry(
+            is_execute=True, lock_path=lock_path
+        )
+        if not authorized:
+            print(f"[BACKFILL_GUARD] BLOCKED: {reason}", file=sys.stderr)
+            print("[BACKFILL_GUARD] No data was read or written.", file=sys.stderr)
+            return {
+                "dates_processed": 0, "total_inserted": 0, "total_skipped": 0,
+                "errors": [f"GUARD_BLOCKED: {reason}"], "qg_results": [],
+                "guard_blocked": True,
+            }
 
     print(f"\n{'='*60}")
     print(f"DailyPrice Backfill — {'EXECUTE' if execute else 'DRY-RUN'}")
@@ -624,10 +662,19 @@ def main() -> None:
     end = date.fromisoformat(args.end)
 
     if start > end:
-        # Data is already up-to-date — not an error; exit cleanly.
-        # This happens when today's data was already inserted (e.g. via manual recovery).
         print(f"[INFO] start={start} > end={end}: DB already current, nothing to backfill")
         sys.exit(0)
+
+    # S71M Entry Guard at CLI (defense-in-depth: also checked in run_backfill)
+    if args.execute:
+        lock_path = _get_cron_lock_path(args.db)
+        authorized, reason = BackfillEntryGuard.check_original_entry(
+            is_execute=True, lock_path=lock_path
+        )
+        if not authorized:
+            print(f"[BACKFILL_GUARD] BLOCKED: {reason}", file=sys.stderr)
+            print("[BACKFILL_GUARD] No data was read or written.", file=sys.stderr)
+            sys.exit(2)
 
     run_backfill(start=start, end=end, execute=args.execute, db_path=args.db)
 
