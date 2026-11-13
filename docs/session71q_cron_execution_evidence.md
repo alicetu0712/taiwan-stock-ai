@@ -1,8 +1,9 @@
 # Session 71Q — Cron Execution Evidence
 
 **Session**: 71Q  
-**Verdict**: `CRON_NOT_OBSERVED_BEFORE_TRIGGER`  
-**Observation Time**: 2026-11-13 01:43 CST
+**Verdict**: `CRON_TRIGGERED_QG_RETRY_IN_PROGRESS`  
+**Trigger Time**: 2026-11-13T08:00:00Z = 16:00:00 CST  
+**Updated**: 2026-11-13 16:35 CST (after retry 1 complete)
 
 ---
 
@@ -11,16 +12,16 @@
 | Node | Status | Evidence | Confidence |
 |---|---|---|---|
 | Cron scheduled | VERIFIED | Crontab: `0 16 * * 1-5` ✓ | HIGH |
-| Cron triggered (Nov 13) | NOT_OBSERVED | 16:00 CST hasn't arrived | N/A |
-| Wrapper started | NOT_OBSERVED | No log entry for Nov 13 | N/A |
-| FileLock acquired | NOT_OBSERVED | Lock mtime: Nov 10 16:00 | N/A |
-| Guard authorization | NOT_OBSERVED | No guard log for Nov 13 | N/A |
-| Backfill started | NOT_OBSERVED | No backfill log for Nov 13 | N/A |
-| QG evaluation | NOT_OBSERVED | — | N/A |
-| RC-2 Filter execution | NOT_OBSERVED | — | N/A |
-| SQLite Write | NOT_OBSERVED | Row count at baseline 534,770 | N/A |
-| Post-write Freshness | NOT_OBSERVED | — | N/A |
-| Exit status | NOT_OBSERVED | — | N/A |
+| Cron triggered (Nov 13) | **CONFIRMED** | Log: `[2026-11-13T08:00:00Z] Hybrid Shadow Cron — EXECUTE` | HIGH |
+| Wrapper started | **CONFIRMED** | Log: `Taiwan time: 2026-11-13 16:00:00 CST` | HIGH |
+| FileLock acquired | **CONFIRMED** | State file: `"lock": "acquired"` | HIGH |
+| Guard authorization | **CONFIRMED** | No `BLOCKED`, backfill ran, `exit_code=0` | HIGH |
+| Backfill started | **CONFIRMED** | Log: `[backfill] Running: .../backfill_daily_prices.py --execute` | HIGH |
+| QG evaluation | **QG_FAILED** | TWSE api_date=2026-11-12 ≠ target; all dates failed | HIGH |
+| RC-2 Filter execution | PENDING QG | QG blocked writes before RC-2 filter matters | N/A |
+| SQLite Write | **NO_WRITE** | Row count still 534,770 / 2026-11-05 (QG failed) | HIGH |
+| Post-write Freshness | PROVIDER_NOT_READY | TWSE data not published at 16:00 CST; retrying | HIGH |
+| Retry 1 complete | QG_FAILED | 08:32-08:35Z: same QG failures; retry 2/3 at 09:05Z | HIGH |
 
 ---
 
@@ -28,10 +29,10 @@
 
 | Date | Log Entries | Cron Executed? | Root Cause |
 |---|---|---|---|
-| 2026-11-10 | 50 lines | YES (BLOCKED_STALE_DATA) | Pre-Deploy-A run |
+| 2026-11-10 | 50 lines | YES (BLOCKED_STALE_DATA) | Pre-Deploy-A; TWSE stale |
 | 2026-11-11 | 0 | NO | SLEEP (Clamshell) |
 | 2026-11-12 | 0 | NO | SLEEP (DarkWake only) |
-| 2026-11-13 | 0 | PENDING (16:00 CST) | — |
+| 2026-11-13 | **12+ lines** | **YES — running (retrying)** | TWSE data not ready at 16:00 |
 
 ---
 

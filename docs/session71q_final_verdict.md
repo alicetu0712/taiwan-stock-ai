@@ -2,50 +2,51 @@
 
 **Session**: 71Q  
 **Execution Mode**: `PRODUCTION_READ_ONLY_OBSERVATION / NATURAL_CRON_ONLY / NO_MANUAL_EXECUTION`  
-**Observation Time**: 2026-11-13 01:43 CST  
-**Trigger Target**: 2026-11-13 16:00 CST  
-**Final Status**: `H3_PENDING`
+**Trigger Time**: 2026-11-13T08:00:00Z = 16:00:00 CST  
+**Updated**: 2026-11-13 16:35 CST  
+**Current Status**: `H3_CONDITIONAL_PENDING` (Guard AUTHORIZED; QG retry 2/3 in progress)
 
 ---
 
-## Part O — Final Verdict Table
+## Part O — Final Verdict Table (Updated)
 
 | Dimension | Verdict |
 |---|---|
-| Observation Time | **BEFORE_TRIGGER** (01:43 CST; 16:00 CST is ~14h15min away) |
-| Mac State | **AWAKE** (active session at 01:43 CST; state at 16:00 UNKNOWN) |
-| Cron Trigger | **NOT_OBSERVED** (target time not reached) |
-| Wrapper Start | **NOT_OBSERVED** |
-| FileLock | **UNKNOWN** (no active holder; will acquire when cron fires) |
-| Guard | **NOT_OBSERVED** |
-| Backfill Start | **NOT_OBSERVED** |
-| Quality Gate | **UNKNOWN** |
-| RC-2 Runtime | **NOT_OBSERVED** |
-| SQLite Outcome | **UNKNOWN** (baseline 534,770 / 2026-11-05) |
-| Post-write Freshness | **UNKNOWN** |
-| Deploy A Runtime | **PENDING** |
-| H3 | **H3_PENDING** |
-| Production Integrity | **VERIFIED** (all hashes match, no drift) |
+| Mac State | **AWAKE** at 16:00 CST ✓ (cron fired) |
+| Cron Trigger | **CONFIRMED** `[2026-11-13T08:00:00Z] Hybrid Shadow Cron — EXECUTE` |
+| Wrapper Start | **CONFIRMED** `Taiwan time: 2026-11-13 16:00:00 CST` |
+| FileLock | **ACQUIRED** state file `"lock": "acquired"` |
+| Guard | **AUTHORIZED** No `BLOCKED` msg; `exit_code=0`; backfill ran |
+| Backfill Start | **CONFIRMED** `[backfill] Running: .../backfill_daily_prices.py --execute` |
+| Quality Gate | **QG_FAILING** (api_date=2026-11-12 ≠ 2026-11-13); retry 2/3 at 09:05Z |
+| RC-2 Runtime | **PENDING QG** |
+| SQLite Outcome | **NO_WRITE** (534,770 unchanged; QG failed) |
+| Post-write Freshness | **PROVIDER_NOT_READY** (retrying) |
+| Deploy A Runtime | **DEPLOY_A_GUARD_AUTHORIZED** ✓ |
+| H3 | **H3_CONDITIONAL_PENDING** |
+| Production Integrity | **VERIFIED** (hashes unchanged, no drift) |
 | Authorization | **OBSERVATION_ONLY / NO_NEW_WRITE_AUTHORIZATION** |
 
 ---
 
-## Why H3 is PENDING (not INCONCLUSIVE)
+## Why H3 is CONDITIONAL_PENDING
 
-PART K definition: `H3_PENDING` applies when "自然 Cron 未執行" or "觀察時間尚未到."
+Cron HAS fired at 16:00:00 CST. The Deploy A Guard has been AUTHORIZED — the first post-Deploy-A runtime authorization is confirmed. However, H3 requires all 7 conditions to be met, and QG is currently failing (PROVIDER_NOT_READY). Two retries remain (09:05Z and 09:35Z). If TWSE publishes Nov 13 data before retry 3 completes, QG may pass and H3 can be fully confirmed.
 
-The target observation window (16:00 CST Nov 13) has not been reached. No cron run has occurred since Deploy A. This is not an ambiguous or partial execution — the trigger simply hasn't fired yet. No evidence from Nov 11 or Nov 12 is relevant because those were pre-Deploy-A or sleep-missed.
+If all 3 retries fail: H3 outcome = `H3_GUARD_AUTHORIZED_QG_NEVER_PASSED` — guard runtime confirmed, full chain pending next trading day.
+
+PART K definition of `H3_PASS`: requires all 7 conditions including QG PASS + SQLite Write + RC-2 filter runtime evidence.
 
 ---
 
-## Sleep Pattern Evidence
+## Sleep/Wake Pattern Evidence
 
-| Date | Mac at 16:00 CST | Cron Missed |
+| Date | Mac at 16:00 CST | Cron Result |
 |---|---|---|
-| 2026-11-10 | AWAKE | Ran (BLOCKED_STALE_DATA) |
-| 2026-11-11 | ASLEEP (Clamshell) | YES |
-| 2026-11-12 | ASLEEP (DarkWake only) | YES |
-| 2026-11-13 | AWAKE at 01:43 | PENDING 16:00 |
+| 2026-11-10 | AWAKE | Ran (BLOCKED_STALE_DATA, pre-Deploy-A) |
+| 2026-11-11 | ASLEEP (Clamshell) | MISSED |
+| 2026-11-12 | ASLEEP (DarkWake only) | MISSED |
+| 2026-11-13 | **AWAKE** | **FIRED — Guard AUTHORIZED** |
 
 ---
 

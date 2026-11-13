@@ -1,7 +1,19 @@
 # Session 71Q — SQLite & Post-write Freshness
 
 **Session**: 71Q  
-**Verdict**: `SQLITE_BASELINE_VERIFIED / POST_WRITE_NOT_OBSERVED`
+**Verdict**: `SQLITE_UNCHANGED_QG_RETRY_IN_PROGRESS`  
+**Updated**: 2026-11-13 16:35 CST
+
+---
+
+## SQLite State at 16:35 CST (Post Retry 1)
+
+| Metric | Value | Change from Baseline |
+|---|---|---|
+| `daily_prices` row count | **534,770** | UNCHANGED (QG failed — no writes) |
+| `daily_prices` MAX(date) | **2026-11-05** | UNCHANGED |
+
+**Consistent with QG failure**: All backfill dates failed QG-1 (api_date mismatch), so no rows were written. The row count unchanged proves guard did not accidentally bypass QG to write bad data.
 
 ---
 

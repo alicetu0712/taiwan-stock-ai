@@ -1,13 +1,26 @@
 # Session 71Q — Guard & FileLock Evidence
 
 **Session**: 71Q  
-**Verdict**: `GUARD_NOT_OBSERVED` (pre-trigger)
+**Verdict**: `GUARD_AUTHORIZED_CONFIRMED`  
+**Updated**: 2026-11-13 16:35 CST
 
 ---
 
-## Guard Status at Observation Time
+## Guard Runtime Evidence (2026-11-13 16:00 CST)
 
-Since no cron run has occurred for Nov 11-13, there is no Guard or FileLock runtime evidence to report. All guard evidence is from the preflight verification.
+**GUARD AUTHORIZED — CONFIRMED**
+
+| Evidence Item | Value | Source |
+|---|---|---|
+| Backfill script called by wrapper | ✓ | Log: `[backfill] Running: .../backfill_daily_prices.py --execute` |
+| `[BACKFILL_GUARD] BLOCKED` in log | **ABSENT** | Grep result: `NO_GUARD_BLOCK_MESSAGE_FOUND` |
+| Backfill exit code | 0 | Log: `Done (exit=0) ✓` |
+| FileLock state in state file | `"lock": "acquired"` | `data/.cron_state.json` |
+| Backfill ran (not short-circuited) | ✓ | QG evaluation occurred (dates evaluated) |
+
+**Authorization Proof**: The wrapper holds `fcntl.flock(LOCK_EX)` during the entire run. When the guarded backfill subprocess calls `fcntl.flock(LOCK_EX | LOCK_NB)` on the same lock, it gets `BlockingIOError` → `AUTHORIZED`. The absence of `[BACKFILL_GUARD] BLOCKED` and the presence of QG evaluation logs confirm the guard authorized execution.
+
+**Deploy A Runtime Status**: `DEPLOY_A_GUARD_AUTHORIZED` ✓
 
 ---
 

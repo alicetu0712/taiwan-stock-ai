@@ -1,26 +1,24 @@
 # Session 71Q — RC-2 H3 Evidence
 
 **Session**: 71Q  
-**Verdict**: `H3_PENDING`  
-**H3 Status**: PENDING — 16:00 CST trigger not yet observed
+**Verdict**: `H3_CONDITIONAL_PENDING` — Guard AUTHORIZED, QG retrying  
+**Updated**: 2026-11-13 16:35 CST (retry 2/3 in progress)
 
 ---
 
 ## H3 Requirement Summary
 
-H3 requires ALL of the following (per PART K):
-
 | Condition | Required | Current Status |
 |---|---|---|
-| Genuine Natural Cron Execution | YES | NOT_OBSERVED |
-| Guard Authorization | YES | NOT_OBSERVED |
-| QG PASS | YES | NOT_OBSERVED |
-| RC-2 Filter Runtime Evidence | YES | NOT_OBSERVED |
-| SQLite Write Outcome | YES | NOT_OBSERVED |
-| Post-write Freshness PASS | YES | NOT_OBSERVED |
-| No RC-2 Runtime Regression | YES | NOT_OBSERVED |
+| Genuine Natural Cron Execution | YES | **CONFIRMED** (08:00:00Z log) |
+| Guard Authorization | YES | **CONFIRMED** (no BLOCKED, exit_code=0) |
+| QG PASS | YES | **QG_FAILING** (retry 1 done; retry 2 at ~09:05Z) |
+| RC-2 Filter Runtime Evidence | YES | PENDING QG |
+| SQLite Write Outcome | YES | NO_WRITE (QG failed; still 534,770) |
+| Post-write Freshness PASS | YES | PROVIDER_NOT_READY |
+| No RC-2 Runtime Regression | YES | N/A (no writes yet) |
 
-**None of the H3 conditions can be confirmed without a completed cron run.**
+**Two conditions CONFIRMED. QG is the remaining blocker — retrying.**
 
 ---
 
@@ -56,9 +54,10 @@ The `len(sid) > 4` rule is unchanged from S66.
 | S68 | 2026-11-11 | 00:46 CST run (pre-Deploy-A, pre-window) |
 | S71E | 2026-11-12 16:00 | Mac asleep (suspected) |
 | S71I | 2026-11-12 16:00 | Mac asleep (confirmed) |
-| S71Q | 2026-11-13 | PENDING (16:00 not yet arrived) |
+| S71Q | 2026-11-13 | **CRON FIRED — Guard AUTHORIZED — QG retrying** |
 
-Deploy A was at 01:35 CST Nov 13. This is the **first post-Deploy-A cron opportunity.**
+Deploy A was at 01:35 CST Nov 13. This is the **first post-Deploy-A cron execution.**  
+Cron triggered at 16:00:00 CST. Guard authorization CONFIRMED. QG in retry 2/3.
 
 ---
 

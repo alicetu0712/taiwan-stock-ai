@@ -1,13 +1,42 @@
 # Session 71Q — Quality Gate Evidence
 
 **Session**: 71Q  
-**Verdict**: `QG_NOT_OBSERVED` (pre-trigger)
+**Verdict**: `QG_FAILED_PROVIDER_NOT_READY` (retrying)  
+**Updated**: 2026-11-13 16:35 CST
 
 ---
 
 ## QG Status
 
-No cron run has occurred for Nov 11-13. Quality gate evidence is unavailable until after 16:00 CST triggers a natural cron run.
+Cron triggered at 16:00 CST. Initial run + retry 1 complete. Both runs: QG FAILED for all dates. Retry 2 at ~17:05 CST, retry 3 at ~17:35 CST.
+
+## Runtime QG Evidence (2026-11-13T08:00-08:35Z)
+
+**Initial run (08:00-08:02Z)**:
+```
+• 2026-11-10: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-10: quality gate FAILED — not writing to DB
+• 2026-11-11: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-11: quality gate FAILED — not writing to DB
+• 2026-11-12: quality gate FAILED — not writing to DB
+• 2026-11-13: TWSE api_date=2026-11-12 != target — API returned wrong date
+• 2026-11-13: quality gate FAILED — not writing to DB
+Done (exit=0) ✓
+```
+
+**Retry 1 (08:32-08:35Z)**:
+```
+• 2026-11-10: quality gate FAILED — not writing to DB
+• 2026-11-11: quality gate FAILED — not writing to DB
+• 2026-11-12: quality gate FAILED — not writing to DB
+• 2026-11-13: quality gate FAILED — not writing to DB
+Done (exit=0) ✓
+PROVIDER_NOT_READY — retry 2/3 in 30m
+```
+
+**Root cause**: TWSE API serving api_date=2026-11-12 (yesterday) for all requests. Same pattern as Nov 10 (`api_date=2026-11-09`). TWSE data publication delay — data not available at 16:00 CST.
+
+**Note on 2026-11-12**: No `api_date mismatch` error (api_date correctly returns 2026-11-12) but still QG FAILED — another gate (QG-2~QG-7) blocked it. Possibly incomplete data or TPEx error.
 
 ---
 
