@@ -1262,6 +1262,7 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
                     t1_day = i - idx_s + 1
                     break
 
+        note = None  # explicit init prevents loop-variable contamination
         if t1_day and stop_day:
             if t1_day < stop_day:
                 note = "T1_HIT"
@@ -1276,10 +1277,11 @@ def compute_signal_outcomes(session, as_of_date: date) -> int:
             note = "T1_HIT"
         elif stop_day:
             note = "STOP_TRIGGERED"
+        elif ret_20 is not None and ret_60 is not None:
+            note = "EXPIRED"  # Both 20D and 60D computed — safe to finalize
         elif ret_20 is not None:
-            note = "EXPIRED"
-        else:
-            note = None  # not enough data yet
+            pass  # 60D not yet mature — note=None (set above), do NOT lock → retry next run
+        # else: neither 20D nor 60D ready — note remains None
 
         fs.fwd_return_20d = ret_20
         fs.alpha_20d = alpha_20
