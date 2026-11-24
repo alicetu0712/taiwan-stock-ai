@@ -1,0 +1,353 @@
+name: Verify Neon Connection (Isolated)
+
+# PURPOSE: Verify NEON_URL secret identity against NEON_EXPECTED_HOST secret.
+# TRIGGER: Manual only (workflow_dispatch). No schedule, push, or PR triggers.
+# SAFETY:  No repository checkout. No data writes. sslmode=verify-full.
+#          Secrets injected via env: only. Safe error codes only in output.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: verify-neon
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Neon Identity Verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+
+      # Step 1: Confirm both required secrets are present.
+      # Missing either exits 1 immediately — SKIP is not PASS.
+      - name: Check secrets present
+        env:
+          NEON_URL: ${{ secrets.NEON_URL }}
+          NEON_EXPECTED_HOST: ${{ secrets.NEON_EXPECTED_HOST }}
+        run: |
+          python3.12 - << 'PYEOF'
+          import os, sys
+          ok = True
+          if not os.environ.get("NEON_URL", "").strip():
+              print("SECRET_MISSING: NEON_URL")
+              ok = False
+          if not os.environ.get("NEON_EXPECTED_HOST", "").strip():
+              print("SECRET_MISSING: NEON_EXPECTED_HOST")
+              ok = False
+          if ok:
+              print("SECRETS_PRESENT: PASS")
+          else:
+              sys.exit(1)
+          PYEOF
+
+      # Step 2: Create isolated venv and install DB driver.
+      # Uses venv to avoid PEP 668 "externally managed environment" on ubuntu-24.04.
+      # The same venv Python is used for both install and execution in Step 3.
+      - name: Create venv and install psycopg2-binary
+        run: |
+          python3.12 -m venv "$RUNNER_TEMP/neon-venv"
+          "$RUNNER_TEMP/neon-venv/bin/python" -m pip install --no-cache-dir psycopg2-binary==2.9.9
+
+      # Step 3: URL validation, connection, and identity verification.
+      # Phase 1: Validate URL structure and extract explicit connection parameters.
+      # Phase 2: Connect with sslmode=verify-full using explicit kwargs (not raw URL).
+      # Phase 3: Verify identity and schema in a READ ONLY transaction.
+      # Safe error codes only. No secret values, hostnames, or exceptions printed.
+      - name: Verify Neon connection identity
+        env:
+          NEON_URL: ${{ secrets.NEON_URL }}
+          NEON_EXPECTED_HOST: ${{ secrets.NEON_EXPECTED_HOST }}
+        run: |
+          "$RUNNER_TEMP/neon-venv/bin/python" - << 'PYEOF'
+          import os
+          import sys
+          from urllib.parse import urlparse, unquote, parse_qs
+
+          url = os.environ.get("NEON_URL", "")
+          expected_host = os.environ.get("NEON_EXPECTED_HOST", "")
+
+          # ── Phase 1: URL structure validation ─────────────────────────────
+
+          normalized = url
+          if normalized.startswith("postgres://"):
+              normalized = "postgresql://" + normalized[len("postgres://"):]
+
+          if not normalized.startswith("postgresql://"):
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          try:
+              parsed = urlparse(normalized)
+          except Exception:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          # Reject fragment — not valid in a PostgreSQL DSN.
+          if parsed.fragment:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          # Single, non-empty hostname required. No control characters or non-ASCII.
+          actual_host = parsed.hostname or ""
+          if not actual_host or "," in actual_host:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+          if not actual_host.isascii() or any(ord(c) < 0x20 for c in actual_host):
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          # Exact endpoint match — no length or value diagnostics printed.
+          if actual_host != expected_host:
+              print("ENDPOINT_MISMATCH")
+              sys.exit(1)
+          print("ENDPOINT_MATCH: PASS")
+
+          # Pooled endpoint format — fail closed.
+          # This check verifies hostname format only, not actual pooling behavior.
+          if "-pooler." not in actual_host:
+              print("POOLED_FORMAT_MISMATCH")
+              sys.exit(1)
+          print("POOLED_FORMAT: PASS (format check only)")
+
+          # Port must be absent or exactly 5432.
+          try:
+              actual_port = parsed.port
+          except ValueError:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+          if actual_port is not None and actual_port != 5432:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+          conn_port = actual_port or 5432
+
+          # Username must be present and match expected role.
+          raw_user = parsed.username or ""
+          if not raw_user:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+          conn_user = unquote(raw_user)
+          if conn_user != "neondb_owner":
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          # Password must be present (URL-decoded for explicit kwargs).
+          raw_password = parsed.password or ""
+          if not raw_password:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+          conn_password = unquote(raw_password)
+
+          # Database must be neondb.
+          db_path = parsed.path.lstrip("/") if parsed.path else ""
+          if not db_path or db_path != "neondb":
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+          conn_dbname = db_path
+
+          # Query parameter strict allowlist.
+          # Forbidden: params that could redirect or override connection identity.
+          # Unknown: anything outside the two allowed params is rejected.
+          # Duplicates: each allowed param must appear at most once.
+          FORBIDDEN_PARAMS = {
+              "host", "hostaddr", "service", "dbname", "user", "password", "options",
+          }
+          ALLOWED_PARAMS = {"sslmode", "channel_binding"}
+          qs = parse_qs(parsed.query, keep_blank_values=True) if parsed.query else {}
+          for param, values in qs.items():
+              if param in FORBIDDEN_PARAMS:
+                  print("INVALID_CONNECTION_FORMAT")
+                  sys.exit(1)
+              if len(values) > 1:
+                  print("INVALID_CONNECTION_FORMAT")
+                  sys.exit(1)
+          unknown = set(qs.keys()) - ALLOWED_PARAMS
+          if unknown:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          # sslmode: reject insecure values and any unknown value.
+          # Final connection always enforces verify-full regardless of URL value.
+          VALID_URL_SSLMODES = {"", "require", "verify-ca", "verify-full"}
+          url_sslmode = qs.get("sslmode", [""])[0]
+          if url_sslmode not in VALID_URL_SSLMODES:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          # channel_binding: reject disable and any unknown value.
+          # require is preserved as-is and never downgraded to prefer.
+          # If not specified, libpq default (prefer) applies — not explicitly set here.
+          # RUNTIME_UNVERIFIED: psycopg2-binary + libpq channel_binding support
+          # has not been confirmed in the target runtime environment.
+          VALID_CHANNEL_BINDINGS = {"", "require", "prefer"}
+          channel_binding = qs.get("channel_binding", [""])[0]
+          if channel_binding not in VALID_CHANNEL_BINDINGS:
+              print("INVALID_CONNECTION_FORMAT")
+              sys.exit(1)
+
+          print("URL_VALIDATED: PASS")
+
+          # ── Phase 2: Establish connection with explicit kwargs ─────────────
+
+          # CA bundle check — required for sslmode=verify-full.
+          ca_cert = "/etc/ssl/certs/ca-certificates.crt"
+          if not os.path.isfile(ca_cert):
+              print("TLS_VERIFICATION_FAILED")
+              sys.exit(1)
+
+          try:
+              import psycopg2
+          except ImportError:
+              print("VERIFICATION_FAILED")
+              sys.exit(1)
+
+          # Build explicit kwargs. The raw URL is never passed to the driver.
+          # sslmode is always verify-full regardless of URL param.
+          conn_kwargs = {
+              "host": actual_host,
+              "port": conn_port,
+              "dbname": conn_dbname,
+              "user": conn_user,
+              "password": conn_password,
+              "sslmode": "verify-full",
+              "sslrootcert": ca_cert,
+              "connect_timeout": 10,
+          }
+          # Pass through channel_binding only if explicitly specified in URL.
+          # require is preserved as-is and is never downgraded.
+          if channel_binding:
+              conn_kwargs["channel_binding"] = channel_binding
+
+          conn = None
+          try:
+              conn = psycopg2.connect(**conn_kwargs)
+          except psycopg2.OperationalError:
+              print("CONNECTION_FAILED")
+              sys.exit(1)
+          except Exception:
+              print("CONNECTION_FAILED")
+              sys.exit(1)
+
+          print("CONNECTION_VERIFIED: PASS")
+
+          # ── Phase 3: Verify identity in a READ ONLY transaction ───────────
+
+          try:
+              # Confirm client-side TLS via psycopg2 ConnectionInfo.
+              # conn.info.ssl_in_use checks whether this connection is encrypted
+              # (not just whether the server supports SSL).
+              try:
+                  ssl_in_use = conn.info.ssl_in_use
+              except AttributeError:
+                  ssl_in_use = None
+
+              if ssl_in_use is not True:
+                  print("TLS_VERIFICATION_FAILED")
+                  sys.exit(1)
+              print("TLS_IN_USE: PASS")
+
+              # Set READ ONLY before the first SQL statement.
+              # Connection is still idle — no active transaction yet.
+              conn.set_session(readonly=True, autocommit=False)
+
+              with conn.cursor() as cur:
+
+                  # SHOW starts the READ ONLY transaction implicitly.
+                  # It is not covered by the statement timeout set below.
+                  cur.execute("SHOW transaction_read_only")
+                  ro = cur.fetchone()[0]
+                  if ro != "on":
+                      print("READ_ONLY_FAILED")
+                      sys.exit(1)
+                  print("READ_ONLY_VERIFIED: PASS")
+
+                  # All queries after this SET LOCAL are covered by the statement timeout.
+                  cur.execute("SET LOCAL statement_timeout = '5000'")
+
+                  cur.execute("SELECT 1")
+                  if cur.fetchone()[0] != 1:
+                      print("VERIFICATION_FAILED")
+                      sys.exit(1)
+
+                  cur.execute("SELECT current_database()")
+                  actual_db = cur.fetchone()[0]
+                  if actual_db != "neondb":
+                      print("DATABASE_MISMATCH")
+                      sys.exit(1)
+
+                  cur.execute("SELECT current_user")
+                  actual_role = cur.fetchone()[0]
+                  if actual_role != "neondb_owner":
+                      print("ROLE_MISMATCH")
+                      sys.exit(1)
+
+                  print("IDENTITY_VERIFIED: PASS")
+
+                  # Required tables must exist in public schema.
+                  required = ["daily_prices", "stocks", "forward_signals"]
+                  cur.execute(
+                      "SELECT table_name "
+                      "FROM information_schema.tables "
+                      "WHERE table_schema = 'public' "
+                      "AND table_name = ANY(%s)",
+                      (required,),
+                  )
+                  found = {r[0] for r in cur.fetchall()}
+                  missing = set(required) - found
+                  if missing:
+                      print("SCHEMA_MISMATCH")
+                      sys.exit(1)
+
+                  # Confirm daily_prices.date column exists before querying it.
+                  cur.execute(
+                      "SELECT 1 FROM information_schema.columns "
+                      "WHERE table_schema = 'public' "
+                      "AND table_name = 'daily_prices' "
+                      "AND column_name = 'date'"
+                  )
+                  if not cur.fetchone():
+                      print("SCHEMA_MISMATCH")
+                      sys.exit(1)
+
+                  print("SCHEMA_VERIFIED: PASS")
+
+                  # Observe data freshness. Schema-qualified table name.
+                  # NO_DATA is not a failure of verification — it is an observation.
+                  # This result does not indicate Pipeline Recovery is complete.
+                  cur.execute("SELECT MAX(date) FROM public.daily_prices")
+                  row = cur.fetchone()
+                  max_date = row[0] if row else None
+                  if max_date is None:
+                      print("DATA_FRESHNESS_OBSERVED: NO_DATA")
+                  else:
+                      print("DATA_FRESHNESS_OBSERVED: max_date=" + str(max_date))
+
+              # Explicit rollback even though no writes occurred.
+              conn.rollback()
+              print("TRANSACTION: ROLLED_BACK")
+
+          except SystemExit:
+              try:
+                  conn.rollback()
+              except Exception:
+                  pass
+              raise
+          except Exception:
+              print("VERIFICATION_FAILED")
+              try:
+                  conn.rollback()
+              except Exception:
+                  pass
+              sys.exit(1)
+          finally:
+              if conn is not None:
+                  try:
+                      conn.close()
+                  except Exception:
+                      pass
+
+          print("VERIFICATION_COMPLETE")
+          PYEOF
