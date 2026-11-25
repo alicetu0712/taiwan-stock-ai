@@ -147,7 +147,7 @@ def _render_trading_reference(
     if buy_recs and not is_actionable:
         # Data is stale: show signal names but suppress actionable entry/stop/target prices.
         names = "，".join(
-            (r.get("name") or r.get("sid", "—")) + f"（{r.get('sid','')}）"
+            (r.get("name") or r.get("sid", "—")) + f"（{r.get('sid', '')}）"
             for r in buy_recs
         )
         sig_html = (
