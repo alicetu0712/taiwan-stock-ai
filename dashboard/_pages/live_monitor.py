@@ -633,6 +633,17 @@ def page_live_monitor(sel_date: date) -> None:
 
     _render_signal_diagnostics(sel_date, signal_date, diag)
 
+    _lm_gate_actionable = False  # fail-closed default
+    try:
+        from dashboard.components import render_trading_safety_banner
+        from dashboard.trading_safety import compute_trading_gate
+
+        _lm_gate = compute_trading_gate()
+        render_trading_safety_banner(_lm_gate)
+        _lm_gate_actionable = _lm_gate.is_actionable
+    except Exception:
+        pass  # gate failure must never break the page
+
     if not buy_recs:
         if diag["total_recs"] == 0:
             st.info(f"📭 {signal_date} 無 Recommendation 資料（pipeline 可能未執行）。")
@@ -667,18 +678,31 @@ def page_live_monitor(sel_date: date) -> None:
     with col_cfg2:
         st.metric("監控標的數", len(buy_recs))
 
-    with st.expander("📋 今日 BUY 推薦", expanded=False):
+    # Historical signal list (always shown — research record).
+    with st.expander("📋 歷史訊號記錄", expanded=False):
         for r in buy_recs:
             sig = "BUY ★" if r.get("trade_signal") == "strong_buy" else "BUY"
             setup = r.get("setup_type") or "—"
             st.markdown(
                 f"**{r.get('name', r['sid'])}** ({r['sid']}) — "
-                f"`{sig}` · {setup} · 訊號價 NT$ {r.get('price', '—')}"
+                f"`{sig}` · {setup}"
+                + (
+                    f" · 訊號價 NT$ {r.get('price', '—')}"
+                    if _lm_gate_actionable
+                    else ""
+                )
             )
 
     st.markdown("---")
 
-    # 動態 fragment：每次 page_live_monitor 重新執行時（selectbox 改變），以新 interval 重建
+    # 動態 fragment：僅在 gate 允許時啟動盤中監控。
+    if not _lm_gate_actionable:
+        st.info(
+            "資料安全閘門：資料尚未更新，暫停盤中即時監控。"
+            "待股價及訊號資料更新後，本區塊將自動恢復。"
+        )
+        return
+
     overnight_ctx = diag.get("overnight_ctx")
 
     @st.fragment(run_every=f"{refresh_interval}s")

@@ -12,7 +12,6 @@ DESIGN CONSTRAINTS:
 from __future__ import annotations
 
 from datetime import date as _date
-from typing import Optional
 
 import streamlit as st
 
@@ -70,6 +69,33 @@ def _inject_css() -> None:
     margin-bottom: 8px;
     font-size: 0.8rem;
     color: #e65100;
+}
+.tsg-blocked {
+    background: #fef2f2;
+    border: 2px solid #dc2626;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    font-size: 0.82rem;
+    color: #7f1d1d;
+}
+.tsg-degraded {
+    background: #fff3e0;
+    border-left: 4px solid #f59e0b;
+    border-radius: 0 6px 6px 0;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    font-size: 0.82rem;
+    color: #78350f;
+}
+.tsg-unknown {
+    background: #f1f5f9;
+    border-left: 4px solid #94a3b8;
+    border-radius: 0 6px 6px 0;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    font-size: 0.82rem;
+    color: #475569;
 }
 </style>""",
         unsafe_allow_html=True,
@@ -130,9 +156,7 @@ def data_freshness_banner(
     d_str = str(as_of_date)[:10]
 
     if staleness_days == 0:
-        inner = (
-            f'<span class="fr-current">✓ {source_label}截至：{d_str}</span>'
-        )
+        inner = f'<span class="fr-current">✓ {source_label}截至：{d_str}</span>'
         wrapper_class = "fr-anchor"
     elif staleness_days == 1:
         inner = (
@@ -263,7 +287,9 @@ def chart_freshness_header(
     lag = _staleness_days(chart_max_date)
 
     if lag == 0:
-        price_part = f'<span class="fr-current">K 線資料截至：<b>{d_str}</b> 收盤</span>'
+        price_part = (
+            f'<span class="fr-current">K 線資料截至：<b>{d_str}</b> 收盤</span>'
+        )
         stale_msg = ""
     elif lag == 1:
         price_part = f'<span class="fr-stale">K 線資料截至：<b>{d_str}</b> 收盤</span>'
@@ -272,15 +298,15 @@ def chart_freshness_header(
         price_part = f'<span class="fr-stale">K 線資料截至：<b>{d_str}</b> 收盤</span>'
         stale_msg = f' · <span class="fr-stale">⚠ 落後 {lag} 天</span>'
     else:
-        price_part = f'<span class="fr-unknown">K 線資料截至：{d_str}（日期格式未確認）</span>'
+        price_part = (
+            f'<span class="fr-unknown">K 線資料截至：{d_str}（日期格式未確認）</span>'
+        )
         stale_msg = ""
 
     analysis_part = ""
     if analysis_date is not None:
         a_str = str(analysis_date)[:10]
-        analysis_part = (
-            f' · <span style="color:#78909c">技術分析：{a_str}</span>'
-        )
+        analysis_part = f' · <span style="color:#78909c">技術分析：{a_str}</span>'
 
     st.markdown(
         f'<div class="fr-anchor">'
@@ -291,3 +317,112 @@ def chart_freshness_header(
         f"</div>",
         unsafe_allow_html=True,
     )
+
+
+def staleness_trading_days(as_of, reference_date=None) -> int:
+    """
+    Trading-day gap between as_of and reference_date (default: today).
+    Returns -1 if as_of is None or cannot be parsed.
+    Uses TaiwanTradingCalendar; falls back to calendar days on import error.
+    """
+    if as_of is None:
+        return -1
+    try:
+        if isinstance(as_of, str):
+            as_of = _date.fromisoformat(as_of[:10])
+        elif hasattr(as_of, "date"):
+            as_of = as_of.date()
+        ref = reference_date or _date.today()
+        if as_of >= ref:
+            return 0
+        try:
+            from datetime import timedelta
+
+            from src.core.trading_calendar import TaiwanTradingCalendar
+
+            cal = TaiwanTradingCalendar()
+            count = 0
+            d = as_of + timedelta(days=1)
+            while d <= ref:
+                if cal.is_trading_day(d):
+                    count += 1
+                d += timedelta(days=1)
+            return count
+        except Exception:
+            return (ref - as_of).days
+    except Exception:
+        return -1
+
+
+def render_trading_safety_banner(gate_result=None) -> None:
+    """
+    Render the Trading Safety Gate status banner.
+
+    Call at the top of any page that shows trading recommendations.
+    If gate_result is None, compute_trading_gate() is called inline.
+
+    Display rules:
+      PASS    — no banner (gate passed; display is unimpeded)
+      DEGRADED — compact amber strip (research-only reminder)
+      BLOCKED  — prominent red box (trading recommendations suppressed)
+      UNKNOWN  — compact grey strip (cannot verify status)
+    """
+    _inject_css()
+    if gate_result is None:
+        try:
+            from dashboard.trading_safety import compute_trading_gate
+
+            gate_result = compute_trading_gate()
+        except Exception:
+            st.markdown(
+                '<div class="tsg-unknown">交易安全閘門：無法載入狀態（模組錯誤）</div>',
+                unsafe_allow_html=True,
+            )
+            return
+
+    from dashboard.trading_safety import TradingGateStatus
+
+    status = gate_result.status
+    label = gate_result.status_label_zh
+    reasons = gate_result.reason_text_zh
+
+    f = gate_result.freshness
+    freshness_line = ""
+    if f is not None:
+        parts = []
+        if f.latest_price_date:
+            parts.append(
+                f"股價截至 {f.latest_price_date}（落後 {f.price_lag_trading_days} 交易日）"
+            )
+        if f.latest_signal_date:
+            parts.append(
+                f"訊號截至 {f.latest_signal_date}（落後 {f.signal_lag_trading_days} 交易日）"
+            )
+        if parts:
+            freshness_line = "；".join(parts)
+
+    if status == TradingGateStatus.PASS:
+        return  # no banner needed
+
+    if status == TradingGateStatus.BLOCKED:
+        body = f"<b>交易安全閘門：{label}</b>"
+        if freshness_line:
+            body += f"<br><span style='font-size:0.76rem'>{freshness_line}</span>"
+        if reasons:
+            body += (
+                f"<br><span style='font-size:0.74rem;color:#991b1b'>{reasons}</span>"
+            )
+        body += "<br><span style='font-size:0.72rem;color:#b91c1c'>以下訊號為歷史研究記錄，不代表當前可執行交易建議。</span>"
+        st.markdown(f'<div class="tsg-blocked">{body}</div>', unsafe_allow_html=True)
+
+    elif status == TradingGateStatus.DEGRADED:
+        body = f"⚠ 交易安全閘門：{label}"
+        if freshness_line:
+            body += f" · {freshness_line}"
+        st.markdown(f'<div class="tsg-degraded">{body}</div>', unsafe_allow_html=True)
+
+    else:  # UNKNOWN
+        body = f"交易安全閘門：{label}"
+        if reasons:
+            body += f" · {reasons}"
+        st.markdown(f'<div class="tsg-unknown">{body}</div>', unsafe_allow_html=True)

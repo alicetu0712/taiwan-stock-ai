@@ -80,6 +80,7 @@ def _render_trading_reference(
     selected_date: date,
     recs: list,
     latest_date: "date | None" = None,
+    is_actionable: bool = True,
 ) -> None:
     """今日交易參考：分析日 / 適用交易日 / 進場摘要 / 報價聲明。"""
     from config import ENTRY_QUALITY
@@ -111,9 +112,7 @@ def _render_trading_reference(
     _price_as_of = latest_date  # may differ from selected_date
     _price_lag = (today - latest_date).days if latest_date else -1
 
-    data_freshness_banner(
-        selected_date, _sig_lag, source_label="AI 訊號", compact=True
-    )
+    data_freshness_banner(selected_date, _sig_lag, source_label="AI 訊號", compact=True)
     if _price_as_of and _price_as_of != selected_date:
         data_freshness_banner(
             _price_as_of, _price_lag, source_label="股價資料", compact=True
@@ -145,7 +144,21 @@ def _render_trading_reference(
     wait_recs = [r for r in recs if (r.get("trade_signal") or "").lower() == "wait"]
 
     sig_html = ""
-    if buy_recs:
+    if buy_recs and not is_actionable:
+        # Data is stale: show signal names but suppress actionable entry/stop/target prices.
+        names = "，".join(
+            (r.get("name") or r.get("sid", "—")) + f"（{r.get('sid','')}）"
+            for r in buy_recs
+        )
+        sig_html = (
+            f'<div style="margin-top:14px;padding:10px 14px;background:rgba(255,183,77,0.08);'
+            f'border-left:3px solid #ff8c00;border-radius:0 6px 6px 0;font-size:0.82rem;color:#78350f">'
+            f"<b>歷史訊號記錄（{selected_date}）</b>：{names}<br>"
+            f"<span style='font-size:0.74rem;color:#9e9e9e'>"
+            f"資料尚未更新，進場 / 停損 / 目標價格已隱藏。待資料更新後恢復顯示。"
+            f"</span></div>"
+        )
+    elif buy_recs:
         desktop_rows = ""
         mobile_cards = ""
 
@@ -584,7 +597,10 @@ def _render_candidate_card(
 
 
 def render_rec_card(
-    r: dict, current_regime: str = "neutral", portfolio_exposure: dict = None
+    r: dict,
+    current_regime: str = "neutral",
+    portfolio_exposure: dict = None,
+    is_actionable: bool = True,
 ) -> None:
     from src.engines.decision import decision_label
     from src.engines.decision import position_sizing as _ps
@@ -629,9 +645,17 @@ def render_rec_card(
 
     # ── Trading plan ──────────────────────────────────────────────
     plan_html = ""
+    if not is_actionable and is_buy:
+        # Data stale: suppress entry/stop/target prices; show research-only notice.
+        plan_html = (
+            '<div style="font-size:0.74rem;color:#78350f;background:rgba(255,183,77,0.08);'
+            'border-left:3px solid #ff8c00;border-radius:0 4px 4px 0;padding:6px 10px;margin:8px 0">'
+            "資料尚未更新 — 進場 / 停損 / 目標價格已隱藏。此為歷史研究記錄。"
+            "</div>"
+        )
     plan_label = "交易計畫" if is_buy else "確認後，怎麼交易"
     plan_opacity = "1" if is_buy else "0.65"
-    if price and stop_p and t1:
+    if is_actionable and price and stop_p and t1:
         risk_pts = price - stop_p
         if risk_pts > 0:
             rr = round((t1 - price) / risk_pts, 1)
@@ -668,7 +692,7 @@ def render_rec_card(
     </div>
   </div>
 </div>"""
-    elif entry_low and entry_high and is_buy:
+    elif is_actionable and entry_low and entry_high and is_buy:
         plan_html = f"""
 <div style="background:#fff8e1;border-left:3px solid #f57f17;border-radius:0 6px 6px 0;padding:7px 11px;margin:8px 0">
   <div style="font-size:0.62rem;font-weight:700;color:#e65100;margin-bottom:2px">進場區間</div>
@@ -1308,7 +1332,20 @@ def page_today(selected_date: date) -> None:
             r["price"] = stock_prices.get(r["sid"])
 
     # Phase 2+3+4: 今日交易參考
-    _render_trading_reference(selected_date, recs, latest_data_date)
+    _gate_actionable = False  # fail-closed default
+    try:
+        from dashboard.components import render_trading_safety_banner
+        from dashboard.trading_safety import compute_trading_gate
+
+        _gate = compute_trading_gate()
+        render_trading_safety_banner(_gate)
+        _gate_actionable = _gate.is_actionable  # only True when PASS
+    except Exception:
+        pass  # gate failure must never break the page
+
+    _render_trading_reference(
+        selected_date, recs, latest_data_date, is_actionable=_gate_actionable
+    )
 
     # P2: Pipeline funnel
     funnel = load_pipeline_funnel(selected_date)
@@ -1464,10 +1501,20 @@ def page_today(selected_date: date) -> None:
         col_left, col_right = st.columns(2)
         for rec in cols_data[0]:
             with col_left:
-                render_rec_card(rec, current_regime, portfolio_exposure)
+                render_rec_card(
+                    rec,
+                    current_regime,
+                    portfolio_exposure,
+                    is_actionable=_gate_actionable,
+                )
         for rec in cols_data[1]:
             with col_right:
-                render_rec_card(rec, current_regime, portfolio_exposure)
+                render_rec_card(
+                    rec,
+                    current_regime,
+                    portfolio_exposure,
+                    is_actionable=_gate_actionable,
+                )
     else:
         st.info("今日尚無分析資料，請先執行分析。")
 

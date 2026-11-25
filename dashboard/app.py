@@ -258,15 +258,15 @@ def main() -> None:
             st.session_state["selected_date"] = _new_date
             sel_date = _new_date
             st.rerun()
-        if st.button("🔄 重新整理資料", use_container_width=True):
+        if st.button("🔄 重新載入畫面", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         st.markdown("---")
         try:
             from sqlalchemy import func
 
+            from src.database import MODEL_VERSION as _MV
             from src.database import (
-                MODEL_VERSION as _MV,
                 DailyPrice,
                 Recommendation,
                 get_session,
