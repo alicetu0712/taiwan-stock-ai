@@ -403,23 +403,84 @@ class TestComparisonReadinessReport:
 
     def test_rr10_production_data_not_touched(self):
         """RR-10: Building readiness report requires no production DB access"""
-        # This test verifies no DB connection is opened
-        # If it passes, the module is production-safe
         import sqlite3
-        # Temporarily patch to detect any DB opens
-        opened_dbs = []
-        original_connect = sqlite3.connect
+        import sys
+        from unittest.mock import patch
 
-        def mock_connect(db, *args, **kwargs):
+        _cf = sys.modules.get("tests.conftest")
+        assert _cf is not None, "conftest not in sys.modules — guard state unknown"
+        _guarded = _cf._guarded_connect
+        assert sqlite3.connect is _guarded, (
+            "GUARD NOT ACTIVE before RR-10 patch: sqlite3.connect is not _guarded_connect"
+        )
+
+        opened_dbs = []
+
+        def _spy_connect(db, *args, **kwargs):
             if "platform.db" in str(db):
                 opened_dbs.append(db)
-            return original_connect(db, *args, **kwargs)
+            return _guarded(db, *args, **kwargs)
 
-        sqlite3.connect = mock_connect
-        try:
+        with patch("sqlite3.connect", new=_spy_connect):
             report = build_session39_readiness_report()
             assert report is not None
-        finally:
-            sqlite3.connect = original_connect
 
+        assert sqlite3.connect is _guarded, (
+            "GUARD NOT RESTORED after RR-10 patch: sqlite3.connect is not _guarded_connect"
+        )
         assert len(opened_dbs) == 0, f"Unexpectedly opened production DB: {opened_dbs}"
+
+    def test_rr10_guard_effective_during_patch(self):
+        """D1: Guard rejects forbidden paths while RR-10 spy is active."""
+        import sqlite3
+        import sys
+        from unittest.mock import patch
+
+        _cf = sys.modules.get("tests.conftest")
+        assert _cf is not None, "conftest not in sys.modules"
+        _guarded = _cf._guarded_connect
+        assert sqlite3.connect is _guarded, "Guard must be active before patch"
+
+        opened_dbs = []
+
+        def _spy_connect(db, *args, **kwargs):
+            if "platform.db" in str(db):
+                opened_dbs.append(db)
+            return _guarded(db, *args, **kwargs)
+
+        _synthetic_forbidden = "data/platform.db"
+
+        with patch("sqlite3.connect", new=_spy_connect):
+            with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+                sqlite3.connect(_synthetic_forbidden)
+
+        assert sqlite3.connect is _guarded, "Guard not restored after D1 patch exit"
+        assert _synthetic_forbidden in opened_dbs, (
+            f"Spy did not record forbidden attempt: opened_dbs={opened_dbs}"
+        )
+
+    def test_rr10_exception_safe_restoration(self):
+        """D2: sqlite3.connect restores to guard after exception inside patch context."""
+        import sqlite3
+        import sys
+        from unittest.mock import patch
+
+        _cf = sys.modules.get("tests.conftest")
+        assert _cf is not None, "conftest not in sys.modules"
+        _guarded = _cf._guarded_connect
+        assert sqlite3.connect is _guarded, "Guard must be active before patch"
+
+        opened_dbs = []
+
+        def _spy_connect(db, *args, **kwargs):
+            if "platform.db" in str(db):
+                opened_dbs.append(db)
+            return _guarded(db, *args, **kwargs)
+
+        with pytest.raises(RuntimeError, match="synthetic_rr10_exception"):
+            with patch("sqlite3.connect", new=_spy_connect):
+                raise RuntimeError("synthetic_rr10_exception")
+
+        assert sqlite3.connect is _guarded, (
+            "GUARD NOT RESTORED after exception in RR-10 patch context"
+        )
