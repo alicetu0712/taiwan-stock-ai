@@ -32,7 +32,10 @@ Design decisions (S78C.5.1 Phase C):
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import urllib.parse
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -154,41 +157,188 @@ def ci_conn_with_data():
 
 
 # ---------------------------------------------------------------------------
-# B4 — Executable production isolation guard
+# B4 — Session-level fail-closed isolation guard (S78C.6B.2)
 # ---------------------------------------------------------------------------
+
+_PRODUCTION_DB_CANONICAL: str = os.path.realpath(
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data",
+        "platform.db",
+    )
+)
+_TESTS_FIXTURES_CANONICAL: str = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+)
+
+# Populated by _register_pytest_temp_root (session-scoped autouse).
+# Guard allows any path under these roots.
+_PYTEST_TEMP_ROOT: list = []
+
+# Save original BEFORE installing the guard so _guarded_connect can call it.
+_original_sqlite_connect = sqlite3.connect
+
+
+def _resolve_db_path(database) -> str | None:
+    """Normalize a sqlite3.connect 'database' argument to a canonical absolute path.
+
+    Returns None for ':memory:' (always allowed).
+    Raises AssertionError for empty paths, unsupported URI schemes, or
+    paths that cannot be resolved.
+    """
+    if isinstance(database, bytes):
+        try:
+            raw = database.decode("utf-8")
+        except UnicodeDecodeError:
+            raise AssertionError(
+                f"ISOLATION GUARD: bytes input with non-UTF-8 encoding blocked: {database!r}"
+            )
+    elif hasattr(database, "__fspath__"):
+        raw = os.fspath(database)
+    else:
+        raw = str(database)
+
+    if raw == ":memory:":
+        return None
+
+    if not raw or not raw.strip():
+        raise AssertionError(
+            f"ISOLATION GUARD: empty path blocked (would create unnamed temp file): {database!r}"
+        )
+
+    # file://host/path authority-based URI → not supported by this codebase
+    if raw.startswith("file://"):
+        raise AssertionError(
+            f"ISOLATION GUARD: authority-based URI not supported: {database!r}. "
+            "Use file:path or a plain filesystem path."
+        )
+
+    # Unknown URI scheme (e.g. ftp://, http://)
+    if "://" in raw and not raw.startswith("file:"):
+        raise AssertionError(
+            f"ISOLATION GUARD: unsupported URI scheme blocked: {database!r}"
+        )
+
+    # file: URI (file:path or file:/path or file:///abs/path)
+    if raw.startswith("file:"):
+        path_part = raw[5:]
+        q = path_part.find("?")
+        if q >= 0:
+            path_part = path_part[:q]
+        try:
+            path_part = urllib.parse.unquote(path_part)
+        except Exception:
+            pass
+        raw = path_part
+
+    try:
+        return os.path.realpath(os.path.abspath(raw))
+    except (ValueError, OSError, TypeError) as exc:
+        raise AssertionError(
+            f"ISOLATION GUARD: unresolvable path blocked: {database!r}. Error: {exc}"
+        ) from exc
+
+
+def _is_under(child_str: str, parent_str: str) -> bool:
+    try:
+        Path(child_str).relative_to(parent_str)
+        return True
+    except ValueError:
+        return False
+
+
+def _guarded_connect(database, *args, **kwargs):
+    """Fail-closed sqlite3.connect guard (S78C.6B.2).
+
+    Allow list (checked in order):
+      1. ':memory:' — always allowed.
+      2. _PRODUCTION_DB_CANONICAL — always BLOCKED (highest priority).
+      3. Hardlink alias of production DB — blocked when production DB file exists.
+      4. tests/fixtures/ root — explicitly allowed for read-only snapshots.
+      5. Registered pytest session temp roots — allowed for test DBs.
+      6. Everything else — BLOCKED (fail-closed).
+
+    Installed at conftest import time (session scope) so module-scoped and
+    session-scoped fixtures are covered, not just function-scoped ones.
+    """
+    resolved = _resolve_db_path(database)
+
+    if resolved is None:  # :memory:
+        return _original_sqlite_connect(database, *args, **kwargs)
+
+    # Production DB always blocked
+    if resolved == _PRODUCTION_DB_CANONICAL:
+        raise AssertionError(
+            f"ISOLATION GUARD: production SQLite path blocked: {database!r}. "
+            "Use ci_safe_conn or ci_conn_with_data fixtures instead."
+        )
+
+    # Hardlink alias: same inode+device as production DB
+    if os.path.exists(_PRODUCTION_DB_CANONICAL) and os.path.exists(resolved):
+        try:
+            prod_st = os.stat(_PRODUCTION_DB_CANONICAL)
+            res_st = os.stat(resolved)
+            if prod_st.st_ino == res_st.st_ino and prod_st.st_dev == res_st.st_dev:
+                raise AssertionError(
+                    f"ISOLATION GUARD: hardlink alias to production DB blocked: {database!r}"
+                )
+        except OSError:
+            pass
+
+    # tests/fixtures/ is explicitly allowed
+    if _is_under(resolved, _TESTS_FIXTURES_CANONICAL):
+        return _original_sqlite_connect(database, *args, **kwargs)
+
+    # Registered pytest session temp roots
+    for root in _PYTEST_TEMP_ROOT:
+        if _is_under(resolved, root):
+            return _original_sqlite_connect(database, *args, **kwargs)
+
+    # Fail-closed: unregistered path
+    allowed = ", ".join(
+        [repr(_TESTS_FIXTURES_CANONICAL)] + [repr(r) for r in _PYTEST_TEMP_ROOT]
+    )
+    raise AssertionError(
+        f"ISOLATION GUARD: unregistered database path blocked (fail-closed): {database!r}. "
+        f"Resolved: {resolved!r}. "
+        f"Allowed roots: ':memory:', {allowed}. "
+        "Use tmp_path fixture or ci_safe_conn for test databases."
+    )
+
+
+# Install at import time — covers collection, session, module, and function scopes.
+sqlite3.connect = _guarded_connect
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _register_pytest_temp_root(tmp_path_factory):
+    """Register the pytest session temp root as an allowed path for the guard."""
+    temp_root = str(tmp_path_factory.getbasetemp().resolve())
+    _PYTEST_TEMP_ROOT.append(temp_root)
+    yield
+    if temp_root in _PYTEST_TEMP_ROOT:
+        _PYTEST_TEMP_ROOT.remove(temp_root)
 
 
 @pytest.fixture(autouse=True)
-def _block_production_sqlite_paths(monkeypatch):
-    """Autouse guard: raises AssertionError if any test attempts to open a
-    production SQLite path. Applies to every test function in this session.
+def _block_production_sqlite_paths():
+    """Guard liveness check (S78C.6B.2). Guard is installed at conftest import time.
 
-    Allowed: sqlite3.connect(":memory:")
-    Blocked: any path containing "platform.db"
-
-    Uses monkeypatch so the patch auto-reverts after each test with no
-    state bleed across tests.
-
-    Coverage: guards sqlite3.connect() calls made by application code,
-    fixtures, and test bodies. Does not guard SQLAlchemy's internal driver
-    calls for :memory: (those pass ":memory:" which is explicitly allowed).
-
-    Limitation: does not block `from sqlite3 import connect` aliases;
-    no such pattern exists in the POC or imported modules (verified by grep).
+    This fixture verifies the session-level guard is still active at the start
+    of every test. If the guard has been patched out, the test suite will fail
+    loudly rather than silently allowing production DB access.
     """
-    _original = sqlite3.connect
-    _BLOCKED = "platform.db"
+    assert sqlite3.connect is _guarded_connect, (
+        "GUARD FAILURE: session-level guard has been patched out. "
+        "sqlite3.connect no longer points to _guarded_connect. "
+        "Do not replace sqlite3.connect in fixtures or test bodies."
+    )
 
-    def _guarded(database, *args, **kwargs):
-        db_str = str(database)
-        if db_str != ":memory:" and _BLOCKED in db_str:
-            raise AssertionError(
-                f"ISOLATION GUARD: production SQLite path blocked: {database!r}. "
-                "Use ci_safe_conn or ci_conn_with_data fixtures instead."
-            )
-        return _original(database, *args, **kwargs)
 
-    monkeypatch.setattr(sqlite3, "connect", _guarded)
+def pytest_sessionfinish(session, exitstatus):
+    """Restore sqlite3.connect to original after all tests complete."""
+    sqlite3.connect = _original_sqlite_connect
+    _PYTEST_TEMP_ROOT.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -16,10 +16,15 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from pathlib import Path
 
 import pytest
 
 from src.research.calendar_contract_s50 import get_overlap
+
+# Canonical production DB path (mirrors conftest._PRODUCTION_DB_CANONICAL).
+_CONFTEST_DIR = Path(__file__).parent.parent
+_PRODUCTION_DB_CANONICAL = os.path.realpath(str(_CONFTEST_DIR / "data" / "platform.db"))
 
 # ---------------------------------------------------------------------------
 # Import the constant and fixture code under test
@@ -181,6 +186,8 @@ class TestD14_IsolationGuardRegression:
         assert conn is not None
         conn.close()
 
-    def test_guard_blocks_absolute_platform_db_path(self):
+    def test_guard_blocks_canonical_production_path(self):
+        # The guard blocks the resolved canonical production DB path, not arbitrary
+        # paths that merely contain "platform.db" as a substring.
         with pytest.raises(AssertionError, match="ISOLATION GUARD"):
-            sqlite3.connect("/some/path/to/platform.db")
+            sqlite3.connect(_PRODUCTION_DB_CANONICAL)

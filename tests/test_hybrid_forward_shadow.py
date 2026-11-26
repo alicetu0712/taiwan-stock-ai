@@ -17,13 +17,13 @@ Coverage:
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-import sys
-import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.research.hybrid_forward_db import (
@@ -50,10 +50,9 @@ from src.research.hybrid_forward_db import (
 )
 from src.research.hybrid_trading_calendar import TradingCalendar
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-FREEZE = RULE_FREEZE_DATE           # 2026-11-05
+FREEZE = RULE_FREEZE_DATE  # 2026-11-05
 PRE_FREEZE = date(2026, 11, 4)
 POST_FREEZE = date(2026, 11, 6)
 
@@ -179,6 +178,7 @@ def _make_outcome(
 
 # ── FS01–FS06: TradingCalendar ────────────────────────────────────────────────
 
+
 class TestTradingCalendar:
 
     def test_FS01_is_trading_day(self, cal):
@@ -211,6 +211,7 @@ class TestTradingCalendar:
 
 # ── FS07–FS13: Capture classification + hashing ──────────────────────────────
 
+
 class TestCaptureClassification:
 
     def test_FS07_pre_freeze_is_retrospective(self):
@@ -240,12 +241,31 @@ class TestCaptureClassification:
         assert h1 != h2
 
     def test_FS13_input_hash_changes_with_data(self):
-        h1 = compute_input_data_hash("2330", POST_FREEZE, "bear", -0.5, "flat", 1.2, "WAIT_FOR_PULLBACK", POST_FREEZE)
-        h2 = compute_input_data_hash("2330", POST_FREEZE, "bull", 0.5, "rising", 1.2, "WAIT_FOR_PULLBACK", POST_FREEZE)
+        h1 = compute_input_data_hash(
+            "2330",
+            POST_FREEZE,
+            "bear",
+            -0.5,
+            "flat",
+            1.2,
+            "WAIT_FOR_PULLBACK",
+            POST_FREEZE,
+        )
+        h2 = compute_input_data_hash(
+            "2330",
+            POST_FREEZE,
+            "bull",
+            0.5,
+            "rising",
+            1.2,
+            "WAIT_FOR_PULLBACK",
+            POST_FREEZE,
+        )
         assert h1 != h2
 
 
 # ── FS14–FS20: Append-only decision insert ────────────────────────────────────
+
 
 class TestAppendOnlyDecision:
 
@@ -285,7 +305,9 @@ class TestAppendOnlyDecision:
             d = _make_decision(stock_id=f"S{i:03d}", decision_hash=f"hash{i}")
             insert_decision(mem_db, d)
         mem_db.commit()
-        count = mem_db.execute("SELECT COUNT(*) FROM hybrid_forward_decision").fetchone()[0]
+        count = mem_db.execute(
+            "SELECT COUNT(*) FROM hybrid_forward_decision"
+        ).fetchone()[0]
         assert count == 5
 
     def test_FS19_decision_never_updated_by_schema(self, mem_db):
@@ -308,6 +330,7 @@ class TestAppendOnlyDecision:
 
 # ── FS21–FS27: Decision/Outcome separation ────────────────────────────────────
 
+
 class TestDecisionOutcomeSeparation:
 
     def test_FS21_outcome_in_separate_table(self, mem_db):
@@ -317,11 +340,21 @@ class TestDecisionOutcomeSeparation:
         insert_outcome(mem_db, o)
         mem_db.commit()
         # Decision has no outcome columns
-        d_cols = [r[1] for r in mem_db.execute("PRAGMA table_info(hybrid_forward_decision)").fetchall()]
+        d_cols = [
+            r[1]
+            for r in mem_db.execute(
+                "PRAGMA table_info(hybrid_forward_decision)"
+            ).fetchall()
+        ]
         assert "hybrid_net_return" not in d_cols
         assert "outcome_20d" not in d_cols
         # Outcome has decision_id FK
-        o_cols = [r[1] for r in mem_db.execute("PRAGMA table_info(hybrid_forward_outcome)").fetchall()]
+        o_cols = [
+            r[1]
+            for r in mem_db.execute(
+                "PRAGMA table_info(hybrid_forward_outcome)"
+            ).fetchall()
+        ]
         assert "decision_id" in o_cols
 
     def test_FS22_decision_unchanged_after_outcome_insert(self, mem_db):
@@ -330,7 +363,9 @@ class TestDecisionOutcomeSeparation:
         o = _make_outcome(did, hybrid_ret=2.5)
         insert_outcome(mem_db, o)
         mem_db.commit()
-        row = mem_db.execute("SELECT decision_hash FROM hybrid_forward_decision WHERE id=?", (did,)).fetchone()
+        row = mem_db.execute(
+            "SELECT decision_hash FROM hybrid_forward_decision WHERE id=?", (did,)
+        ).fetchone()
         assert row[0] == "original_hash"
 
     def test_FS23_duplicate_outcome_idempotent(self, mem_db):
@@ -365,7 +400,9 @@ class TestDecisionOutcomeSeparation:
         did = insert_decision(mem_db, d)
         o = _make_outcome(did)
         oid = insert_outcome(mem_db, o)
-        row = mem_db.execute("SELECT decision_id FROM hybrid_forward_outcome WHERE id=?", (oid,)).fetchone()
+        row = mem_db.execute(
+            "SELECT decision_id FROM hybrid_forward_outcome WHERE id=?", (oid,)
+        ).fetchone()
         assert row[0] == did
 
     def test_FS27_pending_outcomes_query(self, mem_db):
@@ -373,11 +410,14 @@ class TestDecisionOutcomeSeparation:
         insert_decision(mem_db, d)
         mem_db.commit()
         cutoff = FREEZE + timedelta(days=35)
-        pending = get_pending_outcome_decisions(mem_db, cutoff, "20d", CALCULATION_VERSION)
+        pending = get_pending_outcome_decisions(
+            mem_db, cutoff, "20d", CALCULATION_VERSION
+        )
         assert len(pending) == 1
 
 
 # ── FS28–FS32: Run log ────────────────────────────────────────────────────────
+
 
 class TestRunLog:
 
@@ -397,7 +437,9 @@ class TestRunLog:
             error_summary=None,
         )
         upsert_run_log(mem_db, log)
-        row = mem_db.execute("SELECT status FROM hybrid_forward_run_log WHERE run_id='run_test01'").fetchone()
+        row = mem_db.execute(
+            "SELECT status FROM hybrid_forward_run_log WHERE run_id='run_test01'"
+        ).fetchone()
         assert row[0] == RunStatus.SUCCESS
 
     def test_FS29_run_log_update(self, mem_db):
@@ -427,24 +469,36 @@ class TestRunLog:
         assert row[1] == 10
 
     def test_FS30_all_run_statuses_valid(self, mem_db):
-        for i, status in enumerate([
-            RunStatus.SUCCESS, RunStatus.PARTIAL, RunStatus.SKIPPED_NON_TRADING_DAY,
-            RunStatus.BLOCKED_STALE_DATA, RunStatus.BLOCKED_MISSING_SIGNALS,
-            RunStatus.FAILED, RunStatus.CONFLICT,
-        ]):
+        for i, status in enumerate(
+            [
+                RunStatus.SUCCESS,
+                RunStatus.PARTIAL,
+                RunStatus.SKIPPED_NON_TRADING_DAY,
+                RunStatus.BLOCKED_STALE_DATA,
+                RunStatus.BLOCKED_MISSING_SIGNALS,
+                RunStatus.FAILED,
+                RunStatus.CONFLICT,
+            ]
+        ):
             log = HybridForwardRunLog(
                 run_id=f"test_status_{i}",
                 trade_date=FREEZE + timedelta(days=i),
                 started_at=datetime.now(timezone.utc),
                 finished_at=datetime.now(timezone.utc),
                 input_data_date=FREEZE,
-                inserted_count=0, skipped_count=0, conflict_count=0,
-                error_count=0, outcome_filled_count=0,
-                status=status, error_summary=None,
+                inserted_count=0,
+                skipped_count=0,
+                conflict_count=0,
+                error_count=0,
+                outcome_filled_count=0,
+                status=status,
+                error_summary=None,
             )
             upsert_run_log(mem_db, log)
 
-        count = mem_db.execute("SELECT COUNT(*) FROM hybrid_forward_run_log").fetchone()[0]
+        count = mem_db.execute(
+            "SELECT COUNT(*) FROM hybrid_forward_run_log"
+        ).fetchone()[0]
         assert count == 7
 
     def test_FS31_run_id_unique(self):
@@ -463,6 +517,7 @@ class TestRunLog:
 
 
 # ── FS33–FS38: Stale data / missing signals guards ────────────────────────────
+
 
 class TestDataGuards:
 
@@ -498,6 +553,7 @@ class TestDataGuards:
 
 # ── FS39–FS43: Outcome maturity (trading-day based) ───────────────────────────
 
+
 class TestOutcomeMaturity:
 
     def test_FS39_5d_maturity_is_5_trading_days(self, cal):
@@ -531,14 +587,15 @@ class TestOutcomeMaturity:
         mem_db.commit()
         # Cutoff is earlier than trade_date, so it should not be pending
         cutoff = date(2026, 11, 20)
-        pending = get_pending_outcome_decisions(mem_db, cutoff, "20d", CALCULATION_VERSION)
-        # Decision is at 2026-12-01, cutoff is 2026-11-20 → not in pending
-        assert all(
-            p["trade_date"] <= str(cutoff) for p in pending
+        pending = get_pending_outcome_decisions(
+            mem_db, cutoff, "20d", CALCULATION_VERSION
         )
+        # Decision is at 2026-12-01, cutoff is 2026-11-20 → not in pending
+        assert all(p["trade_date"] <= str(cutoff) for p in pending)
 
 
 # ── FS44–FS48: Idempotency / retry ───────────────────────────────────────────
+
 
 class TestIdempotency:
 
@@ -547,7 +604,9 @@ class TestIdempotency:
         insert_decision(mem_db, d)
         insert_decision(mem_db, d)  # second insert, same record
         mem_db.commit()
-        count = mem_db.execute("SELECT COUNT(*) FROM hybrid_forward_decision").fetchone()[0]
+        count = mem_db.execute(
+            "SELECT COUNT(*) FROM hybrid_forward_decision"
+        ).fetchone()[0]
         assert count == 1
 
     def test_FS45_double_insert_outcome_idempotent(self, mem_db):
@@ -557,7 +616,9 @@ class TestIdempotency:
         insert_outcome(mem_db, o)
         insert_outcome(mem_db, o)
         mem_db.commit()
-        count = mem_db.execute("SELECT COUNT(*) FROM hybrid_forward_outcome").fetchone()[0]
+        count = mem_db.execute(
+            "SELECT COUNT(*) FROM hybrid_forward_outcome"
+        ).fetchone()[0]
         assert count == 1
 
     def test_FS46_hash_idempotency(self):
@@ -574,13 +635,19 @@ class TestIdempotency:
             started_at=datetime.now(timezone.utc),
             finished_at=None,
             input_data_date=FREEZE,
-            inserted_count=5, skipped_count=0, conflict_count=0,
-            error_count=0, outcome_filled_count=0,
-            status=RunStatus.SUCCESS, error_summary=None,
+            inserted_count=5,
+            skipped_count=0,
+            conflict_count=0,
+            error_count=0,
+            outcome_filled_count=0,
+            status=RunStatus.SUCCESS,
+            error_summary=None,
         )
         upsert_run_log(mem_db, log)
         upsert_run_log(mem_db, log)
-        count = mem_db.execute("SELECT COUNT(*) FROM hybrid_forward_run_log WHERE run_id='idem_test'").fetchone()[0]
+        count = mem_db.execute(
+            "SELECT COUNT(*) FROM hybrid_forward_run_log WHERE run_id='idem_test'"
+        ).fetchone()[0]
         assert count == 1
 
     def test_FS48_conflict_does_not_insert(self, mem_db):
@@ -592,11 +659,14 @@ class TestIdempotency:
         except ConflictError:
             pass
         mem_db.commit()
-        count = mem_db.execute("SELECT COUNT(*) FROM hybrid_forward_decision").fetchone()[0]
+        count = mem_db.execute(
+            "SELECT COUNT(*) FROM hybrid_forward_decision"
+        ).fetchone()[0]
         assert count == 1  # only original
 
 
 # ── FS49–FS52: Full shadow run (via scripts.run_hybrid_forward_shadow) ─────────
+
 
 class TestFullShadowRun:
     """
@@ -604,12 +674,10 @@ class TestFullShadowRun:
     Uses --date that is after freeze but DailyPrice may or may not cover it.
     """
 
-    def _make_test_db(self, with_data_on_freeze: bool = True) -> str:
+    def _make_test_db(self, tmp_path, with_data_on_freeze: bool = True) -> str:
         """Create a temporary test SQLite file and return its path."""
-        import tempfile
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        conn = sqlite3.connect(tmp.name)
+        db_path = str(tmp_path / "shadow_test.db")
+        conn = sqlite3.connect(db_path)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS daily_prices (
                 stock_id TEXT, date TEXT, close REAL, open REAL, high REAL, low REAL, volume REAL
@@ -631,23 +699,29 @@ class TestFullShadowRun:
                     )
         conn.commit()
         conn.close()
-        return tmp.name
+        return db_path
 
-    def test_FS49_run_inserts_decisions(self, monkeypatch):
-        from scripts.run_hybrid_forward_shadow import run_shadow
+    def test_FS49_run_inserts_decisions(self, monkeypatch, tmp_path):
         import scripts.run_hybrid_forward_shadow as runner_mod
-        db_file = self._make_test_db()
+        from scripts.run_hybrid_forward_shadow import run_shadow
+
+        db_file = self._make_test_db(tmp_path)
         monkeypatch.setattr(runner_mod, "DB_PATH", db_file)
-        monkeypatch.setattr(runner_mod, "STALE_DATA_TOLERANCE_DAYS", 365)  # bypass stale check for test
+        monkeypatch.setattr(
+            runner_mod, "STALE_DATA_TOLERANCE_DAYS", 365
+        )  # bypass stale check for test
         result = run_shadow(trade_date=FREEZE, force_stale=True)
-        assert result.get("status") in (RunStatus.SUCCESS, RunStatus.PARTIAL, RunStatus.BLOCKED_STALE_DATA)
-        import os
-        os.unlink(db_file)
+        assert result.get("status") in (
+            RunStatus.SUCCESS,
+            RunStatus.PARTIAL,
+            RunStatus.BLOCKED_STALE_DATA,
+        )
 
-    def test_FS50_run_before_freeze_records_retrospective(self, monkeypatch):
-        from scripts.run_hybrid_forward_shadow import run_shadow
+    def test_FS50_run_before_freeze_records_retrospective(self, monkeypatch, tmp_path):
         import scripts.run_hybrid_forward_shadow as runner_mod
-        db_file = self._make_test_db()
+        from scripts.run_hybrid_forward_shadow import run_shadow
+
+        db_file = self._make_test_db(tmp_path)
         monkeypatch.setattr(runner_mod, "DB_PATH", db_file)
         run_shadow(trade_date=PRE_FREEZE, force_stale=True)
         # Pre-freeze run is allowed but all classifications = RETROSPECTIVE_RECONSTRUCTION
@@ -656,45 +730,43 @@ class TestFullShadowRun:
             "SELECT capture_classification FROM hybrid_forward_decision"
         ).fetchall()
         conn.close()
-        import os
-        os.unlink(db_file)
         for row in rows:
             assert row[0] == CaptureClassification.RETROSPECTIVE_RECONSTRUCTION
 
-    def test_FS51_run_idempotent(self, monkeypatch):
-        from scripts.run_hybrid_forward_shadow import run_shadow
+    def test_FS51_run_idempotent(self, monkeypatch, tmp_path):
         import scripts.run_hybrid_forward_shadow as runner_mod
-        db_file = self._make_test_db()
+        from scripts.run_hybrid_forward_shadow import run_shadow
+
+        db_file = self._make_test_db(tmp_path)
         monkeypatch.setattr(runner_mod, "DB_PATH", db_file)
         monkeypatch.setattr(runner_mod, "STALE_DATA_TOLERANCE_DAYS", 365)
         run_shadow(trade_date=FREEZE, force_stale=True)
         run_shadow(trade_date=FREEZE, force_stale=True)  # second run same date
         conn = sqlite3.connect(db_file)
         # Conflict count should be 0 (idempotent)
-        conflicts = conn.execute(
-            "SELECT SUM(conflict_count) FROM hybrid_forward_run_log WHERE trade_date=?",
-            (str(FREEZE),),
-        ).fetchone()[0] or 0
+        conflicts = (
+            conn.execute(
+                "SELECT SUM(conflict_count) FROM hybrid_forward_run_log WHERE trade_date=?",
+                (str(FREEZE),),
+            ).fetchone()[0]
+            or 0
+        )
         conn.close()
-        import os
-        os.unlink(db_file)
         assert conflicts == 0
 
-    def test_FS52_no_data_returns_blocked(self, monkeypatch):
-        from scripts.run_hybrid_forward_shadow import run_shadow
+    def test_FS52_no_data_returns_blocked(self, monkeypatch, tmp_path):
         import scripts.run_hybrid_forward_shadow as runner_mod
-        # Create DB with no stock data on target date
-        import tempfile
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        conn = sqlite3.connect(tmp.name)
-        conn.execute("CREATE TABLE daily_prices (stock_id TEXT, date TEXT, close REAL, open REAL, high REAL, low REAL, volume REAL)")
+        from scripts.run_hybrid_forward_shadow import run_shadow
+
+        db_path = str(tmp_path / "empty_shadow.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE daily_prices (stock_id TEXT, date TEXT, close REAL, open REAL, high REAL, low REAL, volume REAL)"
+        )
         conn.commit()
         conn.close()
-        monkeypatch.setattr(runner_mod, "DB_PATH", tmp.name)
+        monkeypatch.setattr(runner_mod, "DB_PATH", db_path)
         result = run_shadow(trade_date=FREEZE, force_stale=True)
-        import os
-        os.unlink(tmp.name)
         assert result.get("status") in (
             RunStatus.BLOCKED_MISSING_SIGNALS,
             RunStatus.BLOCKED_STALE_DATA,
@@ -704,12 +776,18 @@ class TestFullShadowRun:
 
 # ── FS53–FS55: Operational summary ───────────────────────────────────────────
 
+
 class TestOperationalSummary:
 
     def test_FS53_summary_has_all_keys(self, mem_db):
         summary = get_operational_summary(mem_db)
-        for key in ["total_decisions", "prospective_decisions", "matured_20d",
-                    "consecutive_failures", "decisions_by_classification"]:
+        for key in [
+            "total_decisions",
+            "prospective_decisions",
+            "matured_20d",
+            "consecutive_failures",
+            "decisions_by_classification",
+        ]:
             assert key in summary
 
     def test_FS54_matured_performance_none_when_empty(self, mem_db):
