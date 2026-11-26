@@ -175,6 +175,76 @@ _TESTS_FIXTURES_CANONICAL: str = os.path.realpath(
 # Guard allows any path under these roots.
 _PYTEST_TEMP_ROOT: list = []
 
+# ── Coverage data directory (S78C.6B.4 Option A) ─────────────────────────────
+# Derive repo root from the already-verified tests/fixtures canonical path.
+# _TESTS_FIXTURES_CANONICAL = {repo_root}/tests/fixtures  →  two parents up = repo root.
+_REPO_ROOT: str = os.path.realpath(
+    os.path.dirname(os.path.dirname(_TESTS_FIXTURES_CANONICAL))
+)
+_EXPECTED_COV_DIR: str = os.path.join(_REPO_ROOT, ".ci_cov_data")
+
+# Reject a pre-existing symlink: it could silently redirect coverage writes.
+if os.path.islink(_EXPECTED_COV_DIR):
+    raise AssertionError(
+        f"COVERAGE GUARD: .ci_cov_data exists as a symlink at {_EXPECTED_COV_DIR!r}. "
+        "Pre-existing symlinks are rejected (fail-closed). "
+        "Remove the symlink before running tests."
+    )
+
+os.makedirs(_EXPECTED_COV_DIR, exist_ok=True)
+
+# Resolve canonical path AFTER creation to guard against TOCTOU or bind mounts.
+_COVERAGE_DATA_DIR: str = os.path.realpath(_EXPECTED_COV_DIR)
+
+# Validate: must be exactly {repo_root}/.ci_cov_data — no deeper, no aliases.
+if (
+    os.path.dirname(_COVERAGE_DATA_DIR) != _REPO_ROOT
+    or os.path.basename(_COVERAGE_DATA_DIR) != ".ci_cov_data"
+):
+    raise AssertionError(
+        f"COVERAGE GUARD: {_COVERAGE_DATA_DIR!r} did not resolve to "
+        f"{{repo_root}}/.ci_cov_data (repo_root={_REPO_ROOT!r}). "
+        "Refusing to register (fail-closed)."
+    )
+
+# Guard against accidental collision with protected roots.
+_prod_db_parent: str = os.path.dirname(_PRODUCTION_DB_CANONICAL)
+if _COVERAGE_DATA_DIR in (_REPO_ROOT, _prod_db_parent, _TESTS_FIXTURES_CANONICAL):
+    raise AssertionError(
+        f"COVERAGE GUARD: coverage dir {_COVERAGE_DATA_DIR!r} collides with "
+        "a protected path. Refusing to register (fail-closed)."
+    )
+
+# Working-directory consistency: pyproject.toml data_file = ".ci_cov_data/.coverage"
+# is a relative path resolved from cwd. Fail-closed if cwd is not the repo root.
+_cwd_resolved_cov: str = os.path.realpath(os.path.join(os.getcwd(), ".ci_cov_data"))
+if _cwd_resolved_cov != _COVERAGE_DATA_DIR:
+    raise AssertionError(
+        f"COVERAGE GUARD: cwd {os.getcwd()!r} is not the repository root. "
+        f"pyproject.toml data_file would resolve to {_cwd_resolved_cov!r} "
+        f"instead of {_COVERAGE_DATA_DIR!r}. "
+        "Run pytest from the repository root (fail-closed)."
+    )
+
+# COVERAGE_FILE env var: if set, it must resolve inside _COVERAGE_DATA_DIR.
+_cov_env_file: str = os.environ.get("COVERAGE_FILE", "")
+if _cov_env_file:
+    _cov_env_canonical: str = os.path.realpath(os.path.abspath(_cov_env_file))
+    try:
+        Path(_cov_env_canonical).relative_to(_COVERAGE_DATA_DIR)
+    except ValueError:
+        raise AssertionError(
+            f"COVERAGE GUARD: COVERAGE_FILE={_cov_env_file!r} resolves to "
+            f"{_cov_env_canonical!r}, outside registered dir {_COVERAGE_DATA_DIR!r}. "
+            "Unset COVERAGE_FILE or point it into .ci_cov_data/ (fail-closed)."
+        )
+
+# Register at import time — NOT via fixture — so this entry persists through
+# session-scoped fixture teardown (which removes only pytest's temp root).
+# Coverage's Central.finish() fires inside pytest_runtestloop wrapper, after
+# fixture teardown but before pytest_sessionfinish; this entry must still be present.
+_PYTEST_TEMP_ROOT.append(_COVERAGE_DATA_DIR)
+
 # Save original BEFORE installing the guard so _guarded_connect can call it.
 _original_sqlite_connect = sqlite3.connect
 

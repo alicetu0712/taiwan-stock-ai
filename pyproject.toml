@@ -71,6 +71,7 @@ addopts = "-v --tb=short"
 
 # ── Coverage ─────────────────────────────────────────────────
 [tool.coverage.run]
+data_file = ".ci_cov_data/.coverage"
 source = ["src", "dashboard"]
 omit = [
     "src/analyzers/market_behavior.py",

@@ -25,3 +25,6 @@ venv/
 # macOS
 .DS_Store
 stock_research.db
+
+# Coverage data (redirected from repo root by guard-compatible config)
+.ci_cov_data/
