@@ -259,15 +259,20 @@ class TestCoverageURICompatibility:
         finally:
             artifact.unlink(missing_ok=True)
 
-    def test_cu02_uri_mode_ro_alone_blocked(self):
-        """file:/// URI with mode=ro only (missing immutable) is blocked (strict contract)."""
+    def test_cu02_uri_mode_ro_alone_allowed(self):
+        """file:/// URI with mode=ro only (no immutable) is allowed.
+
+        Matches the actual GitHub CI URI format used by coverage 7.17+ check_hot_journal():
+            file:///.../.ci_cov_data/.coverage?mode=ro
+        immutable is optional; mode=ro alone is sufficient.
+        """
         artifact = Path(_COV_DIR) / ".coverage.cu02"
         try:
             conn_create = sqlite3.connect(str(artifact))
             conn_create.close()
             uri = f"file://{artifact}?mode=ro"
-            with pytest.raises(AssertionError, match="missing required URI query parameter 'immutable'"):
-                sqlite3.connect(uri, uri=True)
+            conn = sqlite3.connect(uri, uri=True)
+            conn.close()
         finally:
             artifact.unlink(missing_ok=True)
 
@@ -396,11 +401,7 @@ class TestCoverageURICompatibility:
             artifact.unlink(missing_ok=True)
 
     def test_cu19_uri_reversed_param_order_allowed(self):
-        """file:/// URI with parameters in reversed order (immutable=1&mode=ro) is allowed.
-
-        The strict contract requires both parameters regardless of order.
-        GitHub CI uses mode=ro&immutable=1 but reversed order must also be supported.
-        """
+        """file:/// URI with parameters in reversed order (immutable=1&mode=ro) is allowed."""
         artifact = Path(_COV_DIR) / ".coverage.linux.12345.cu19"
         try:
             conn_create = sqlite3.connect(str(artifact))
@@ -410,3 +411,80 @@ class TestCoverageURICompatibility:
             conn.close()
         finally:
             artifact.unlink(missing_ok=True)
+
+    def test_cu20_real_coverage_artifact_uri_compatibility(self):
+        """Real Coverage artifact (CoverageData API); guard allows check_hot_journal URI pattern.
+
+        Uses coverage.data.CoverageData to create a genuine SQLite artifact, then
+        verifies the guard allows file://...?mode=ro (coverage 7.17+ check_hot_journal format)
+        and file://...?mode=ro&immutable=1 (older combine format).
+
+        CI_PARITY_NOTE: check_hot_journal() exists in coverage >=7.17 (CI version ~7.17.5).
+        Local coverage 7.15.0 does not have this function; the URI pattern is reproduced
+        synthetically here, since the actual function call cannot be executed locally.
+        CHECK_HOT_JOURNAL_CI_PARITY_UNVERIFIED.
+        """
+        import shutil
+
+        import coverage as cov_pkg  # noqa: F401
+        from coverage.data import CoverageData
+
+        test_subdir = Path(_COV_DIR) / "test_cu20"
+        test_subdir.mkdir(exist_ok=True)
+        cov_file = str(test_subdir / ".coverage")
+
+        try:
+            # Step 1: Create a real Coverage SQLite artifact via public API.
+            data = CoverageData(basename=cov_file)
+            data.add_lines({"cu20_placeholder.py": {1: None, 2: None}})
+            data.write()
+            assert os.path.isfile(cov_file), "CoverageData.write() did not create artifact"
+
+            # Step 2: Simulate coverage 7.17+ check_hot_journal() URI call.
+            # check_hot_journal opens main .coverage read-only to detect stale journals.
+            uri_ro = f"file://{cov_file}?mode=ro"
+            conn = sqlite3.connect(uri_ro, check_same_thread=False, uri=True)
+            conn.close()
+
+            # Step 3: Verify mode=ro&immutable=1 (older combine step) still allowed.
+            uri_both = f"file://{cov_file}?mode=ro&immutable=1"
+            conn2 = sqlite3.connect(uri_both, check_same_thread=False, uri=True)
+            conn2.close()
+
+            # Step 4: Guard still active after real coverage artifact operations.
+            assert sqlite3.connect is _cf._guarded_connect, "Guard deactivated during CU20"
+        finally:
+            shutil.rmtree(test_subdir, ignore_errors=True)
+
+    def test_cu21_coverage_combine_guard_compatibility(self):
+        """Coverage.combine() runs without guard interference.
+
+        Creates per-process coverage files via CoverageData API, then calls
+        Coverage.combine() to verify the guard allows all combine-step SQLite access.
+        Guard must remain active throughout.
+        """
+        import shutil
+
+        import coverage as cov_pkg
+        from coverage.data import CoverageData
+
+        test_subdir = Path(_COV_DIR) / "test_cu21"
+        test_subdir.mkdir(exist_ok=True)
+        main_cov_file = str(test_subdir / ".coverage")
+
+        try:
+            # Create two per-process coverage data files via real Coverage API.
+            for i in range(2):
+                proc_file = str(test_subdir / f".coverage.host.{10000 + i}.cu21")
+                data = CoverageData(basename=proc_file)
+                data.add_lines({f"cu21_module{i}.py": {j + 1: None for j in range(3)}})
+                data.write()
+
+            # Run Coverage.combine() — guard must not block combine-step SQLite access.
+            cov = cov_pkg.Coverage(data_file=main_cov_file, config_file=False)
+            cov.combine(data_paths=[str(test_subdir)], strict=False)
+
+            assert os.path.isfile(main_cov_file), "Coverage.combine() did not produce output"
+            assert sqlite3.connect is _cf._guarded_connect, "Guard deactivated during CU21"
+        finally:
+            shutil.rmtree(test_subdir, ignore_errors=True)

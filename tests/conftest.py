@@ -253,9 +253,9 @@ def _validate_coverage_uri_query(query: str, database) -> None:
     """Validate query parameters of a file:/// URI (coverage combine path).
 
     Only CI-verified values are accepted:
-      mode=ro          (observed in GitHub CI traceback)
-      immutable=1      (observed in GitHub CI traceback)
-    All other mode values, immutable=0, unknown keys, and duplicates are rejected.
+      mode=ro          (required; observed in GitHub CI check_hot_journal traceback)
+      immutable=1      (optional; observed in older coverage combine step)
+    All other mode values, immutable=0, unknown keys, duplicates, and missing mode are rejected.
     """
     _ALLOWED_KEYS = frozenset({"mode", "immutable"})
     _ALLOWED_MODE = frozenset({"ro"})         # only mode=ro verified from CI
@@ -277,22 +277,17 @@ def _validate_coverage_uri_query(query: str, database) -> None:
             raise AssertionError(
                 f"ISOLATION GUARD: duplicate URI query parameter {key!r} blocked: {database!r}"
             )
-    # Both parameters are required (strict contract: only CI-verified combination).
+    # mode=ro is required; immutable is optional (if present, must be 1).
     if "mode" not in params:
         raise AssertionError(
             f"ISOLATION GUARD: missing required URI query parameter 'mode' blocked: {database!r}. "
             "Coverage URIs require mode=ro."
         )
-    if "immutable" not in params:
-        raise AssertionError(
-            f"ISOLATION GUARD: missing required URI query parameter 'immutable' blocked: {database!r}. "
-            "Coverage URIs require immutable=1."
-        )
     if params["mode"][0] not in _ALLOWED_MODE:
         raise AssertionError(
             f"ISOLATION GUARD: unauthorized URI mode {params['mode'][0]!r} blocked: {database!r}"
         )
-    if params["immutable"][0] not in _ALLOWED_IMMUTABLE:
+    if "immutable" in params and params["immutable"][0] not in _ALLOWED_IMMUTABLE:
         raise AssertionError(
             f"ISOLATION GUARD: unauthorized URI immutable value "
             f"{params['immutable'][0]!r} blocked: {database!r}"
