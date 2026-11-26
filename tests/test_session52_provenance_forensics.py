@@ -57,16 +57,40 @@ def collection_protocol():
 
 
 @pytest.fixture(scope="module")
-def recorder_integrity():
+def _recorder_tmp_dir(tmp_path_factory):
+    """Module-scoped temp directory for recorder integrity tests.
+
+    tmp_path_factory is session-scoped; mktemp returns a directory under
+    getbasetemp() which is registered in conftest._PYTEST_TEMP_ROOT.
+    Guard-compatible: all recorder files created here are under an allowed root.
+    """
+    return str(tmp_path_factory.mktemp("session52_recorder"))
+
+
+@pytest.fixture(scope="module")
+def recorder_integrity(_recorder_tmp_dir):
     from src.research.provenance_audit_s52 import run_recorder_integrity_tests
-    return run_recorder_integrity_tests()
+    return run_recorder_integrity_tests(tmp_dir=_recorder_tmp_dir)
 
 
 @pytest.fixture
-def recorder():
+def recorder(tmp_path):
     from src.research.prospective_recorder_s51 import ProspectiveRecorderPrototype
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(db_path=str(tmp_path / "recorder.db")) as r:
         yield r
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _verify_guard_after_module():
+    """Guard lifecycle: confirms guard is active after all module tests complete."""
+    import sys
+    yield
+    import sqlite3 as _sqlite3
+    _cf = sys.modules.get("tests.conftest")
+    assert _cf is not None, "conftest module not found in sys.modules"
+    assert _sqlite3.connect is _cf._guarded_connect, (
+        "GUARD LIFECYCLE FAILURE: guard replaced after module test run"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -505,9 +529,9 @@ class TestTC17_AppendOnly:
 # ---------------------------------------------------------------------------
 
 class TestTC18_RepeatedRegistration:
-    def test_duplicate_returns_false(self):
+    def test_duplicate_returns_false(self, tmp_path):
         from src.research.prospective_recorder_s51 import ProspectiveRecorderPrototype, ImmutableDecisionPayload, DecisionClassification
-        with ProspectiveRecorderPrototype() as r:
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "tc18_a.db")) as r:
             p = ImmutableDecisionPayload(
                 fill_date="2026-10-14",
                 signal_id=500,
@@ -526,9 +550,9 @@ class TestTC18_RepeatedRegistration:
             assert r2 is False
             assert r3 is False
 
-    def test_count_does_not_increase_on_duplicate(self):
+    def test_count_does_not_increase_on_duplicate(self, tmp_path):
         from src.research.prospective_recorder_s51 import ProspectiveRecorderPrototype, ImmutableDecisionPayload, DecisionClassification
-        with ProspectiveRecorderPrototype() as r:
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "tc18_b.db")) as r:
             p = ImmutableDecisionPayload(
                 fill_date="2026-10-16",
                 signal_id=501,
@@ -551,9 +575,9 @@ class TestTC18_RepeatedRegistration:
 # ---------------------------------------------------------------------------
 
 class TestTC19_DuplicateRejection:
-    def test_different_signal_id_accepted(self):
+    def test_different_signal_id_accepted(self, tmp_path):
         from src.research.prospective_recorder_s51 import ProspectiveRecorderPrototype, ImmutableDecisionPayload, DecisionClassification
-        with ProspectiveRecorderPrototype() as r:
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "tc19.db")) as r:
             now = datetime.now(timezone.utc).isoformat()
             p1 = ImmutableDecisionPayload(
                 fill_date="2026-10-21",
@@ -594,9 +618,9 @@ class TestTC20_MutationDetection:
         assert rit04 is not None
         assert rit04.passed is True
 
-    def test_verify_all_no_invalid_on_fresh_records(self):
+    def test_verify_all_no_invalid_on_fresh_records(self, tmp_path):
         from src.research.prospective_recorder_s51 import ProspectiveRecorderPrototype, ImmutableDecisionPayload, DecisionClassification
-        with ProspectiveRecorderPrototype() as r:
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "tc20.db")) as r:
             now = datetime.now(timezone.utc).isoformat()
             for i in range(5):
                 p = ImmutableDecisionPayload(
@@ -1032,3 +1056,107 @@ class TestTC40_ProductionFingerprints:
         c = db.cursor()
         c.execute("SELECT COUNT(*) FROM forward_signals WHERE model_version='v8.0' AND is_valid=1")
         assert c.fetchone()[0] == 2236
+
+
+# ---------------------------------------------------------------------------
+# TestRecorderIntegrityAcceptance: Complete RIT suite verification (Phase C/D/E)
+# ---------------------------------------------------------------------------
+
+class TestRecorderIntegrityAcceptance:
+    """Full acceptance: all 15 RIT checks, verdict, and directory lifecycle."""
+
+    def test_all_15_rit_checks_pass(self, recorder_integrity):
+        from src.research.provenance_audit_s52 import RecorderIntegrityStatus
+        # 1. Overall verdict
+        assert recorder_integrity.verdict == RecorderIntegrityStatus.RECORDER_INTEGRITY_VERIFIED, (
+            "Expected RECORDER_INTEGRITY_VERIFIED, got "
+            f"{recorder_integrity.verdict!r}. "
+            f"Failed RITs: "
+            f"{[(t.test_id, t.finding) for t in recorder_integrity.tests if not t.passed]}"
+        )
+        # 2. Exactly 15 results
+        assert len(recorder_integrity.tests) == 15, (
+            f"Expected 15 RIT results, got {len(recorder_integrity.tests)}. "
+            f"IDs present: {[t.test_id for t in recorder_integrity.tests]}"
+        )
+        # 3. Exact RIT ID set matches RIT-01..RIT-15, no duplicates or extras
+        expected_ids = {f"RIT-{i:02d}" for i in range(1, 16)}
+        actual_ids = [t.test_id for t in recorder_integrity.tests]
+        actual_id_set = set(actual_ids)
+        assert len(actual_ids) == len(actual_id_set), (
+            f"Duplicate RIT IDs detected: {actual_ids}"
+        )
+        assert actual_id_set == expected_ids, (
+            f"RIT ID mismatch. Missing: {expected_ids - actual_id_set}. "
+            f"Extra: {actual_id_set - expected_ids}"
+        )
+        # 4. Each individual RIT passed
+        for t in recorder_integrity.tests:
+            assert t.passed is True, (
+                f"RIT {t.test_id} FAILED: "
+                f"{(t.finding or '')[:200]!r}"
+            )
+
+    def test_owned_run_dir_cleaned_after_success(self, _recorder_tmp_dir, recorder_integrity):
+        """After run_recorder_integrity_tests() returns, its _run_dir is cleaned up.
+
+        recorder_integrity fixture is requested to guarantee the run already happened.
+        """
+        # Caller parent must still exist
+        assert os.path.isdir(_recorder_tmp_dir), (
+            "caller parent directory was deleted by run_recorder_integrity_tests()"
+        )
+        # Place sentinel to confirm parent is still writable
+        sentinel = os.path.join(_recorder_tmp_dir, "lifecycle_sentinel.txt")
+        with open(sentinel, "w") as f:
+            f.write("SENTINEL")
+        assert os.path.isfile(sentinel), "sentinel could not be written to parent"
+        # No subdirectory remains (_run_dir was cleaned up by TemporaryDirectory)
+        subdirs = [
+            e for e in os.listdir(_recorder_tmp_dir)
+            if os.path.isdir(os.path.join(_recorder_tmp_dir, e))
+        ]
+        assert subdirs == [], (
+            f"_run_dir not cleaned up after success: subdirectories still present: {subdirs}"
+        )
+
+    def test_owned_run_dir_cleaned_after_exception(self, tmp_path, monkeypatch):
+        """run_recorder_integrity_tests() cleans up _run_dir even when an exception occurs."""
+        from src.research.provenance_audit_s52 import run_recorder_integrity_tests
+        import src.research.provenance_audit_s52 as _audit
+
+        # Create a fresh parent under tmp_path (guard-compatible: under basetemp)
+        parent = str(tmp_path / "exception_lifecycle")
+        os.makedirs(parent)
+        sentinel_path = os.path.join(parent, "sentinel.txt")
+        with open(sentinel_path, "w") as f:
+            f.write("SENTINEL")
+
+        # Inject a controlled exception on the first _make_test_payload call.
+        # This fires inside _run_recorder_rits after _run_dir is created but
+        # before any RIT result is recorded — testing exception-path cleanup.
+        original_make = _audit._make_test_payload
+        call_count = [0]
+
+        def _failing_make(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("synthetic_lifecycle_failure")
+            return original_make(*args, **kwargs)
+
+        monkeypatch.setattr(_audit, "_make_test_payload", _failing_make)
+
+        with pytest.raises(RuntimeError, match="synthetic_lifecycle_failure"):
+            run_recorder_integrity_tests(tmp_dir=parent)
+
+        # Caller parent and sentinel must survive
+        assert os.path.isdir(parent), "caller parent directory was deleted"
+        assert os.path.isfile(sentinel_path), "sentinel was deleted from parent"
+        # _run_dir (subdirectory) must be cleaned up
+        subdirs = [
+            e for e in os.listdir(parent)
+            if os.path.isdir(os.path.join(parent, e))
+        ]
+        assert subdirs == [], (
+            f"_run_dir not cleaned up after exception: subdirectories still present: {subdirs}"
+        )

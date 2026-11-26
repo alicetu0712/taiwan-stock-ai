@@ -8,6 +8,7 @@ No production writes.
 
 import hashlib
 import json
+import os
 import sqlite3
 import tempfile
 from dataclasses import dataclass, field
@@ -225,15 +226,41 @@ def _make_test_payload(
     )
 
 
-def run_recorder_integrity_tests() -> RecorderIntegrityReport:
+def run_recorder_integrity_tests(tmp_dir: Optional[str] = None) -> RecorderIntegrityReport:
     """
     D2: Run all 15 recorder integrity tests.
     Uses temporary SQLite only; never touches platform.db.
+
+    Args:
+        tmp_dir: When supplied, a fresh subdirectory is created under tmp_dir for
+                 this invocation's DB artifacts. The subdirectory is exception-safe:
+                 cleaned up on both normal return and exception via TemporaryDirectory.
+                 The caller-provided parent (tmp_dir) is never deleted. When None
+                 (default), original tempfile behaviour is preserved; standalone
+                 callers are unaffected.
+    """
+    if tmp_dir is not None:
+        with tempfile.TemporaryDirectory(dir=tmp_dir) as _run_dir:
+            return _run_recorder_rits(_run_dir)
+    return _run_recorder_rits(None)
+
+
+def _run_recorder_rits(_run_dir: Optional[str]) -> RecorderIntegrityReport:
+    """Execute all 15 RIT checks. Called only by run_recorder_integrity_tests().
+
+    _run_dir: pre-created directory for this invocation's DB artifacts, or None
+              for standalone (original tempfile) behaviour.
     """
     tests: List[RecorderIntegrityTest] = []
 
+    def _tmp_db(name: str) -> Optional[str]:
+        """Return path under _run_dir, or None to use recorder's default tempfile."""
+        if _run_dir is not None:
+            return os.path.join(_run_dir, name)
+        return None
+
     # --- Test RIT-01: First Registration ---
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(_tmp_db("rit_01.db")) as r:
         p = _make_test_payload(signal_id=101)
         result = r.register(p)
         tests.append(RecorderIntegrityTest(
@@ -244,7 +271,7 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
         ))
 
     # --- Test RIT-02: Duplicate Registration (same connection) ---
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(_tmp_db("rit_02.db")) as r:
         p = _make_test_payload(signal_id=102)
         r.register(p)
         result2 = r.register(p)
@@ -256,7 +283,7 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
         ))
 
     # --- Test RIT-03: Repeated Registration (3×) ---
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(_tmp_db("rit_03.db")) as r:
         p = _make_test_payload(signal_id=103)
         r1 = r.register(p)
         r2 = r.register(p)
@@ -269,7 +296,7 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
         ))
 
     # --- Test RIT-04: Payload Mutation Detection ---
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(_tmp_db("rit_04.db")) as r:
         p = _make_test_payload(signal_id=104)
         r.register(p)
         # Retrieve and mutate
@@ -292,7 +319,7 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
         ))
 
     # --- Test RIT-05: Timestamp Tampering Detection ---
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(_tmp_db("rit_05.db")) as r:
         p = _make_test_payload(signal_id=105)
         original_fp = p.research_fingerprint
         # Tamper with locked_at
@@ -377,7 +404,7 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
             classification=DecisionClassification.BASE_SIGNAL_PROSPECTIVE,
             registered_at=datetime.now(timezone.utc).isoformat(),
         )
-        with ProspectiveRecorderPrototype() as r:
+        with ProspectiveRecorderPrototype(_tmp_db("rit_09.db")) as r:
             try:
                 r.register(p_bad)
             except Exception:
@@ -397,9 +424,15 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
         ))
 
     # --- Test RIT-10: Transaction Rollback ---
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
-        tmp_path = tf.name
-    conn = sqlite3.connect(tmp_path)
+    _explicit_path = _tmp_db("rit_10_rollback.db")
+    if _explicit_path is not None:
+        _rit10_path = _explicit_path
+        _rit10_cleanup = False   # _run_dir owner handles cleanup
+    else:
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            _rit10_path = tf.name
+        _rit10_cleanup = True    # standalone: we own this file
+    conn = sqlite3.connect(_rit10_path)
     conn.execute(
         "CREATE TABLE test_rollback (id INTEGER PRIMARY KEY, val TEXT NOT NULL)"
     )
@@ -416,8 +449,11 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
         rollback_ok = (c == 0)
     finally:
         conn.close()
-        import os
-        os.unlink(tmp_path)
+        if _rit10_cleanup:
+            try:
+                os.unlink(_rit10_path)
+            except OSError:
+                pass
     tests.append(RecorderIntegrityTest(
         test_id="RIT-10",
         description="Transaction rollback leaves DB unchanged",
@@ -426,7 +462,7 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
     ))
 
     # --- Test RIT-11: Append-only Enforcement ---
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(_tmp_db("rit_11.db")) as r:
         p = _make_test_payload(signal_id=111)
         r.register(p)
         # Attempt direct UPDATE to simulate post-registration mutation
@@ -470,8 +506,14 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
             ))
 
     # --- Test RIT-12: Restart Persistence ---
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
-        persist_path = tf.name
+    _persist_explicit = _tmp_db("rit_12_persist.db")
+    if _persist_explicit is not None:
+        persist_path = _persist_explicit
+        _persist_cleanup = False
+    else:
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            persist_path = tf.name
+        _persist_cleanup = True
     try:
         with ProspectiveRecorderPrototype(persist_path) as r:
             p = _make_test_payload(signal_id=112)
@@ -482,11 +524,11 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
             count_after = r2.count()
         restart_ok = (count_before == 1 and count_after == 1)
     finally:
-        import os
-        try:
-            os.unlink(persist_path)
-        except Exception:
-            pass
+        if _persist_cleanup:
+            try:
+                os.unlink(persist_path)
+            except OSError:
+                pass
     tests.append(RecorderIntegrityTest(
         test_id="RIT-12",
         description="Restart persistence: data survives close/reopen",
@@ -495,7 +537,7 @@ def run_recorder_integrity_tests() -> RecorderIntegrityReport:
     ))
 
     # --- Test RIT-13: Evidence Read-back ---
-    with ProspectiveRecorderPrototype() as r:
+    with ProspectiveRecorderPrototype(_tmp_db("rit_13.db")) as r:
         p = _make_test_payload(signal_id=113)
         r.register(p)
         rows = r._conn.execute(
