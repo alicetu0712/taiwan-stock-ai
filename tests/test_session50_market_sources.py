@@ -11,30 +11,22 @@ Coverage:
   TC16–TC35: calendar_contract_s50 — CalendarContract, Pipeline, Eligibility, G04
   TC36–TC40: G04 effective N, bootstrap, 20D readiness, production fingerprints
 """
+
 from __future__ import annotations
 
+import os
 import sqlite3
 
 import pytest
 
-from src.research.market_source_verification_s50 import (
-    BackfillAction,
-    AuthorizationGateVerdict,
-    SourceVerificationLevel,
-    build_backfill_candidate_manifest,
-    build_verified_historical_source_matrix,
-    check_benchmark_only_completion_rule,
-    validate_manifest_idempotency_in_temp_sqlite,
-    validate_ohlc,
-)
 from src.research.calendar_contract_s50 import (
+    _CORRECT_5TD,
+    _CORRECT_20TD,
+    _S46_5TD,
+    _S46_20TD,
     G04WeeklySpacingVerdict,
     StrictEligibilityStatus,
     TwentyDReadinessVerdict,
-    _CORRECT_20TD,
-    _CORRECT_5TD,
-    _S46_20TD,
-    _S46_5TD,
     build_20d_readiness_matrix,
     build_g04_dependence_study,
     build_pipeline_completion_contract,
@@ -43,25 +35,61 @@ from src.research.calendar_contract_s50 import (
     get_corrected_exit,
     get_overlap,
 )
+from src.research.market_source_verification_s50 import (
+    AuthorizationGateVerdict,
+    BackfillAction,
+    SourceVerificationLevel,
+    build_backfill_candidate_manifest,
+    build_verified_historical_source_matrix,
+    check_benchmark_only_completion_rule,
+    validate_manifest_idempotency_in_temp_sqlite,
+    validate_ohlc,
+)
 
+# ---------------------------------------------------------------------------
+# Production audit snapshot — explicit path, read-only, fail-closed
+# ---------------------------------------------------------------------------
+
+# Snapshot must be explicitly provided. Never auto-created. Never platform.db.
+# To run @pytest.mark.production_audit tests: place an authorised, read-only
+# copy of the production DB at this path before invoking pytest.
+_PRODUCTION_SNAPSHOT = "tests/fixtures/prod_audit_snapshot.db"
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def conn():
-    return sqlite3.connect("data/platform.db")
+    # Used ONLY by @pytest.mark.production_audit tests (TC40).
+    # Fail-closed: if snapshot absent → pytest.skip (no connection attempted,
+    # no empty-file creation). Opens in read-only mode; writes are blocked.
+    if not os.path.exists(_PRODUCTION_SNAPSHOT):
+        pytest.skip(
+            f"Production audit snapshot not available at {_PRODUCTION_SNAPSHOT!r}. "
+            "No DB connection attempted. Provide an authorised snapshot to run "
+            "@pytest.mark.production_audit tests."
+        )
+    return sqlite3.connect(f"file:{_PRODUCTION_SNAPSHOT}?mode=ro", uri=True)
 
 
 @pytest.fixture(scope="module")
-def source_matrix(conn):
-    return build_verified_historical_source_matrix(conn)
+def conn_ci(ci_module_conn):
+    # CI-safe :memory: connection for TC01-TC14.
+    # Depends on ci_module_conn (conftest, module-scoped, :memory:).
+    # No scope mismatch: both are module-scoped.
+    return ci_module_conn
 
 
 @pytest.fixture(scope="module")
-def backfill_manifest(conn):
-    return build_backfill_candidate_manifest(conn)
+def source_matrix(conn_ci):
+    return build_verified_historical_source_matrix(conn_ci)
+
+
+@pytest.fixture(scope="module")
+def backfill_manifest(conn_ci):
+    return build_backfill_candidate_manifest(conn_ci)
 
 
 @pytest.fixture(scope="module")
@@ -98,6 +126,7 @@ def readiness_matrix_blocked():
 # TC01: VerifiedHistoricalSourceMatrix builds and has correct structure
 # ---------------------------------------------------------------------------
 
+
 class TestTC01_SourceMatrixStructure:
     def test_builds_without_error(self, source_matrix):
         assert source_matrix is not None
@@ -108,9 +137,17 @@ class TestTC01_SourceMatrixStructure:
     def test_dates_are_correct(self, source_matrix):
         dates = {s.date for s in source_matrix.date_summaries}
         expected = {
-            "2026-10-08", "2026-10-15", "2026-10-19", "2026-10-20", "2026-10-27",
-            "2026-10-29", "2026-10-30", "2026-11-02", "2026-11-03",
-            "2026-11-06", "2026-11-09",
+            "2026-10-08",
+            "2026-10-15",
+            "2026-10-19",
+            "2026-10-20",
+            "2026-10-27",
+            "2026-10-29",
+            "2026-10-30",
+            "2026-11-02",
+            "2026-11-03",
+            "2026-11-06",
+            "2026-11-09",
         }
         assert dates == expected
 
@@ -126,11 +163,13 @@ class TestTC01_SourceMatrixStructure:
 # TC02: All 11 candidate dates are SOURCE_VERIFIED_PARTIAL
 # ---------------------------------------------------------------------------
 
+
 class TestTC02_AllDatesSourceVerifiedPartial:
     def test_all_dates_source_verified_partial(self, source_matrix):
         for ds in source_matrix.date_summaries:
-            assert ds.source_verdict == SourceVerificationLevel.SOURCE_VERIFIED_PARTIAL, \
-                f"{ds.date} has unexpected verdict {ds.source_verdict}"
+            assert (
+                ds.source_verdict == SourceVerificationLevel.SOURCE_VERIFIED_PARTIAL
+            ), f"{ds.date} has unexpected verdict {ds.source_verdict}"
 
     def test_n_verified_partial_is_eleven(self, source_matrix):
         assert source_matrix.n_dates_source_verified_partial == 11
@@ -142,6 +181,7 @@ class TestTC02_AllDatesSourceVerifiedPartial:
 # ---------------------------------------------------------------------------
 # TC03: Nov 06 and Nov 09 upgraded from UNIVERSE_UNVERIFIED
 # ---------------------------------------------------------------------------
+
 
 class TestTC03_Nov06Nov09Upgraded:
     def test_two_dates_upgraded(self, source_matrix):
@@ -164,12 +204,15 @@ class TestTC03_Nov06Nov09Upgraded:
     def test_non_upgraded_dates_have_no_upgrade_note(self, source_matrix):
         for ds in source_matrix.date_summaries:
             if ds.date not in {"2026-11-06", "2026-11-09"}:
-                assert ds.upgrade_from_prior is None, f"{ds.date} should not have upgrade note"
+                assert (
+                    ds.upgrade_from_prior is None
+                ), f"{ds.date} should not have upgrade note"
 
 
 # ---------------------------------------------------------------------------
 # TC04: Verified records are present and correctly encoded
 # ---------------------------------------------------------------------------
+
 
 class TestTC04_VerifiedRecordsPresent:
     def test_multiple_verified_records(self, source_matrix):
@@ -198,6 +241,7 @@ class TestTC04_VerifiedRecordsPresent:
 # TC05: Oct 29 OHLC validation for 6 specific stocks
 # ---------------------------------------------------------------------------
 
+
 class TestTC05_OctTwentyNineOHLCValid:
     def test_oct29_records_present(self, source_matrix):
         oct29 = [r for r in source_matrix.verified_records if r.date == "2026-10-29"]
@@ -205,16 +249,24 @@ class TestTC05_OctTwentyNineOHLCValid:
 
     def test_oct29_tsmc_close_correct(self, source_matrix):
         tsmc = next(
-            (r for r in source_matrix.verified_records
-             if r.date == "2026-10-29" and r.stock_id == "2330"), None
+            (
+                r
+                for r in source_matrix.verified_records
+                if r.date == "2026-10-29" and r.stock_id == "2330"
+            ),
+            None,
         )
         assert tsmc is not None
         assert tsmc.close_price == 2415.0
 
     def test_oct29_mediatek_close_correct(self, source_matrix):
         mt = next(
-            (r for r in source_matrix.verified_records
-             if r.date == "2026-10-29" and r.stock_id == "2454"), None
+            (
+                r
+                for r in source_matrix.verified_records
+                if r.date == "2026-10-29" and r.stock_id == "2454"
+            ),
+            None,
         )
         assert mt is not None
         assert mt.close_price == 4045.0
@@ -226,16 +278,24 @@ class TestTC05_OctTwentyNineOHLCValid:
 
     def test_nov06_tsmc_close_is_2135(self, source_matrix):
         nov06 = next(
-            (r for r in source_matrix.verified_records
-             if r.date == "2026-11-06" and r.stock_id == "2330"), None
+            (
+                r
+                for r in source_matrix.verified_records
+                if r.date == "2026-11-06" and r.stock_id == "2330"
+            ),
+            None,
         )
         assert nov06 is not None
         assert nov06.close_price == 2135.0
 
     def test_nov09_tsmc_close_is_2235(self, source_matrix):
         nov09 = next(
-            (r for r in source_matrix.verified_records
-             if r.date == "2026-11-09" and r.stock_id == "2330"), None
+            (
+                r
+                for r in source_matrix.verified_records
+                if r.date == "2026-11-09" and r.stock_id == "2330"
+            ),
+            None,
         )
         assert nov09 is not None
         assert nov09.close_price == 2235.0
@@ -244,6 +304,7 @@ class TestTC05_OctTwentyNineOHLCValid:
 # ---------------------------------------------------------------------------
 # TC06: Provider verdicts distinguish available vs unavailable
 # ---------------------------------------------------------------------------
+
 
 class TestTC06_TWSEProviderVerdicts:
     def test_twse_single_stock_verdict(self, source_matrix):
@@ -268,6 +329,7 @@ class TestTC06_TWSEProviderVerdicts:
 # TC07: Universe composition correctly encoded
 # ---------------------------------------------------------------------------
 
+
 class TestTC07_UniverseCompositionEncoded:
     def test_total_stocks_656(self, source_matrix):
         uc = source_matrix.universe_composition
@@ -288,16 +350,22 @@ class TestTC07_UniverseCompositionEncoded:
 
     def test_total_eq_four_digit_plus_etf(self, source_matrix):
         uc = source_matrix.universe_composition
-        assert uc["total_stocks"] == uc["four_digit_numeric"] + uc["etf_or_non_standard"]
+        assert (
+            uc["total_stocks"] == uc["four_digit_numeric"] + uc["etf_or_non_standard"]
+        )
 
 
 # ---------------------------------------------------------------------------
 # TC08: Critical finding contains key S50 insight
 # ---------------------------------------------------------------------------
 
+
 class TestTC08_CriticalFindingPresent:
     def test_finding_mentions_upgrade(self, source_matrix):
-        assert "Nov 06" in source_matrix.critical_finding or "Nov 06/09" in source_matrix.critical_finding
+        assert (
+            "Nov 06" in source_matrix.critical_finding
+            or "Nov 06/09" in source_matrix.critical_finding
+        )
 
     def test_finding_mentions_twse_single_stock(self, source_matrix):
         assert "TWSE" in source_matrix.critical_finding
@@ -312,6 +380,7 @@ class TestTC08_CriticalFindingPresent:
 # ---------------------------------------------------------------------------
 # TC09: validate_ohlc function correctness
 # ---------------------------------------------------------------------------
+
 
 class TestTC09_OHLCValidationFunction:
     def test_valid_ohlc(self):
@@ -343,6 +412,7 @@ class TestTC09_OHLCValidationFunction:
 # TC10: BackfillCandidateManifest structure
 # ---------------------------------------------------------------------------
 
+
 class TestTC10_BackfillManifestStructure:
     def test_builds_without_error(self, backfill_manifest):
         assert backfill_manifest is not None
@@ -368,6 +438,7 @@ class TestTC10_BackfillManifestStructure:
 # ---------------------------------------------------------------------------
 # TC11: Manifest action categories are mutually exclusive
 # ---------------------------------------------------------------------------
+
 
 class TestTC11_ManifestActionCategories:
     def test_total_adds_up(self, backfill_manifest):
@@ -398,6 +469,7 @@ class TestTC11_ManifestActionCategories:
 # TC12: Idempotency validation in temp SQLite
 # ---------------------------------------------------------------------------
 
+
 class TestTC12_ManifestIdempotencyValidation:
     def test_idempotency_runs(self, backfill_manifest):
         result = validate_manifest_idempotency_in_temp_sqlite(backfill_manifest)
@@ -420,12 +492,16 @@ class TestTC12_ManifestIdempotencyValidation:
 # TC13: ManifestAuthorizationGate
 # ---------------------------------------------------------------------------
 
+
 class TestTC13_ManifestAuthorizationGate:
     def test_verdict_is_valid_enum(self, backfill_manifest):
         assert backfill_manifest.authorization_verdict in set(AuthorizationGateVerdict)
 
     def test_audit_plan_present(self, backfill_manifest):
-        assert "INSERT" in backfill_manifest.audit_plan or "log" in backfill_manifest.audit_plan.lower()
+        assert (
+            "INSERT" in backfill_manifest.audit_plan
+            or "log" in backfill_manifest.audit_plan.lower()
+        )
 
     def test_unresolved_risks_present(self, backfill_manifest):
         assert len(backfill_manifest.unresolved_risks) >= 3
@@ -434,6 +510,7 @@ class TestTC13_ManifestAuthorizationGate:
 # ---------------------------------------------------------------------------
 # TC14: Unresolved risks are documented
 # ---------------------------------------------------------------------------
+
 
 class TestTC14_ManifestUnresolvedRisks:
     def test_at_least_five_risks(self, backfill_manifest):
@@ -445,12 +522,17 @@ class TestTC14_ManifestUnresolvedRisks:
 
     def test_risk_mentions_nov06_nov09(self, backfill_manifest):
         all_risks = " ".join(backfill_manifest.unresolved_risks)
-        assert "Nov 06" in all_risks or "Nov06" in all_risks or "pipeline" in all_risks.lower()
+        assert (
+            "Nov 06" in all_risks
+            or "Nov06" in all_risks
+            or "pipeline" in all_risks.lower()
+        )
 
 
 # ---------------------------------------------------------------------------
 # TC15: check_benchmark_only_completion_rule
 # ---------------------------------------------------------------------------
+
 
 class TestTC15_BenchmarkOnlyCompletionRule:
     def test_300_stocks_data_complete(self, conn):
@@ -460,10 +542,12 @@ class TestTC15_BenchmarkOnlyCompletionRule:
         for i in range(300):
             m.execute(
                 "INSERT INTO daily_prices VALUES (?,?,?)",
-                ("2026-10-01", f"{i+1000:04d}", 100.0)
+                ("2026-10-01", f"{i+1000:04d}", 100.0),
             )
         m.commit()
-        ok, reason = check_benchmark_only_completion_rule(m, "2026-10-01", threshold=300)
+        ok, reason = check_benchmark_only_completion_rule(
+            m, "2026-10-01", threshold=300
+        )
         assert ok is True
         assert "DATA_COMPLETE" in reason
         m.close()
@@ -473,7 +557,9 @@ class TestTC15_BenchmarkOnlyCompletionRule:
         m.execute("CREATE TABLE daily_prices (date TEXT, stock_id TEXT, close REAL)")
         m.execute("INSERT INTO daily_prices VALUES ('2026-10-01', '0050', 190.0)")
         m.commit()
-        ok, reason = check_benchmark_only_completion_rule(m, "2026-10-01", threshold=300)
+        ok, reason = check_benchmark_only_completion_rule(
+            m, "2026-10-01", threshold=300
+        )
         assert ok is False
         assert "BENCHMARK_ONLY" in reason
         m.close()
@@ -482,7 +568,9 @@ class TestTC15_BenchmarkOnlyCompletionRule:
         m = sqlite3.connect(":memory:")
         m.execute("CREATE TABLE daily_prices (date TEXT, stock_id TEXT, close REAL)")
         m.commit()
-        ok, reason = check_benchmark_only_completion_rule(m, "2026-10-01", threshold=300)
+        ok, reason = check_benchmark_only_completion_rule(
+            m, "2026-10-01", threshold=300
+        )
         assert ok is False
         assert "DATA_MISSING" in reason
         m.close()
@@ -493,10 +581,12 @@ class TestTC15_BenchmarkOnlyCompletionRule:
         for i in range(200):
             m.execute(
                 "INSERT INTO daily_prices VALUES (?,?,?)",
-                ("2026-10-01", f"{i+1000:04d}", 100.0)
+                ("2026-10-01", f"{i+1000:04d}", 100.0),
             )
         m.commit()
-        ok, reason = check_benchmark_only_completion_rule(m, "2026-10-01", threshold=300)
+        ok, reason = check_benchmark_only_completion_rule(
+            m, "2026-10-01", threshold=300
+        )
         assert ok is False
         assert "PARTIAL" in reason
         m.close()
@@ -505,6 +595,7 @@ class TestTC15_BenchmarkOnlyCompletionRule:
 # ---------------------------------------------------------------------------
 # TC16: CalendarContract builds without error
 # ---------------------------------------------------------------------------
+
 
 class TestTC16_CalendarContractBuilds:
     def test_builds_without_error(self, calendar_contract):
@@ -527,6 +618,7 @@ class TestTC16_CalendarContractBuilds:
 # TC17: 3/6 5TD errors, 6/6 20TD errors
 # ---------------------------------------------------------------------------
 
+
 class TestTC17_FiveErrorsThreeErrors:
     def test_three_5td_errors(self, calendar_contract):
         assert calendar_contract.n_5td_errors == 3
@@ -535,13 +627,17 @@ class TestTC17_FiveErrorsThreeErrors:
         assert calendar_contract.n_20td_errors == 6
 
     def test_specific_5td_errors(self, calendar_contract):
-        error_fills = {c.fill_date for c in calendar_contract.corrections_5td if c.was_error}
+        error_fills = {
+            c.fill_date for c in calendar_contract.corrections_5td if c.was_error
+        }
         assert "2026-10-13" in error_fills
         assert "2026-10-14" in error_fills
         assert "2026-10-16" in error_fills
 
     def test_5td_non_errors_unchanged(self, calendar_contract):
-        ok_fills = {c.fill_date for c in calendar_contract.corrections_5td if not c.was_error}
+        ok_fills = {
+            c.fill_date for c in calendar_contract.corrections_5td if not c.was_error
+        }
         assert "2026-10-21" in ok_fills
         assert "2026-10-22" in ok_fills
         assert "2026-10-28" in ok_fills
@@ -551,6 +647,7 @@ class TestTC17_FiveErrorsThreeErrors:
 # TC18: All 20TD corrections are negative delta (S46 was too late)
 # ---------------------------------------------------------------------------
 
+
 class TestTC18_AllTwentyTDCorrected:
     def test_all_20td_errors_flag_set(self, calendar_contract):
         for c in calendar_contract.corrections_20td:
@@ -558,21 +655,27 @@ class TestTC18_AllTwentyTDCorrected:
 
     def test_all_20td_deltas_negative(self, calendar_contract):
         for c in calendar_contract.corrections_20td:
-            assert c.calendar_days_delta < 0, \
-                f"{c.fill_date} 20TD delta={c.calendar_days_delta} should be negative (S46 too late)"
+            assert (
+                c.calendar_days_delta < 0
+            ), f"{c.fill_date} 20TD delta={c.calendar_days_delta} should be negative (S46 too late)"
 
     def test_oct28_20td_delta_minus_seven(self, calendar_contract):
-        oct28 = next(c for c in calendar_contract.corrections_20td if c.fill_date == "2026-10-28")
+        oct28 = next(
+            c for c in calendar_contract.corrections_20td if c.fill_date == "2026-10-28"
+        )
         assert oct28.calendar_days_delta == -7
 
     def test_oct14_20td_delta_minus_four(self, calendar_contract):
-        oct14 = next(c for c in calendar_contract.corrections_20td if c.fill_date == "2026-10-14")
+        oct14 = next(
+            c for c in calendar_contract.corrections_20td if c.fill_date == "2026-10-14"
+        )
         assert oct14.calendar_days_delta == -4
 
 
 # ---------------------------------------------------------------------------
 # TC19: get_corrected_exit returns correct 5TD exits
 # ---------------------------------------------------------------------------
+
 
 class TestTC19_FiveTDExits:
     def test_oct13_5td(self):
@@ -604,6 +707,7 @@ class TestTC19_FiveTDExits:
 # TC20: get_corrected_exit returns correct 20TD exits
 # ---------------------------------------------------------------------------
 
+
 class TestTC20_TwentyTDExits:
     def test_oct13_20td(self):
         assert get_corrected_exit("2026-10-13", "20TD") == "2026-11-12"
@@ -628,6 +732,7 @@ class TestTC20_TwentyTDExits:
 # TC21: S46 20TD values are all incorrect (all too late)
 # ---------------------------------------------------------------------------
 
+
 class TestTC21_S46TwentyTDAllNegativeDelta:
     def test_s46_oct13_was_nov14(self):
         assert _S46_20TD["2026-10-13"] == "2026-11-14"
@@ -640,13 +745,15 @@ class TestTC21_S46TwentyTDAllNegativeDelta:
 
     def test_all_s46_20td_differ_from_corrected(self):
         for d in _S46_20TD:
-            assert _S46_20TD[d] != _CORRECT_20TD[d], \
-                f"{d}: S46 and corrected are same — expected an error"
+            assert (
+                _S46_20TD[d] != _CORRECT_20TD[d]
+            ), f"{d}: S46 and corrected are same — expected an error"
 
 
 # ---------------------------------------------------------------------------
 # TC22: S46 5TD: 3 errors + 3 unchanged
 # ---------------------------------------------------------------------------
+
 
 class TestTC22_S46FiveTDThreeErrors:
     def test_oct13_s46_was_oct21(self):
@@ -675,6 +782,7 @@ class TestTC22_S46FiveTDThreeErrors:
 # TC23: CalendarContract SSOT indicators
 # ---------------------------------------------------------------------------
 
+
 class TestTC23_GetCorrectedExitFunction:
     def test_ssot_consolidation_note_present(self, calendar_contract):
         assert len(calendar_contract.consolidation_note) > 50
@@ -689,12 +797,16 @@ class TestTC23_GetCorrectedExitFunction:
         assert "UNCHANGED" in calendar_contract.s46_module_status
 
     def test_s46_module_status_warns_not_to_use(self, calendar_contract):
-        assert "Do NOT" in calendar_contract.s46_module_status or "MUST" in calendar_contract.s46_module_status
+        assert (
+            "Do NOT" in calendar_contract.s46_module_status
+            or "MUST" in calendar_contract.s46_module_status
+        )
 
 
 # ---------------------------------------------------------------------------
 # TC24: SSOT version is S50
 # ---------------------------------------------------------------------------
+
 
 class TestTC24_S50SSOTVersion:
     def test_ssot_version(self, calendar_contract):
@@ -714,6 +826,7 @@ class TestTC24_S50SSOTVersion:
 # ---------------------------------------------------------------------------
 # TC25: Pipeline Completion Contract builds with 10 stages
 # ---------------------------------------------------------------------------
+
 
 class TestTC25_PipelineContractBuilds:
     def test_builds_without_error(self, pipeline_contract):
@@ -735,6 +848,7 @@ class TestTC25_PipelineContractBuilds:
 # TC26: Pipeline stages have required fields
 # ---------------------------------------------------------------------------
 
+
 class TestTC26_TenPipelineStages:
     def test_all_stages_have_names(self, pipeline_contract):
         for s in pipeline_contract.stages:
@@ -745,7 +859,14 @@ class TestTC26_TenPipelineStages:
             assert s.failure_verdict is not None and len(s.failure_verdict) > 0
 
     def test_qg_stage_present(self, pipeline_contract):
-        qg = next((s for s in pipeline_contract.stages if "QG" in s.stage_id or "QUALITY" in s.stage_name), None)
+        qg = next(
+            (
+                s
+                for s in pipeline_contract.stages
+                if "QG" in s.stage_id or "QUALITY" in s.stage_name
+            ),
+            None,
+        )
         assert qg is not None
 
     def test_critical_stages_subset(self, pipeline_contract):
@@ -757,6 +878,7 @@ class TestTC26_TenPipelineStages:
 # ---------------------------------------------------------------------------
 # TC27: DATA_COMPLETE definition is explicit and correct
 # ---------------------------------------------------------------------------
+
 
 class TestTC27_DataCompleteDefinition:
     def test_data_complete_definition_present(self, pipeline_contract):
@@ -773,6 +895,7 @@ class TestTC27_DataCompleteDefinition:
 # TC28: Benchmark-only rejection rule is explicit
 # ---------------------------------------------------------------------------
 
+
 class TestTC28_BenchmarkRejectionRule:
     def test_rejection_rule_present(self, pipeline_contract):
         assert len(pipeline_contract.benchmark_only_rejection_rule) > 20
@@ -784,12 +907,16 @@ class TestTC28_BenchmarkRejectionRule:
         assert "DATA_COMPLETE" in pipeline_contract.benchmark_only_rejection_rule
 
     def test_pipeline_blocked_reason_mentions_nov06_nov09(self, pipeline_contract):
-        assert "Nov 06" in pipeline_contract.pipeline_blocked_reason or "Nov 09" in pipeline_contract.pipeline_blocked_reason
+        assert (
+            "Nov 06" in pipeline_contract.pipeline_blocked_reason
+            or "Nov 09" in pipeline_contract.pipeline_blocked_reason
+        )
 
 
 # ---------------------------------------------------------------------------
 # TC29: Strict 5D Eligibility Matrix builds
 # ---------------------------------------------------------------------------
+
 
 class TestTC29_Strict5DEligibilityMatrixBuilds:
     def test_builds_without_error(self, eligibility_matrix):
@@ -809,24 +936,33 @@ class TestTC29_Strict5DEligibilityMatrixBuilds:
 # TC30: 3 strict eligible clusters NOW (Oct 13/14/16)
 # ---------------------------------------------------------------------------
 
+
 class TestTC30_ThreeStrictNow:
     def test_n_strict_now_is_three(self, eligibility_matrix):
         assert eligibility_matrix.n_strict_now == 3
 
     def test_oct13_strict_now(self, eligibility_matrix):
-        oct13 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-13")
+        oct13 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-13"
+        )
         assert oct13.strict_eligible_now is True
 
     def test_oct14_strict_now(self, eligibility_matrix):
-        oct14 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-14")
+        oct14 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-14"
+        )
         assert oct14.strict_eligible_now is True
 
     def test_oct16_strict_now(self, eligibility_matrix):
-        oct16 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-16")
+        oct16 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-16"
+        )
         assert oct16.strict_eligible_now is True
 
     def test_oct21_not_strict_now(self, eligibility_matrix):
-        oct21 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-21")
+        oct21 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-21"
+        )
         assert oct21.strict_eligible_now is False
 
     def test_g03_fails_now(self, eligibility_matrix):
@@ -837,14 +973,16 @@ class TestTC30_ThreeStrictNow:
 # TC31: 6 strict eligible clusters after P1 backfill
 # ---------------------------------------------------------------------------
 
+
 class TestTC31_SixStrictAfterP1:
     def test_n_strict_after_p1_is_six(self, eligibility_matrix):
         assert eligibility_matrix.n_strict_after_p1 == 6
 
     def test_all_clusters_strict_after_p1(self, eligibility_matrix):
         for c in eligibility_matrix.clusters:
-            assert c.strict_eligible_after_p1 is True, \
-                f"{c.fill_date} should be strict after P1 backfill"
+            assert (
+                c.strict_eligible_after_p1 is True
+            ), f"{c.fill_date} should be strict after P1 backfill"
 
     def test_g03_still_fails_after_p1(self, eligibility_matrix):
         assert eligibility_matrix.g03_after_p1 is False
@@ -857,38 +995,51 @@ class TestTC31_SixStrictAfterP1:
 # TC32: Oct 21/22/28 show READY_AFTER_VERIFIED_BACKFILL status
 # ---------------------------------------------------------------------------
 
+
 class TestTC32_ReadyAfterVerifiedBackfillStatus:
     def test_oct21_ready_after_backfill(self, eligibility_matrix):
-        oct21 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-21")
+        oct21 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-21"
+        )
         assert oct21.status == StrictEligibilityStatus.READY_AFTER_VERIFIED_BACKFILL
 
     def test_oct22_ready_after_backfill(self, eligibility_matrix):
-        oct22 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-22")
+        oct22 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-22"
+        )
         assert oct22.status == StrictEligibilityStatus.READY_AFTER_VERIFIED_BACKFILL
 
     def test_oct28_ready_after_backfill(self, eligibility_matrix):
-        oct28 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-28")
+        oct28 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-28"
+        )
         assert oct28.status == StrictEligibilityStatus.READY_AFTER_VERIFIED_BACKFILL
 
     def test_oct28_needs_three_backfill_dates(self, eligibility_matrix):
-        oct28 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-28")
+        oct28 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-28"
+        )
         assert len(oct28.backfill_dates_needed) == 3
 
     def test_oct21_needs_one_backfill_date(self, eligibility_matrix):
-        oct21 = next(c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-21")
+        oct21 = next(
+            c for c in eligibility_matrix.clusters if c.fill_date == "2026-10-21"
+        )
         assert len(oct21.backfill_dates_needed) == 1
         assert "2026-10-29" in oct21.backfill_dates_needed
 
     def test_strict_now_clusters_need_no_backfill(self, eligibility_matrix):
         for c in eligibility_matrix.clusters:
             if c.strict_eligible_now:
-                assert len(c.backfill_dates_needed) == 0, \
-                    f"{c.fill_date} is already strict; should need no backfill"
+                assert (
+                    len(c.backfill_dates_needed) == 0
+                ), f"{c.fill_date} is already strict; should need no backfill"
 
 
 # ---------------------------------------------------------------------------
 # TC33: G04 Dependence Study builds and has correct structure
 # ---------------------------------------------------------------------------
+
 
 class TestTC33_G04DependenceStudyBuilds:
     def test_builds_without_error(self, g04_study):
@@ -914,31 +1065,45 @@ class TestTC33_G04DependenceStudyBuilds:
 # TC34: Weekly 5TD spacing: N=3 but Oct 21/Oct 28 pair still 40% → G04 FAIL
 # ---------------------------------------------------------------------------
 
+
 class TestTC34_Weekly5TDStillFails:
     def test_scenario_weekly_5td_present(self, g04_study):
-        s = next((x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"), None)
+        s = next(
+            (x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"),
+            None,
+        )
         assert s is not None
 
     def test_weekly_5td_retains_three(self, g04_study):
-        s = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD")
+        s = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"
+        )
         assert s.n_retained == 3
 
     def test_weekly_5td_retains_oct13_oct21_oct28(self, g04_study):
-        s = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD")
+        s = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"
+        )
         assert "2026-10-13" in s.retained_fills
         assert "2026-10-21" in s.retained_fills
         assert "2026-10-28" in s.retained_fills
 
     def test_weekly_5td_g04_still_fails(self, g04_study):
-        s = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD")
+        s = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"
+        )
         assert s.g04_verdict == G04WeeklySpacingVerdict.G04_FAIL
 
     def test_weekly_5td_oct21_oct28_overlap_40pct(self, g04_study):
-        s = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD")
+        s = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"
+        )
         assert s.max_overlap_pct == 40
 
     def test_weekly_5td_g03_not_met(self, g04_study):
-        s = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD")
+        s = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"
+        )
         assert s.g03_verdict is False
 
 
@@ -946,24 +1111,35 @@ class TestTC34_Weekly5TDStillFails:
 # TC35: Weekly 6TD spacing: fewer fills, G04 improves
 # ---------------------------------------------------------------------------
 
+
 class TestTC35_Weekly6TDReducesN:
     def test_scenario_weekly_6td_present(self, g04_study):
-        s = next((x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_6TD"), None)
+        s = next(
+            (x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_6TD"),
+            None,
+        )
         assert s is not None
 
     def test_weekly_6td_retains_fewer_than_5td(self, g04_study):
-        s5 = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD")
-        s6 = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_6TD")
+        s5 = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_5TD"
+        )
+        s6 = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_6TD"
+        )
         assert s6.n_retained <= s5.n_retained
 
     def test_weekly_6td_g03_not_met(self, g04_study):
-        s = next(x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_6TD")
+        s = next(
+            x for x in g04_study.weekly_spacing_scenarios if x.name == "WEEKLY_6TD"
+        )
         assert s.g03_verdict is False
 
 
 # ---------------------------------------------------------------------------
 # TC36: G04 effective N calculation
 # ---------------------------------------------------------------------------
+
 
 class TestTC36_G04EffectiveNCalc:
     def test_effective_n_key_present(self, g04_study):
@@ -973,29 +1149,43 @@ class TestTC36_G04EffectiveNCalc:
     def test_effective_n_less_than_2(self, g04_study):
         # For N=6 with r=0.8, effective N ≈ 1.09
         en_values = [
-            v for k, v in g04_study.effective_n_calculation.items()
+            v
+            for k, v in g04_study.effective_n_calculation.items()
             if isinstance(v, (int, float))
         ]
-        assert all(en < 2.0 for en in en_values), \
-            f"All effective N values should be < 2.0, got {en_values}"
+        assert all(
+            en < 2.0 for en in en_values
+        ), f"All effective N values should be < 2.0, got {en_values}"
 
     def test_root_cause_mentions_5day(self, g04_study):
-        assert "5-day" in g04_study.root_cause or "5TD" in g04_study.root_cause or "five" in g04_study.root_cause.lower()
+        assert (
+            "5-day" in g04_study.root_cause
+            or "5TD" in g04_study.root_cause
+            or "five" in g04_study.root_cause.lower()
+        )
 
     def test_finding_mentions_structural(self, g04_study):
-        assert "STRUCTURAL" in g04_study.finding or "structural" in g04_study.finding.lower()
+        assert (
+            "STRUCTURAL" in g04_study.finding
+            or "structural" in g04_study.finding.lower()
+        )
 
 
 # ---------------------------------------------------------------------------
 # TC37: Bootstrap is not applicable with current N
 # ---------------------------------------------------------------------------
 
+
 class TestTC37_G04BootstrapNotApplicable:
     def test_bootstrap_applicable_false(self, g04_study):
         assert g04_study.bootstrap_applicable is False
 
     def test_bootstrap_blocked_reason_mentions_n_requirement(self, g04_study):
-        assert "N≥10" in g04_study.bootstrap_blocked_reason or "N>=10" in g04_study.bootstrap_blocked_reason or "10" in g04_study.bootstrap_blocked_reason
+        assert (
+            "N≥10" in g04_study.bootstrap_blocked_reason
+            or "N>=10" in g04_study.bootstrap_blocked_reason
+            or "10" in g04_study.bootstrap_blocked_reason
+        )
 
     def test_remediation_recommendation_present(self, g04_study):
         assert len(g04_study.remediation_recommendation) > 30
@@ -1007,6 +1197,7 @@ class TestTC37_G04BootstrapNotApplicable:
 # ---------------------------------------------------------------------------
 # TC38: 20D Readiness Matrix builds and returns correct structure
 # ---------------------------------------------------------------------------
+
 
 class TestTC38_TwentyDReadinessMatrixBuilds:
     def test_builds_without_error(self, readiness_matrix_blocked):
@@ -1035,20 +1226,28 @@ class TestTC38_TwentyDReadinessMatrixBuilds:
 # TC39: All clusters BLOCKED_PIPELINE when pipeline not restored
 # ---------------------------------------------------------------------------
 
+
 class TestTC39_TwentyDBlockedPipeline:
     def test_overall_verdict_blocked_pipeline(self, readiness_matrix_blocked):
-        assert readiness_matrix_blocked.overall_verdict == TwentyDReadinessVerdict.BLOCKED_PIPELINE
+        assert (
+            readiness_matrix_blocked.overall_verdict
+            == TwentyDReadinessVerdict.BLOCKED_PIPELINE
+        )
 
     def test_all_clusters_pipeline_blocked(self, readiness_matrix_blocked):
         for c in readiness_matrix_blocked.clusters:
-            assert c.verdict == TwentyDReadinessVerdict.BLOCKED_PIPELINE, \
-                f"{c.fill_date} should be BLOCKED_PIPELINE, got {c.verdict}"
+            assert (
+                c.verdict == TwentyDReadinessVerdict.BLOCKED_PIPELINE
+            ), f"{c.fill_date} should be BLOCKED_PIPELINE, got {c.verdict}"
 
     def test_critical_path_mentions_auth01(self, readiness_matrix_blocked):
         assert "AUTH01" in readiness_matrix_blocked.critical_path
 
     def test_critical_path_mentions_pipeline(self, readiness_matrix_blocked):
-        assert "pipeline" in readiness_matrix_blocked.critical_path.lower() or "Pipeline" in readiness_matrix_blocked.critical_path
+        assert (
+            "pipeline" in readiness_matrix_blocked.critical_path.lower()
+            or "Pipeline" in readiness_matrix_blocked.critical_path
+        )
 
     def test_corrected_exit_dates_match_ssot(self, readiness_matrix_blocked):
         for c in readiness_matrix_blocked.clusters:
@@ -1072,15 +1271,22 @@ class TestTC39_TwentyDBlockedPipeline:
 # TC40: Production fingerprints unchanged (READ-ONLY DB check)
 # ---------------------------------------------------------------------------
 
+
 class TestTC40_ProductionFingerprintsUnchanged:
+    # 5 conn-dependent tests: require production DB → production_audit
+    # 3 pairwise_overlap tests: pure function (get_overlap), no DB → regular CI
+
+    @pytest.mark.production_audit
     def test_forward_signals_total(self, conn):
         n = conn.execute("SELECT COUNT(*) FROM forward_signals").fetchone()[0]
         assert n == 2605
 
+    @pytest.mark.production_audit
     def test_daily_prices_max_date(self, conn):
         max_date = conn.execute("SELECT MAX(date) FROM daily_prices").fetchone()[0]
         assert max_date == "2026-11-05"
 
+    @pytest.mark.production_audit
     def test_v8_buy_signals_unchanged(self, conn):
         n = conn.execute(
             "SELECT COUNT(*) FROM forward_signals "
@@ -1088,12 +1294,14 @@ class TestTC40_ProductionFingerprintsUnchanged:
         ).fetchone()[0]
         assert n == 237
 
+    @pytest.mark.production_audit
     def test_nov06_still_zero_rows(self, conn):
         n = conn.execute(
             "SELECT COUNT(*) FROM daily_prices WHERE date='2026-11-06'"
         ).fetchone()[0]
         assert n == 0
 
+    @pytest.mark.production_audit
     def test_nov09_still_zero_rows(self, conn):
         n = conn.execute(
             "SELECT COUNT(*) FROM daily_prices WHERE date='2026-11-09'"

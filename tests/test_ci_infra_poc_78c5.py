@@ -42,25 +42,12 @@ from src.research.market_source_verification_s50 import (
     BackfillAction,
     SourceVerificationLevel,
     build_backfill_candidate_manifest,
-    build_verified_historical_source_matrix,
     validate_manifest_idempotency_in_temp_sqlite,
 )
 
 # ---------------------------------------------------------------------------
 # Module-level fixtures (function scope — matches ci_safe_conn scope)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def source_matrix_safe(ci_safe_conn):
-    """source_matrix from schema-only DB. Fresh per test (function scope)."""
-    return build_verified_historical_source_matrix(ci_safe_conn)
-
-
-@pytest.fixture()
-def backfill_safe(ci_safe_conn):
-    """backfill_manifest from schema-only DB. Fresh per test (function scope)."""
-    return build_backfill_candidate_manifest(ci_safe_conn)
 
 
 # ---------------------------------------------------------------------------
@@ -413,3 +400,78 @@ class TestN11_IsolationGuard:
         assert (
             "platform.db" not in db_url
         ), f"Production SQLite path in DATABASE_URL: {db_url!r}"
+
+
+# ---------------------------------------------------------------------------
+# N12–N19: Module-scoped fixture isolation (8 new guard tests — S78C.6A.1)
+# ---------------------------------------------------------------------------
+
+
+class TestN12_ModuleScopeIsolation:
+    """Isolation evidence for ci_module_conn (module-scoped) and scope gap documentation.
+
+    Scope gap: _block_production_sqlite_paths is function-scoped (monkeypatch).
+    Module-scoped fixtures fire BEFORE function-scoped fixtures → guard does NOT
+    intercept module-scoped sqlite3.connect() calls.
+
+    Design consequence:
+    - CI-safe module-scoped fixtures MUST use :memory: by construction.
+    - Production-audit module-scoped fixtures (conn → platform.db) are intentionally
+      outside the guard's scope. They create an empty file in CI (expected OperationalError).
+    - Python monkeypatch ≠ OS-level sandbox. These tests prove Python-level protection only.
+    """
+
+    def test_ci_module_conn_is_memory_database(self, ci_module_conn):
+        rows = ci_module_conn.execute("PRAGMA database_list").fetchall()
+        assert any(
+            row[2] == "" for row in rows
+        ), "ci_module_conn must be :memory: (empty file path in PRAGMA database_list)"
+
+    def test_ci_module_conn_has_daily_prices_schema(self, ci_module_conn):
+        tables = {
+            r[0]
+            for r in ci_module_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert (
+            "daily_prices" in tables
+        ), f"daily_prices missing from ci_module_conn schema: {tables}"
+
+    def test_ci_module_conn_starts_with_zero_rows(self, ci_module_conn):
+        n = ci_module_conn.execute("SELECT COUNT(*) FROM daily_prices").fetchone()[0]
+        assert n == 0, f"ci_module_conn must start empty, found {n} rows"
+
+    def test_ci_module_conn_not_platform_db_path(self, ci_module_conn):
+        rows = ci_module_conn.execute("PRAGMA database_list").fetchall()
+        for row in rows:
+            assert (
+                "platform.db" not in row[2]
+            ), f"ci_module_conn points to production path: {row[2]!r}"
+
+    def test_function_scoped_guard_active_during_test_body(self):
+        # Guard IS active for test bodies (function scope)
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect("data/platform.db")
+
+    def test_no_anthropic_api_key_in_test_environment(self):
+        # Prevents accidental API calls to Anthropic during tests
+        assert (
+            "ANTHROPIC_API_KEY" not in os.environ
+        ), "ANTHROPIC_API_KEY found — LLM API calls could be triggered accidentally"
+
+    def test_no_postgres_in_database_url(self):
+        db_url = os.environ.get("DATABASE_URL", "")
+        assert (
+            "postgres" not in db_url.lower()
+        ), f"PostgreSQL DATABASE_URL in test env: {db_url[:30]!r}"
+
+    def test_src_database_import_does_not_create_engine(self):
+        # src.database defines ORM Base and models but must not connect at import time.
+        # C1 verified zero sqlite3.connect() calls during import; this test verifies
+        # no module-level engine variable exists that could hold an open connection.
+        import src.database as db_module
+
+        assert (
+            not hasattr(db_module, "engine") or db_module.engine is None
+        ), "src.database has module-level engine — may hold open DB connection"

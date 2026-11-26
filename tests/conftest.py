@@ -37,6 +37,11 @@ import sqlite3
 import pytest
 from sqlalchemy import create_engine
 
+from src.research.market_source_verification_s50 import (
+    build_backfill_candidate_manifest,
+    build_verified_historical_source_matrix,
+)
+
 
 def _make_schema_conn() -> sqlite3.Connection:
     """Create :memory: SQLite with canonical schema via SQLAlchemy DDL emission.
@@ -98,6 +103,23 @@ def _seed(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # Fixtures — function scope (one fresh connection per test)
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ci_module_conn():
+    """Module-scoped :memory: SQLite with canonical schema.
+
+    Shared by all tests in a module. Use for module-scoped fixtures (source_matrix,
+    backfill_manifest) that need a stable connection across the module's test run.
+
+    Safe for CI: :memory: is always allowed by _block_production_sqlite_paths.
+
+    Scope note: module-scoped fixtures fire BEFORE function-scoped fixtures.
+    This fixture is safe by construction (:memory:), not via monkeypatch protection.
+    """
+    conn = _make_schema_conn()
+    yield conn
+    conn.close()
 
 
 @pytest.fixture()
@@ -167,6 +189,23 @@ def _block_production_sqlite_paths(monkeypatch):
         return _original(database, *args, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", _guarded)
+
+
+# ---------------------------------------------------------------------------
+# Pytest marks
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def source_matrix_safe(ci_safe_conn):
+    """VerifiedHistoricalSourceMatrix built from :memory: schema-only DB."""
+    return build_verified_historical_source_matrix(ci_safe_conn)
+
+
+@pytest.fixture()
+def backfill_safe(ci_safe_conn):
+    """BackfillCandidateManifest built from :memory: schema-only DB."""
+    return build_backfill_candidate_manifest(ci_safe_conn)
 
 
 # ---------------------------------------------------------------------------
