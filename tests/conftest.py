@@ -249,9 +249,60 @@ _PYTEST_TEMP_ROOT.append(_COVERAGE_DATA_DIR)
 _original_sqlite_connect = sqlite3.connect
 
 
-def _resolve_db_path(database) -> str | None:
+def _validate_coverage_uri_query(query: str, database) -> None:
+    """Validate query parameters of a file:/// URI (coverage combine path).
+
+    Only CI-verified values are accepted:
+      mode=ro          (observed in GitHub CI traceback)
+      immutable=1      (observed in GitHub CI traceback)
+    All other mode values, immutable=0, unknown keys, and duplicates are rejected.
+    """
+    _ALLOWED_KEYS = frozenset({"mode", "immutable"})
+    _ALLOWED_MODE = frozenset({"ro"})         # only mode=ro verified from CI
+    _ALLOWED_IMMUTABLE = frozenset({"1"})     # only immutable=1 verified from CI
+    try:
+        params = urllib.parse.parse_qs(query, strict_parsing=True, keep_blank_values=True)
+    except ValueError:
+        raise AssertionError(
+            f"ISOLATION GUARD: malformed URI query string blocked: {database!r}"
+        )
+    unknown = set(params.keys()) - _ALLOWED_KEYS
+    if unknown:
+        raise AssertionError(
+            f"ISOLATION GUARD: unauthorized URI query parameters "
+            f"{sorted(unknown)!r} blocked: {database!r}"
+        )
+    for key, values in params.items():
+        if len(values) != 1:
+            raise AssertionError(
+                f"ISOLATION GUARD: duplicate URI query parameter {key!r} blocked: {database!r}"
+            )
+    # Both parameters are required (strict contract: only CI-verified combination).
+    if "mode" not in params:
+        raise AssertionError(
+            f"ISOLATION GUARD: missing required URI query parameter 'mode' blocked: {database!r}. "
+            "Coverage URIs require mode=ro."
+        )
+    if "immutable" not in params:
+        raise AssertionError(
+            f"ISOLATION GUARD: missing required URI query parameter 'immutable' blocked: {database!r}. "
+            "Coverage URIs require immutable=1."
+        )
+    if params["mode"][0] not in _ALLOWED_MODE:
+        raise AssertionError(
+            f"ISOLATION GUARD: unauthorized URI mode {params['mode'][0]!r} blocked: {database!r}"
+        )
+    if params["immutable"][0] not in _ALLOWED_IMMUTABLE:
+        raise AssertionError(
+            f"ISOLATION GUARD: unauthorized URI immutable value "
+            f"{params['immutable'][0]!r} blocked: {database!r}"
+        )
+
+
+def _resolve_db_path(database, uri_explicit: bool = False) -> str | None:
     """Normalize a sqlite3.connect 'database' argument to a canonical absolute path.
 
+    uri_explicit: True when sqlite3.connect was called with uri=True.
     Returns None for ':memory:' (always allowed).
     Raises AssertionError for empty paths, unsupported URI schemes, or
     paths that cannot be resolved.
@@ -276,12 +327,60 @@ def _resolve_db_path(database) -> str | None:
             f"ISOLATION GUARD: empty path blocked (would create unnamed temp file): {database!r}"
         )
 
-    # file://host/path authority-based URI → not supported by this codebase
+    # file:// URI — file:///path (empty authority) is allowed when uri=True;
+    # file://host/path (non-empty authority) is never supported.
     if raw.startswith("file://"):
-        raise AssertionError(
-            f"ISOLATION GUARD: authority-based URI not supported: {database!r}. "
-            "Use file:path or a plain filesystem path."
-        )
+        if not uri_explicit:
+            raise AssertionError(
+                f"ISOLATION GUARD: authority-based URI not supported: {database!r}. "
+                "Use file:path or a plain filesystem path."
+            )
+        try:
+            parsed = urllib.parse.urlparse(raw)
+        except Exception:
+            raise AssertionError(
+                f"ISOLATION GUARD: malformed file:// URI blocked: {database!r}"
+            )
+        if parsed.netloc:  # non-empty authority (file://host/path)
+            raise AssertionError(
+                f"ISOLATION GUARD: authority-based URI not supported: {database!r}. "
+                "Use file:///absolute/path."
+            )
+        if parsed.fragment:
+            raise AssertionError(
+                f"ISOLATION GUARD: URI fragment not supported: {database!r}"
+            )
+        # Percent-encoded paths are unverified and rejected (B3).
+        # CI coverage URIs use plain absolute paths with no encoding.
+        if "%" in parsed.path:
+            raise AssertionError(
+                f"ISOLATION GUARD: percent-encoded URI path not supported: {database!r}. "
+                "Coverage URIs use plain absolute paths."
+            )
+        # Empty or absent query is unverified; CI format always includes ?mode=ro&immutable=1.
+        if not parsed.query:
+            raise AssertionError(
+                f"ISOLATION GUARD: file:// URI without query parameters not supported: {database!r}. "
+                "Coverage URIs require a non-empty query (e.g. ?mode=ro&immutable=1)."
+            )
+        _validate_coverage_uri_query(parsed.query, database)
+        raw = urllib.parse.unquote(parsed.path)
+        # Resolve to canonical path and enforce coverage-only scope (B1).
+        # file:/// URIs are exclusively for .ci_cov_data artifacts — not for
+        # pytest tmp dirs, fixtures, or any other path in _PYTEST_TEMP_ROOT.
+        try:
+            resolved_uri = os.path.realpath(os.path.abspath(raw))
+        except (ValueError, OSError, TypeError) as exc:
+            raise AssertionError(
+                f"ISOLATION GUARD: unresolvable URI path blocked: {database!r}. Error: {exc}"
+            ) from exc
+        if not _is_under(resolved_uri, _COVERAGE_DATA_DIR):
+            raise AssertionError(
+                f"ISOLATION GUARD: file:// URI path outside coverage data directory blocked: "
+                f"{database!r}. Resolved: {resolved_uri!r}. "
+                f"Expected under {_COVERAGE_DATA_DIR!r}."
+            )
+        return resolved_uri  # validated; skip the plain-path resolution below
 
     # Unknown URI scheme (e.g. ftp://, http://)
     if "://" in raw and not raw.startswith("file:"):
@@ -331,7 +430,7 @@ def _guarded_connect(database, *args, **kwargs):
     Installed at conftest import time (session scope) so module-scoped and
     session-scoped fixtures are covered, not just function-scoped ones.
     """
-    resolved = _resolve_db_path(database)
+    resolved = _resolve_db_path(database, uri_explicit=bool(kwargs.get("uri", False)))
 
     if resolved is None:  # :memory:
         return _original_sqlite_connect(database, *args, **kwargs)

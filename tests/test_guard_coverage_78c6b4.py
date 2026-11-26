@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -231,3 +232,181 @@ class TestGuardLifecycle:
         )
         # _COVERAGE_DATA_DIR is a direct child of _REPO_ROOT (one level only)
         assert Path(_COV_DIR).parent == Path(_REPO_ROOT)
+
+
+# ---------------------------------------------------------------------------
+# CU01-CU12: SQLite URI compatibility (file:/// support for coverage combine)
+# ---------------------------------------------------------------------------
+
+
+class TestCoverageURICompatibility:
+    """S78C.6B.5 — file:/// URI support for coverage's combine step.
+
+    Coverage's sqlitedb.py calls sqlite3.connect(filename, check_same_thread=False, uri=True)
+    where filename is file:///.../.ci_cov_data/.coverage.<suffix>?mode=ro&immutable=1.
+    These tests verify the guard correctly handles this case.
+    """
+
+    def test_cu01_github_actions_exact_uri_format_allowed(self):
+        """GitHub Actions exact URI format (file:///path?mode=ro&immutable=1) to .ci_cov_data is allowed."""
+        artifact = Path(_COV_DIR) / ".coverage.linux.12345.cu01"
+        try:
+            conn_create = sqlite3.connect(str(artifact))
+            conn_create.close()
+            uri = f"file://{artifact}?mode=ro&immutable=1"
+            conn = sqlite3.connect(uri, check_same_thread=False, uri=True)
+            conn.close()
+        finally:
+            artifact.unlink(missing_ok=True)
+
+    def test_cu02_uri_mode_ro_alone_blocked(self):
+        """file:/// URI with mode=ro only (missing immutable) is blocked (strict contract)."""
+        artifact = Path(_COV_DIR) / ".coverage.cu02"
+        try:
+            conn_create = sqlite3.connect(str(artifact))
+            conn_create.close()
+            uri = f"file://{artifact}?mode=ro"
+            with pytest.raises(AssertionError, match="missing required URI query parameter 'immutable'"):
+                sqlite3.connect(uri, uri=True)
+        finally:
+            artifact.unlink(missing_ok=True)
+
+    def test_cu03_uri_to_production_db_blocked(self):
+        """file:/// URI pointing to production DB is blocked (production deny priority preserved)."""
+        uri = f"file://{_PROD_CANONICAL}?mode=ro&immutable=1"
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu04_non_empty_authority_blocked(self):
+        """file://host/path with non-empty authority is blocked even with uri=True."""
+        with pytest.raises(AssertionError, match="authority-based URI not supported"):
+            sqlite3.connect("file://somehost/tmp/test.db", uri=True)
+
+    def test_cu05_uri_outside_allowed_roots_blocked(self):
+        """file:/// URI to path outside all allowed roots is blocked (fail-closed)."""
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect("file:///tmp/unauthorized_cu05.db?mode=ro&immutable=1", uri=True)
+
+    def test_cu06_file_uri_without_uri_true_blocked(self):
+        """file:// URI string passed without uri=True kwarg is blocked."""
+        artifact = Path(_COV_DIR) / ".coverage.cu06"
+        uri = f"file://{artifact}"
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect(uri)  # uri=True not set → guard blocks
+
+    def test_cu07_uri_unknown_query_param_blocked(self):
+        """file:/// URI with unknown query parameter (cache=shared) is blocked."""
+        artifact = Path(_COV_DIR) / ".coverage.cu07"
+        uri = f"file://{artifact}?cache=shared"
+        with pytest.raises(AssertionError, match="unauthorized URI query parameters"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu08_uri_duplicate_query_param_blocked(self):
+        """file:/// URI with duplicate query parameter (mode=ro&mode=rw) is blocked."""
+        artifact = Path(_COV_DIR) / ".coverage.cu08"
+        uri = f"file://{artifact}?mode=ro&mode=rw"
+        with pytest.raises(AssertionError, match="duplicate URI query parameter"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu09_uri_symlink_escape_blocked(self):
+        """Symlink inside .ci_cov_data via file:/// URI pointing to production path is blocked."""
+        link = Path(_COV_DIR) / "escape_cu09.db"
+        try:
+            link.symlink_to(_PROD_CANONICAL)
+            uri = f"file://{link}?mode=ro&immutable=1"
+            with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+                sqlite3.connect(uri, uri=True)
+        finally:
+            if link.is_symlink():
+                link.unlink()
+
+    def test_cu10_uri_path_traversal_blocked(self):
+        """Path traversal in file:/// URI is resolved and blocked."""
+        traversal = f"file://{_COV_DIR}/../../../etc/passwd?mode=ro&immutable=1"
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect(traversal, uri=True)
+
+    def test_cu11_uri_percent_encoded_prod_path_blocked(self):
+        """Percent-encoded production DB path in file:/// URI is decoded and blocked.
+
+        Encodes the filename (platform%2Edb) to verify the guard decodes before checking.
+        """
+        prod_dir, prod_file = _PROD_CANONICAL.rsplit("/", 1)
+        encoded_file = urllib.parse.quote(prod_file, safe="")  # platform.db → platform%2Edb
+        uri = f"file://{prod_dir}/{encoded_file}?mode=ro"
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu12_uri_no_query_params_blocked(self):
+        """file:/// URI without query params is blocked (empty query is unverified format)."""
+        artifact = Path(_COV_DIR) / ".coverage.cu12"
+        uri = f"file://{artifact}"
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu13_uri_mode_rw_blocked(self):
+        """mode=rw is not a CI-verified value and is blocked."""
+        artifact = Path(_COV_DIR) / ".coverage.cu13"
+        uri = f"file://{artifact}?mode=rw&immutable=1"
+        with pytest.raises(AssertionError, match="unauthorized URI mode"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu14_uri_mode_rwc_blocked(self):
+        """mode=rwc is not a CI-verified value and is blocked."""
+        artifact = Path(_COV_DIR) / ".coverage.cu14"
+        uri = f"file://{artifact}?mode=rwc&immutable=1"
+        with pytest.raises(AssertionError, match="unauthorized URI mode"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu15_uri_immutable_zero_blocked(self):
+        """immutable=0 is not a CI-verified value and is blocked."""
+        artifact = Path(_COV_DIR) / ".coverage.cu15"
+        uri = f"file://{artifact}?mode=ro&immutable=0"
+        with pytest.raises(AssertionError, match="unauthorized URI immutable"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu16_uri_fragment_blocked(self):
+        """URI fragment (#) is not supported and is blocked."""
+        artifact = Path(_COV_DIR) / ".coverage.cu16"
+        uri = f"file://{artifact}?mode=ro&immutable=1#section"
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu17_uri_outside_cov_dir_blocked(self):
+        """file:/// URI to path outside .ci_cov_data is blocked (B1 scope restriction).
+
+        Even a path that would otherwise be in _PYTEST_TEMP_ROOT is blocked
+        when accessed via URI, since URIs are exclusively for .ci_cov_data.
+        """
+        repo_root_db = f"{_REPO_ROOT}/test_cu17_check.db"
+        uri = f"file://{repo_root_db}?mode=ro&immutable=1"
+        with pytest.raises(AssertionError, match="ISOLATION GUARD"):
+            sqlite3.connect(uri, uri=True)
+
+    def test_cu18_uri_immutable_only_blocked(self):
+        """file:/// URI with immutable=1 only (missing mode=ro) is blocked (strict contract)."""
+        artifact = Path(_COV_DIR) / ".coverage.cu18"
+        try:
+            conn_create = sqlite3.connect(str(artifact))
+            conn_create.close()
+            uri = f"file://{artifact}?immutable=1"
+            with pytest.raises(AssertionError, match="missing required URI query parameter 'mode'"):
+                sqlite3.connect(uri, uri=True)
+        finally:
+            artifact.unlink(missing_ok=True)
+
+    def test_cu19_uri_reversed_param_order_allowed(self):
+        """file:/// URI with parameters in reversed order (immutable=1&mode=ro) is allowed.
+
+        The strict contract requires both parameters regardless of order.
+        GitHub CI uses mode=ro&immutable=1 but reversed order must also be supported.
+        """
+        artifact = Path(_COV_DIR) / ".coverage.linux.12345.cu19"
+        try:
+            conn_create = sqlite3.connect(str(artifact))
+            conn_create.close()
+            uri = f"file://{artifact}?immutable=1&mode=ro"
+            conn = sqlite3.connect(uri, check_same_thread=False, uri=True)
+            conn.close()
+        finally:
+            artifact.unlink(missing_ok=True)
