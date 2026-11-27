@@ -88,8 +88,8 @@ def auth_readiness():
 
 
 @pytest.fixture
-def recorder():
-    with ProspectiveRecorderPrototype() as r:
+def recorder(tmp_path):
+    with ProspectiveRecorderPrototype(db_path=str(tmp_path / "recorder.db")) as r:
         yield r
 
 
@@ -752,8 +752,8 @@ class TestTC27_RecorderAppendOnly:
         assert inserted is True
         assert recorder.count() == 1
 
-    def test_duplicate_insert_is_idempotent(self):
-        with ProspectiveRecorderPrototype() as r:
+    def test_duplicate_insert_is_idempotent(self, tmp_path):
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "recorder_dup.db")) as r:
             p = self._make_payload("2026-10-13", 1002)
             first = r.register(p)
             second = r.register(p)
@@ -761,8 +761,8 @@ class TestTC27_RecorderAppendOnly:
             assert second is False
             assert r.count() == 1
 
-    def test_different_fill_date_allowed(self):
-        with ProspectiveRecorderPrototype() as r:
+    def test_different_fill_date_allowed(self, tmp_path):
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "recorder_diff.db")) as r:
             r.register(self._make_payload("2026-10-13", 2001))
             r.register(self._make_payload("2026-10-14", 2002))
             assert r.count() == 2
@@ -820,8 +820,8 @@ class TestTC28_RecorderFingerprintVerification:
 
 
 class TestTC29_RecorderVerifyAll:
-    def test_verify_all_returns_zero_invalid(self):
-        with ProspectiveRecorderPrototype() as r:
+    def test_verify_all_returns_zero_invalid(self, tmp_path):
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "recorder_verify.db")) as r:
             p = ImmutableDecisionPayload(
                 fill_date="2026-10-13", signal_id=777,
                 stock_id="2330", model_version="v8.0",
@@ -835,7 +835,17 @@ class TestTC29_RecorderVerifyAll:
             assert valid == 1
             assert invalid == 0
 
-    def test_context_manager_cleans_up(self):
+    def test_context_manager_cleans_up(self, tmp_path, monkeypatch):
+        import src.research.prospective_recorder_s51 as _rec_module
+        _orig_ntf = tempfile.NamedTemporaryFile
+        def _ntf_with_dir(*args, **kwargs):
+            kwargs.setdefault("dir", str(tmp_path))
+            return _orig_ntf(*args, **kwargs)
+        class _ScopedTempfileProxy:
+            NamedTemporaryFile = staticmethod(_ntf_with_dir)
+            def __getattr__(self, name):
+                return getattr(tempfile, name)
+        monkeypatch.setattr(_rec_module, "tempfile", _ScopedTempfileProxy())
         db_path = None
         with ProspectiveRecorderPrototype() as r:
             db_path = r._db_path
@@ -845,8 +855,8 @@ class TestTC29_RecorderVerifyAll:
 
 
 class TestTC30_RecorderModelVersionEnforcement:
-    def test_payload_model_version_stored(self):
-        with ProspectiveRecorderPrototype() as r:
+    def test_payload_model_version_stored(self, tmp_path):
+        with ProspectiveRecorderPrototype(db_path=str(tmp_path / "recorder_mv.db")) as r:
             p = ImmutableDecisionPayload(
                 fill_date="2026-10-28", signal_id=555,
                 stock_id="2454", model_version="v8.0",
