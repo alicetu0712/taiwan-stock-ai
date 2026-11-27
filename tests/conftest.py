@@ -46,6 +46,23 @@ from src.research.market_source_verification_s50 import (
 )
 
 
+def _apply_schema(conn: sqlite3.Connection) -> None:
+    """Apply canonical SQLAlchemy schema to any SQLite connection.
+
+    Source: src/database.py Base.metadata — permanent DDL consistency guarantee.
+    Does not read from or write to any application data.
+    """
+    from sqlalchemy.schema import CreateTable
+    from src.database import Base
+
+    temp_engine = create_engine("sqlite:///:memory:", echo=False)
+    for table in Base.metadata.sorted_tables:
+        ddl = str(CreateTable(table).compile(temp_engine))
+        conn.execute(ddl)
+    conn.commit()
+    temp_engine.dispose()
+
+
 def _make_schema_conn() -> sqlite3.Connection:
     """Create :memory: SQLite with canonical schema via SQLAlchemy DDL emission.
 
@@ -56,17 +73,8 @@ def _make_schema_conn() -> sqlite3.Connection:
     Note: SQLAlchemy :memory: engines and sqlite3.connect(":memory:") are
     always separate, independent DB instances. We use CreateTable to bridge them.
     """
-    from sqlalchemy.schema import CreateTable
-
-    from src.database import Base
-
     conn = sqlite3.connect(":memory:")
-    temp_engine = create_engine("sqlite:///:memory:", echo=False)
-    for table in Base.metadata.sorted_tables:
-        ddl = str(CreateTable(table).compile(temp_engine))
-        conn.execute(ddl)
-    conn.commit()
-    temp_engine.dispose()
+    _apply_schema(conn)
     return conn
 
 
@@ -151,6 +159,82 @@ def ci_conn_with_data():
     known reference inputs, not production data integrity.
     """
     conn = _make_schema_conn()
+    _seed(conn)
+    yield conn
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# S78C.8B — File-backed isolated database infrastructure
+# ---------------------------------------------------------------------------
+
+
+class IsolatedFileDb:
+    """Owned file-backed SQLite database with explicit lifecycle.
+
+    Context manager: creates the database file, applies canonical schema,
+    closes the connection and removes owned artifacts on exit (normal or exception).
+
+    path must reside under a registered pytest temp root (_PYTEST_TEMP_ROOT).
+    Parent directory is never deleted; only the owned DB file (and WAL/SHM) is removed.
+    seed=True applies _SYNTHETIC_DAILY_PRICES via _seed().
+    """
+
+    def __init__(self, path: str, seed: bool = False):
+        self._path = path
+        self._seed = seed
+        self._conn: sqlite3.Connection | None = None
+
+    def __enter__(self) -> sqlite3.Connection:
+        self._conn = sqlite3.connect(self._path)
+        _apply_schema(self._conn)
+        if self._seed:
+            _seed(self._conn)
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+        try:
+            os.remove(self._path)
+        except FileNotFoundError:
+            pass
+        for suffix in ("-wal", "-shm"):
+            try:
+                os.remove(self._path + suffix)
+            except FileNotFoundError:
+                pass
+        return False
+
+
+@pytest.fixture()
+def ci_file_conn(tmp_path):
+    """File-backed SQLite in pytest temp root, with canonical schema (zero rows).
+
+    Function-scoped. Each test gets an independent file at tmp_path/ci_test.db.
+    Compatible with the SQLite Isolation Guard (path is under _PYTEST_TEMP_ROOT).
+
+    Use when the test requires: close/reopen behavior, multiple connections,
+    transaction rollback, or file-level persistence between operations.
+    """
+    db_path = str(tmp_path / "ci_test.db")
+    conn = sqlite3.connect(db_path)
+    _apply_schema(conn)
+    yield conn
+    conn.close()
+
+
+@pytest.fixture()
+def ci_file_conn_with_data(tmp_path):
+    """File-backed SQLite seeded with 12 synthetic OHLC rows.
+
+    Function-scoped. Same seed profile as ci_conn_with_data, file-backed.
+    Compatible with the SQLite Isolation Guard.
+    """
+    db_path = str(tmp_path / "ci_test_data.db")
+    conn = sqlite3.connect(db_path)
+    _apply_schema(conn)
     _seed(conn)
     yield conn
     conn.close()
@@ -472,6 +556,36 @@ def _guarded_connect(database, *args, **kwargs):
 
 # Install at import time — covers collection, session, module, and function scopes.
 sqlite3.connect = _guarded_connect
+
+
+def get_active_guard():
+    """Return the installed Guard function; raise AssertionError if not active.
+
+    Use when test code must capture the Guard reference before patching
+    sqlite3.connect, or when a helper needs to verify-then-capture the Guard
+    identity in one atomic operation. Does not modify sqlite3.connect.
+    """
+    if sqlite3.connect is not _guarded_connect:
+        raise AssertionError(
+            "GUARD FAILURE: sqlite3.connect is not _guarded_connect. "
+            f"Found: {sqlite3.connect!r}. "
+            "Do not call get_active_guard() after the guard has been patched out."
+        )
+    return _guarded_connect
+
+
+@pytest.fixture()
+def ci_guard_identity():
+    """Guard identity contract fixture (function-scoped).
+
+    Returns the active _guarded_connect reference after re-verifying it is
+    installed. Fails closed if the Guard has been replaced between tests.
+    Does not modify sqlite3.connect.
+
+    Re-verified on each invocation (function-scoped). Complements the per-test
+    Guard liveness check in _block_production_sqlite_paths.
+    """
+    return get_active_guard()
 
 
 @pytest.fixture(scope="session", autouse=True)
