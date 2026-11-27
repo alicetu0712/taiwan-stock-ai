@@ -187,9 +187,18 @@ class IsolatedFileDb:
 
     def __enter__(self) -> sqlite3.Connection:
         self._conn = sqlite3.connect(self._path)
-        _apply_schema(self._conn)
-        if self._seed:
-            _seed(self._conn)
+        try:
+            _apply_schema(self._conn)
+            if self._seed:
+                _seed(self._conn)
+        except Exception:
+            self._conn.close()
+            self._conn = None
+            try:
+                os.remove(self._path)
+            except FileNotFoundError:
+                pass
+            raise
         return self._conn
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -220,7 +229,11 @@ def ci_file_conn(tmp_path):
     """
     db_path = str(tmp_path / "ci_test.db")
     conn = sqlite3.connect(db_path)
-    _apply_schema(conn)
+    try:
+        _apply_schema(conn)
+    except Exception:
+        conn.close()
+        raise
     yield conn
     conn.close()
 
@@ -234,8 +247,12 @@ def ci_file_conn_with_data(tmp_path):
     """
     db_path = str(tmp_path / "ci_test_data.db")
     conn = sqlite3.connect(db_path)
-    _apply_schema(conn)
-    _seed(conn)
+    try:
+        _apply_schema(conn)
+        _seed(conn)
+    except Exception:
+        conn.close()
+        raise
     yield conn
     conn.close()
 
@@ -558,6 +575,19 @@ def _guarded_connect(database, *args, **kwargs):
 sqlite3.connect = _guarded_connect
 
 
+def _guard_identity_check(connect_ref) -> None:
+    """Pure identity check — raises AssertionError if connect_ref is not _guarded_connect.
+
+    Does not read or modify sqlite3.connect. Caller supplies the reference to check.
+    Used by get_active_guard() and directly testable without touching global state.
+    """
+    if connect_ref is not _guarded_connect:
+        raise AssertionError(
+            "GUARD FAILURE: provided connect_ref is not _guarded_connect. "
+            f"Found: {connect_ref!r}."
+        )
+
+
 def get_active_guard():
     """Return the installed Guard function; raise AssertionError if not active.
 
@@ -565,12 +595,7 @@ def get_active_guard():
     sqlite3.connect, or when a helper needs to verify-then-capture the Guard
     identity in one atomic operation. Does not modify sqlite3.connect.
     """
-    if sqlite3.connect is not _guarded_connect:
-        raise AssertionError(
-            "GUARD FAILURE: sqlite3.connect is not _guarded_connect. "
-            f"Found: {sqlite3.connect!r}. "
-            "Do not call get_active_guard() after the guard has been patched out."
-        )
+    _guard_identity_check(sqlite3.connect)
     return _guarded_connect
 
 

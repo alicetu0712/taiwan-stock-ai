@@ -36,21 +36,12 @@ class TestSharedFixtureArchitecture:
     # SF02 — Fail-closed on mismatch
     # ------------------------------------------------------------------
 
-    def test_sf02_missing_guard_identity_fails_closed(self):
-        """SF02: get_active_guard() raises AssertionError when Guard identity mismatches.
-
-        Uses a controlled sentinel (not a database connection, not production path).
-        patch is exception-safe; guard is restored by __exit__.
-        """
-        from unittest.mock import patch
-
-        _sentinel = lambda *a, **k: None  # noqa: E731  # distinct non-guard callable
-
-        with patch("sqlite3.connect", new=_sentinel):
-            with pytest.raises(AssertionError, match="GUARD FAILURE"):
-                _cf.get_active_guard()
-
-        # Guard restored by patch context exit
+    def test_sf02_guard_identity_validation_rejects_mismatch(self):
+        """SF02: _guard_identity_check raises AssertionError for a non-guard callable."""
+        _not_the_guard = lambda *a, **k: None  # noqa: E731  # distinct non-guard callable
+        with pytest.raises(AssertionError, match="GUARD FAILURE"):
+            _cf._guard_identity_check(_not_the_guard)
+        # Global sqlite3.connect must be unchanged (no patch was used)
         assert sqlite3.connect is _cf._guarded_connect
 
     # ------------------------------------------------------------------
@@ -315,5 +306,187 @@ class TestSharedFixtureArchitecture:
         """SF16: Guard identity is unchanged after ci_file_conn and ci_guard_identity lifecycle."""
         # ci_file_conn uses sqlite3.connect internally — verify guard still active
         ci_file_conn.execute("SELECT COUNT(*) FROM daily_prices").fetchone()
+        assert sqlite3.connect is _cf._guarded_connect
+        assert ci_guard_identity is _cf._guarded_connect
+
+
+class TestLifecycleHardeningRegression:
+    """LH01–LH07 — Initialization failure cleanup regression tests (S78C.8B.2).
+
+    Verifies that ci_file_conn, ci_file_conn_with_data, and IsolatedFileDb.__enter__
+    close open connections and remove owned artifacts when initialization fails,
+    without depending on garbage collection.
+    """
+
+    # ------------------------------------------------------------------
+    # LH01 — ci_file_conn schema failure closes connection
+    # ------------------------------------------------------------------
+
+    def test_lh01_ci_file_conn_schema_failure_closes_connection(
+        self, tmp_path, monkeypatch
+    ):
+        """LH01: ci_file_conn closes the connection when _apply_schema raises."""
+        opened_conns: list = []
+        _orig = _cf._original_sqlite_connect
+
+        def _spy(db, *a, **kw):
+            c = _orig(db, *a, **kw)
+            opened_conns.append(c)
+            return c
+
+        monkeypatch.setattr(_cf, "_original_sqlite_connect", _spy)
+
+        def _fail(conn):
+            raise RuntimeError("lh01_schema_fail")
+
+        monkeypatch.setattr(_cf, "_apply_schema", _fail)
+
+        gen = _cf.ci_file_conn.__wrapped__(tmp_path)
+        with pytest.raises(RuntimeError, match="lh01_schema_fail"):
+            next(gen)
+
+        assert len(opened_conns) == 1
+        with pytest.raises(Exception):
+            opened_conns[0].execute("SELECT 1")
+
+    # ------------------------------------------------------------------
+    # LH02 — ci_file_conn_with_data seed failure closes connection
+    # ------------------------------------------------------------------
+
+    def test_lh02_ci_file_conn_with_data_seed_failure_closes_connection(
+        self, tmp_path, monkeypatch
+    ):
+        """LH02: ci_file_conn_with_data closes connection when _seed raises after schema."""
+        opened_conns: list = []
+        _orig = _cf._original_sqlite_connect
+
+        def _spy(db, *a, **kw):
+            c = _orig(db, *a, **kw)
+            opened_conns.append(c)
+            return c
+
+        monkeypatch.setattr(_cf, "_original_sqlite_connect", _spy)
+        monkeypatch.setattr(_cf, "_apply_schema", lambda conn: None)
+
+        def _fail_seed(conn):
+            raise RuntimeError("lh02_seed_fail")
+
+        monkeypatch.setattr(_cf, "_seed", _fail_seed)
+
+        gen = _cf.ci_file_conn_with_data.__wrapped__(tmp_path)
+        with pytest.raises(RuntimeError, match="lh02_seed_fail"):
+            next(gen)
+
+        assert len(opened_conns) == 1
+        with pytest.raises(Exception):
+            opened_conns[0].execute("SELECT 1")
+
+    # ------------------------------------------------------------------
+    # LH03 — IsolatedFileDb schema failure closes connection and removes file
+    # ------------------------------------------------------------------
+
+    def test_lh03_isolated_file_db_schema_failure_closes_connection(
+        self, tmp_path, monkeypatch
+    ):
+        """LH03: IsolatedFileDb.__enter__ closes connection and removes file on schema failure."""
+
+        def _fail(conn):
+            raise RuntimeError("lh03_schema_fail")
+
+        monkeypatch.setattr(_cf, "_apply_schema", _fail)
+
+        db_path = str(tmp_path / "lh03.db")
+        db = _cf.IsolatedFileDb(db_path)
+
+        with pytest.raises(RuntimeError, match="lh03_schema_fail"):
+            db.__enter__()
+
+        assert db._conn is None, "_conn not cleared after schema failure"
+        assert not os.path.exists(db_path), "DB file not removed after schema failure"
+
+    # ------------------------------------------------------------------
+    # LH04 — IsolatedFileDb seed failure closes connection and removes file
+    # ------------------------------------------------------------------
+
+    def test_lh04_isolated_file_db_seed_failure_closes_connection(
+        self, tmp_path, monkeypatch
+    ):
+        """LH04: IsolatedFileDb.__enter__ closes connection and removes file on seed failure."""
+        monkeypatch.setattr(_cf, "_apply_schema", lambda conn: None)
+
+        def _fail_seed(conn):
+            raise RuntimeError("lh04_seed_fail")
+
+        monkeypatch.setattr(_cf, "_seed", _fail_seed)
+
+        db_path = str(tmp_path / "lh04.db")
+        db = _cf.IsolatedFileDb(db_path, seed=True)
+
+        with pytest.raises(RuntimeError, match="lh04_seed_fail"):
+            db.__enter__()
+
+        assert db._conn is None, "_conn not cleared after seed failure"
+        assert not os.path.exists(db_path), "DB file not removed after seed failure"
+
+    # ------------------------------------------------------------------
+    # LH05 — IsolatedFileDb failure preserves parent directory and sentinel
+    # ------------------------------------------------------------------
+
+    def test_lh05_isolated_file_db_failure_preserves_parent_and_sentinel(
+        self, tmp_path, monkeypatch
+    ):
+        """LH05: IsolatedFileDb failure removes owned DB file but preserves parent and sibling."""
+
+        def _fail(conn):
+            raise RuntimeError("lh05_fail")
+
+        monkeypatch.setattr(_cf, "_apply_schema", _fail)
+
+        parent = tmp_path / "lh05_parent"
+        parent.mkdir()
+        sentinel = parent / "sentinel.txt"
+        sentinel.write_text("lh05_content")
+        db_path = str(parent / "lh05.db")
+
+        db = _cf.IsolatedFileDb(db_path)
+        with pytest.raises(RuntimeError, match="lh05_fail"):
+            db.__enter__()
+
+        assert parent.exists(), "Parent directory was removed by IsolatedFileDb"
+        assert sentinel.exists(), "Sentinel file was removed by IsolatedFileDb"
+        assert sentinel.read_text() == "lh05_content", "Sentinel content modified"
+        assert not (parent / "lh05.db").exists(), "DB file not removed after failure"
+
+    # ------------------------------------------------------------------
+    # LH06 — IsolatedFileDb failure re-raises original exception unchanged
+    # ------------------------------------------------------------------
+
+    def test_lh06_isolated_file_db_failure_original_exception_preserved(
+        self, tmp_path, monkeypatch
+    ):
+        """LH06: IsolatedFileDb.__enter__ failure re-raises the original exception by identity."""
+        original_exc = ValueError("lh06_original_exc_identity")
+
+        def _fail(conn):
+            raise original_exc
+
+        monkeypatch.setattr(_cf, "_apply_schema", _fail)
+
+        db_path = str(tmp_path / "lh06.db")
+        db = _cf.IsolatedFileDb(db_path)
+
+        with pytest.raises(ValueError) as exc_info:
+            db.__enter__()
+
+        assert exc_info.value is original_exc, "Original exception identity not preserved"
+
+    # ------------------------------------------------------------------
+    # LH07 — Guard identity intact after all LH lifecycle tests
+    # ------------------------------------------------------------------
+
+    def test_lh07_guard_identity_intact_after_lifecycle_regression(
+        self, ci_guard_identity
+    ):
+        """LH07: Guard identity is unchanged after all LH lifecycle regression tests."""
         assert sqlite3.connect is _cf._guarded_connect
         assert ci_guard_identity is _cf._guarded_connect
