@@ -51,9 +51,12 @@ SAFETY:
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import os
 import sqlite3
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -120,6 +123,115 @@ def idempotency_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(
         _fa_module, "tempfile", _ScopedTempfileProxy()
     )
+
+
+@pytest.fixture
+def sqlite3_observer(tmp_path, monkeypatch, ci_guard_identity):
+    import src.research.fallback_adapter_s53 as _fa_module
+    import tempfile as _real_tempfile
+    import sqlite3 as _real_sqlite3
+
+    created_ntf_paths: list = []
+    connections: list = []
+    _guard_ref = ci_guard_identity  # verified active guard, captured at setup
+
+    _orig_ntf = _real_tempfile.NamedTemporaryFile
+
+    def _ntf_with_dir(*args, **kwargs):
+        kwargs.setdefault("dir", str(tmp_path))
+        ntf = _orig_ntf(*args, **kwargs)
+        created_ntf_paths.append(ntf.name)
+        return ntf
+
+    class _ScopedTempfileProxy:
+        NamedTemporaryFile = staticmethod(_ntf_with_dir)
+
+        def __getattr__(self, name):
+            return getattr(_real_tempfile, name)
+
+    class _RecordingConnectProxy:
+        def connect(self, database, *args, **kwargs):
+            raw = str(database)
+            norm = os.path.realpath(os.path.abspath(raw)) if raw != ":memory:" else ":memory:"
+            connections.append((raw, norm))  # record before guard check and delegation
+            _assert_guard_identity(_real_sqlite3.connect, _guard_ref)
+            return _guard_ref(database, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(_real_sqlite3, name)
+
+    monkeypatch.setattr(_fa_module, "tempfile", _ScopedTempfileProxy())
+    monkeypatch.setattr(_fa_module, "sqlite3", _RecordingConnectProxy())
+
+    return {"connections": connections, "ntf_paths": created_ntf_paths, "tmp_path": tmp_path}
+
+
+def _assert_manifest_contracts(manifest, auth01_overall):
+    """Verify AUTH01 manifest completeness and authorization status.
+
+    Shared by test_auth01_does_not_authorize_itself and NC01–NC03 negative controls.
+    """
+    _EXPECTED = {
+        "2026-10-29": (BackfillCandidateAction.INSERT_CANDIDATE, Auth01Verdict.PENDING_USER_AUTHORIZATION),
+        "2026-10-30": (BackfillCandidateAction.INSERT_CANDIDATE, Auth01Verdict.PENDING_USER_AUTHORIZATION),
+        "2026-11-02": (BackfillCandidateAction.INSERT_CANDIDATE, Auth01Verdict.PENDING_USER_AUTHORIZATION),
+        "2026-11-03": (BackfillCandidateAction.INSERT_CANDIDATE, Auth01Verdict.PENDING_USER_AUTHORIZATION),
+        "2026-11-04": (BackfillCandidateAction.SKIP_EXISTING, Auth01Verdict.READY_FOR_USER_AUTHORIZATION),
+        "2026-11-05": (BackfillCandidateAction.SKIP_EXISTING, Auth01Verdict.READY_FOR_USER_AUTHORIZATION),
+        "2026-11-06": (BackfillCandidateAction.INSERT_CANDIDATE, Auth01Verdict.PENDING_USER_AUTHORIZATION),
+        "2026-11-09": (BackfillCandidateAction.INSERT_CANDIDATE, Auth01Verdict.PENDING_USER_AUTHORIZATION),
+    }
+    assert len(manifest) == 8, f"Expected 8 manifest entries, got {len(manifest)}"
+    dates = [m.target_date for m in manifest]
+    assert len(dates) == len(set(dates)), f"Duplicate dates: {sorted(dates)}"
+    assert set(dates) == set(_EXPECTED), (
+        f"Date mismatch. Unexpected: {set(dates) - set(_EXPECTED)}. "
+        f"Missing: {set(_EXPECTED) - set(dates)}"
+    )
+    for m in manifest:
+        exp_action, exp_verdict = _EXPECTED[m.target_date]
+        assert m.action == exp_action, (
+            f"{m.target_date}: action {m.action!r} != {exp_action!r}"
+        )
+        assert m.auth01_verdict == exp_verdict, (
+            f"{m.target_date}: verdict {m.auth01_verdict!r} != {exp_verdict!r}"
+        )
+    assert auth01_overall in (
+        Auth01Verdict.PENDING_USER_AUTHORIZATION,
+        Auth01Verdict.PARTIALLY_READY,
+    ), f"auth01_overall {auth01_overall!r} not PENDING or PARTIALLY_READY"
+
+
+def _assert_connection_contracts(connections, ntf_paths, tmp_path):
+    """Verify CONTRACT A: exactly one temp DB connection within tmp_path.
+
+    Shared by test_auth01_does_not_authorize_itself and NC04–NC05 negative controls.
+    connections: list of (raw_str, normalized_str) tuples.
+    ntf_paths: list of paths created by the tempfile proxy.
+    tmp_path: pathlib.Path for the current test's tmp directory.
+    """
+    assert len(connections) == 1, (
+        f"Expected exactly 1 DB connection (temp only), got {len(connections)}: {connections}"
+    )
+    raw_path, norm_path = connections[0]
+    assert raw_path != ":memory:", (
+        "Connection is to ':memory:' — expected an identified filesystem temp database"
+    )
+    assert Path(norm_path).is_relative_to(tmp_path), (
+        f"Connection path {norm_path!r} is not within tmp_path {str(tmp_path)!r}"
+    )
+    assert len(ntf_paths) == 1, (
+        f"Expected exactly 1 temp file created by proxy, got {len(ntf_paths)}: {ntf_paths}"
+    )
+    expected_norm = os.path.realpath(os.path.abspath(ntf_paths[0]))
+    assert norm_path == expected_norm, (
+        f"Observed connection {norm_path!r} != idempotency temp DB {expected_norm!r}"
+    )
+
+
+def _assert_guard_identity(actual, expected):
+    """Verify Isolation Guard identity — shared by TC26, observer proxy, and NC07."""
+    assert actual is expected, "Isolation Guard identity mismatch"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -897,19 +1009,124 @@ class TestTC26_AUTH01Pending:
         assert all(m.auth01_verdict == Auth01Verdict.PENDING_USER_AUTHORIZATION
                    for m in candidates)
 
-    def test_auth01_does_not_authorize_itself(self):
-        """The module only defines the manifest; it does not execute backfill."""
-        build_fallback_and_auth01_report()
-        # Module must not perform writes — test that non-benchmark rows are still 0
-        import os
-        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "platform.db")
-        conn = sqlite3.connect(db_path)
-        count = conn.execute(
-            "SELECT COUNT(*) FROM daily_prices "
-            "WHERE date IN ('2026-10-29','2026-10-30') AND stock_id != '0050'"
-        ).fetchone()[0]
-        conn.close()
-        assert count == 0  # Non-0050 rows absent; manifest build performs no writes
+    def test_auth01_does_not_authorize_itself(self, sqlite3_observer, ci_guard_identity):
+        """The module only defines the manifest; it does not execute backfill.
+
+        Contract: AUTHORIZATION_AND_SCOPED_DATABASE_CONNECTION_VERIFICATION
+        Evidence qualifications:
+          - Connection observation is not comprehensive SQL mutation observation
+          - Static absence of a bypass path is not proof of zero future risk
+          - A backfill invocation does not necessarily require an additional SQLite connection
+          - A setup-time guard check does not establish continuous guard integrity
+        """
+        # Guard identity before report generation
+        _assert_guard_identity(sqlite3.connect, ci_guard_identity)
+
+        report = build_fallback_and_auth01_report()
+
+        # Guard identity after report generation
+        _assert_guard_identity(sqlite3.connect, ci_guard_identity)
+
+        # CONTRACT A: Exactly one temp DB connection — exact path identity
+        obs = sqlite3_observer
+        _assert_connection_contracts(obs["connections"], obs["ntf_paths"], obs["tmp_path"])
+
+        # CONTRACT B + C: Manifest completeness and authorization status
+        _assert_manifest_contracts(report.auth01_manifest, report.auth01_overall)
+
+        # CONTRACT D: Idempotency verification all passed
+        assert report.idempotency_results.get("all_pass") is True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Negative Controls: TC26 detection mechanism verification (NC01–NC07)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestNegativeControls:
+    """Verify that TC26 detection mechanisms correctly identify violations.
+
+    Each NC test passes by confirming that a specific violation triggers
+    the expected AssertionError in the shared verification helpers.
+    """
+
+    def test_nc01_empty_manifest_detected(self):
+        """NC01: Empty manifest triggers manifest length check."""
+        with pytest.raises(AssertionError, match="Expected 8 manifest entries"):
+            _assert_manifest_contracts([], Auth01Verdict.PARTIALLY_READY)
+
+    def test_nc02_incorrect_date_detected(self):
+        """NC02: Incorrect candidate date detected despite unchanged count."""
+        modified = [
+            dataclasses.replace(m, target_date="2026-10-27")
+            if m.target_date == "2026-10-29" else m
+            for m in build_auth01_manifest()
+        ]
+        with pytest.raises(AssertionError, match="Date mismatch|Missing"):
+            _assert_manifest_contracts(modified, Auth01Verdict.PARTIALLY_READY)
+
+    def test_nc03_unauthorized_verdict_detected(self):
+        """NC03: A candidate incorrectly marked READY triggers verdict check."""
+        modified = [
+            dataclasses.replace(m, auth01_verdict=Auth01Verdict.READY_FOR_USER_AUTHORIZATION)
+            if m.target_date == "2026-10-29" else m
+            for m in build_auth01_manifest()
+        ]
+        with pytest.raises(AssertionError, match="verdict"):
+            _assert_manifest_contracts(modified, Auth01Verdict.PARTIALLY_READY)
+
+    def test_nc04_additional_connection_detected(self, sqlite3_observer):
+        """NC04: Extra observed connection triggers count check."""
+        obs = sqlite3_observer
+        obs["connections"].append(("extra1", "extra1_normalized"))
+        obs["connections"].append(("extra2", "extra2_normalized"))
+        with pytest.raises(AssertionError, match="Expected exactly 1"):
+            _assert_connection_contracts(obs["connections"], obs["ntf_paths"], obs["tmp_path"])
+
+    def test_nc05_wrong_database_identity_detected(self, sqlite3_observer):
+        """NC05: Exactly one connection to :memory: triggers identity check."""
+        obs = sqlite3_observer
+        obs["connections"].append((":memory:", ":memory:"))
+        obs["ntf_paths"].append(str(obs["tmp_path"] / "some.db"))
+        with pytest.raises(AssertionError, match="':memory:'"):
+            _assert_connection_contracts(obs["connections"], obs["ntf_paths"], obs["tmp_path"])
+
+    def test_nc06_caught_rejection_still_recorded(self, sqlite3_observer, ci_guard_identity):
+        """NC06: Guard rejection is recorded even when the exception propagates through the proxy."""
+        import src.research.fallback_adapter_s53 as _fa_module
+
+        # Guard identity before negative control
+        _assert_guard_identity(sqlite3.connect, ci_guard_identity)
+
+        blocked = "/nonexistent_nc06_synthetic/test.db"
+        _unexpected_conn = None
+        try:
+            with pytest.raises(
+                AssertionError,
+                match=r"ISOLATION GUARD: unregistered database path blocked",
+            ):
+                _unexpected_conn = _fa_module.sqlite3.connect(blocked)
+        finally:
+            if _unexpected_conn is not None:
+                _unexpected_conn.close()
+
+        # Guard identity after negative control
+        _assert_guard_identity(sqlite3.connect, ci_guard_identity)
+
+        obs = sqlite3_observer
+        assert len(obs["connections"]) == 1
+        assert obs["connections"][0][0] == blocked
+
+    def test_nc07_guard_identity_mismatch_detected(self, ci_guard_identity):
+        """NC07: Isolation Guard identity helper detects synthetic mismatched identity."""
+        import sqlite3 as _si
+
+        synthetic_identity = object()  # safe synthetic non-guard reference
+
+        with pytest.raises(AssertionError, match="Isolation Guard identity mismatch"):
+            _assert_guard_identity(synthetic_identity, ci_guard_identity)
+
+        # Actual global guard remains intact before and after
+        assert _si.connect is ci_guard_identity
 
 
 # ══════════════════════════════════════════════════════════════════════════════
