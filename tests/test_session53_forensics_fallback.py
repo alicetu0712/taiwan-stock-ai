@@ -55,6 +55,8 @@ import json
 import sqlite3
 from datetime import date
 
+import pytest
+
 
 from src.research.coverage_qg_forensics_s53 import (
     CANONICAL_FILL_DATES,
@@ -96,6 +98,28 @@ from src.research.fallback_adapter_s53 import (
     get_auth01_overall_verdict,
     verify_idempotency_in_temp_db,
 )
+
+
+@pytest.fixture
+def idempotency_tmp(tmp_path, monkeypatch):
+    import src.research.fallback_adapter_s53 as _fa_module
+    import tempfile as _tempfile
+
+    _orig_ntf = _tempfile.NamedTemporaryFile
+
+    def _ntf_with_dir(*args, **kwargs):
+        kwargs.setdefault("dir", str(tmp_path))
+        return _orig_ntf(*args, **kwargs)
+
+    class _ScopedTempfileProxy:
+        NamedTemporaryFile = staticmethod(_ntf_with_dir)
+
+        def __getattr__(self, name):
+            return getattr(_tempfile, name)
+
+    monkeypatch.setattr(
+        _fa_module, "tempfile", _ScopedTempfileProxy()
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -804,7 +828,7 @@ class TestTC22_BackfillManifestStructure:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestTC23_InsertOnly:
-    def test_first_insert_succeeds(self):
+    def test_first_insert_succeeds(self, idempotency_tmp):
         result = verify_idempotency_in_temp_db()
         assert result["test_first_insert"] is True
         assert result["first_insert_count"] == 2
@@ -827,17 +851,17 @@ class TestTC23_InsertOnly:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestTC24_DuplicateConflict:
-    def test_idempotent_repeat_insert_zero(self):
+    def test_idempotent_repeat_insert_zero(self, idempotency_tmp):
         result = verify_idempotency_in_temp_db()
         assert result["test_idempotent"] is True
         assert result["repeat_insert_count"] == 0
 
-    def test_conflict_with_different_value_ignored(self):
+    def test_conflict_with_different_value_ignored(self, idempotency_tmp):
         result = verify_idempotency_in_temp_db()
         assert result["test_conflict_ignored"] is True
         assert result["conflict_rowcount"] == 0
 
-    def test_original_data_preserved_after_conflict(self):
+    def test_original_data_preserved_after_conflict(self, idempotency_tmp):
         result = verify_idempotency_in_temp_db()
         assert result["test_original_data_preserved"] is True
 
@@ -847,11 +871,11 @@ class TestTC24_DuplicateConflict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestTC25_TransactionRollback:
-    def test_rollback_removes_uncommitted_row(self):
+    def test_rollback_removes_uncommitted_row(self, idempotency_tmp):
         result = verify_idempotency_in_temp_db()
         assert result["test_rollback"] is True
 
-    def test_readback_count_matches_inserted(self):
+    def test_readback_count_matches_inserted(self, idempotency_tmp):
         result = verify_idempotency_in_temp_db()
         assert result["test_readback"] is True
         assert result["readback_count"] == 2
